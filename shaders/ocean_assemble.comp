@@ -1,0 +1,38 @@
+// Port of CS_AssembleMaps (Garrett Gunnell, MIT)
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(rgba32f, binding = 0) readonly uniform image2DArray specTex;
+layout(rgba16f, binding = 1) uniform image2DArray dispTex;
+layout(rg16f, binding = 2) writeonly uniform image2DArray slopeTex;
+
+uniform vec2 uLambda;
+uniform float uFoamDecay;
+uniform float uFoamBias;
+uniform float uFoamThreshold;
+uniform float uFoamAdd;
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    float sgn = 1.0 - 2.0 * float((id.x + id.y) & 1);
+    for (int i = 0; i < 4; ++i) {
+        vec4 hd = imageLoad(specTex, ivec3(id, i * 2)) * sgn;
+        vec4 hs = imageLoad(specTex, ivec3(id, i * 2 + 1)) * sgn;
+
+        vec2 dxdz = hd.rg;
+        vec2 dydxz = hd.ba;
+        vec2 dyxdyz = hs.rg;
+        vec2 dxxdzz = hs.ba;
+
+        float jacobian = (1.0 + uLambda.x * dxxdzz.x) * (1.0 + uLambda.y * dxxdzz.y) - uLambda.x * uLambda.y * dydxz.y * dydxz.y;
+        vec3 displacement = vec3(uLambda.x * dxdz.x, dydxz.x, uLambda.y * dxdz.y);
+        vec2 slopes = dyxdyz.xy / (1.0 + abs(dxxdzz * uLambda));
+
+        float foam = imageLoad(dispTex, ivec3(id, i)).a;
+        foam *= exp(-uFoamDecay);
+        foam = clamp(foam, 0.0, 1.0);
+        float biasedJacobian = max(0.0, -(jacobian - uFoamBias));
+        if (biasedJacobian > uFoamThreshold) foam += uFoamAdd * biasedJacobian;
+
+        imageStore(dispTex, ivec3(id, i), vec4(displacement, foam));
+        imageStore(slopeTex, ivec3(id, i), vec4(slopes, 0.0, 0.0));
+    }
+}

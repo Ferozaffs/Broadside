@@ -1,0 +1,8 @@
+build/
+# Third-party models under the Fab Standard License must not be redistributed standalone
+assets/
+dist/
+*.glb
+*.gltf
+*.pak
+*.zip

@@ -1,0 +1,53 @@
+// Port of CS_UpdateSpectrumForFFT (Garrett Gunnell, MIT)
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(rgba32f, binding = 0) readonly uniform image2DArray h0Tex;
+layout(rgba32f, binding = 1) writeonly uniform image2DArray specTex;
+
+uniform float uTime;
+uniform int uN;
+uniform float uGravity;
+uniform float uRepeatTime;
+uniform vec4 uLength;
+
+const float PI = 3.14159265358979;
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+void main() {
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    float L[4] = float[4](uLength.x, uLength.y, uLength.z, uLength.w);
+    for (int i = 0; i < 4; ++i) {
+        vec4 s = imageLoad(h0Tex, ivec3(id, i));
+        vec2 h0 = s.xy;
+        vec2 h0c = s.zw;
+
+        vec2 K = (vec2(id) - float(uN) * 0.5) * 2.0 * PI / L[i];
+        float kMag = length(K);
+        float kr = kMag < 0.0001 ? 1.0 : 1.0 / kMag;
+
+        float w0 = 2.0 * PI / uRepeatTime;
+        float w = floor(sqrt(uGravity * kMag) / w0) * w0;
+        float ph = w * uTime;
+        vec2 e = vec2(cos(ph), sin(ph));
+
+        vec2 ht = cmul(h0, e) + cmul(h0c, vec2(e.x, -e.y));
+        vec2 ih = vec2(-ht.y, ht.x);
+
+        vec2 dispX = ih * K.x * kr;
+        vec2 dispY = ht;
+        vec2 dispZ = ih * K.y * kr;
+        vec2 dispX_dx = -ht * K.x * K.x * kr;
+        vec2 dispY_dx = ih * K.x;
+        vec2 dispZ_dx = -ht * K.x * K.y * kr;
+        vec2 dispY_dz = ih * K.y;
+        vec2 dispZ_dz = -ht * K.y * K.y * kr;
+
+        vec2 hDX = vec2(dispX.x - dispZ.y, dispX.y + dispZ.x);
+        vec2 hDZ = vec2(dispY.x - dispZ_dx.y, dispY.y + dispZ_dx.x);
+        vec2 hSX = vec2(dispY_dx.x - dispY_dz.y, dispY_dx.y + dispY_dz.x);
+        vec2 hSZ = vec2(dispX_dx.x - dispZ_dz.y, dispX_dx.y + dispZ_dz.x);
+
+        imageStore(specTex, ivec3(id, i * 2), vec4(hDX, hDZ));
+        imageStore(specTex, ivec3(id, i * 2 + 1), vec4(hSX, hSZ));
+    }
+}

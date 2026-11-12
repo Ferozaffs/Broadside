@@ -1,0 +1,38 @@
+// Port of CS_HorizontalFFT / CS_VerticalFFT (Garrett Gunnell, MIT): shared-memory Stockham IFFT
+#define SIZE 256
+#define LOG_SIZE 8
+layout(local_size_x = SIZE) in;
+layout(rgba32f, binding = 0) uniform image2DArray target;
+uniform int uVertical;
+
+shared vec4 buf[2][SIZE];
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+vec4 FFT(uint t, vec4 inp) {
+    buf[0][t] = inp;
+    barrier();
+    int flag = 0;
+    for (int step = 0; step < LOG_SIZE; ++step) {
+        uint b = uint(SIZE) >> (step + 1);
+        uint w = b * (t / b);
+        uint i = (w + t) % uint(SIZE);
+        float ang = -6.28318530718 / float(SIZE) * float(w);
+        vec2 tw = vec2(cos(ang), -sin(ang));  // negated imaginary part = inverse FFT
+        vec4 v = buf[flag][i + b];
+        buf[1 - flag][t] = buf[flag][i] + vec4(cmul(tw, v.xy), cmul(tw, v.zw));
+        flag = 1 - flag;
+        barrier();
+    }
+    return buf[flag][t];
+}
+
+void main() {
+    uint t = gl_LocalInvocationID.x;
+    uint row = gl_WorkGroupID.y;
+    for (int layer = 0; layer < 8; ++layer) {
+        ivec3 c = uVertical == 1 ? ivec3(row, t, layer) : ivec3(t, row, layer);
+        vec4 r = FFT(t, imageLoad(target, c));
+        imageStore(target, c, r);
+    }
+}

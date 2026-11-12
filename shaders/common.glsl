@@ -1,0 +1,87 @@
+// Shared ocean / sky / underwater helpers
+const float PI = 3.14159265358979;
+
+uniform sampler2DArray uDisp;   // xyz displacement, a = foam
+uniform sampler2DArray uSlope;  // xy slopes
+uniform vec4 uOceanLen;         // cascade length scales
+uniform float uOceanN;          // FFT resolution
+uniform vec3 uSunDir;           // unit vector towards the sun
+uniform vec3 uSunColor;         // HDR sun irradiance
+uniform float uTime;
+uniform vec3 uCamPos;
+// atmosphere (time of day x weather)
+uniform vec3 uSkyZenith;
+uniform vec3 uSkyHorizon;
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+uniform float uHaze;
+uniform float uCloud;
+uniform float uNight;
+uniform float uLightning;
+
+// Texel n of each cascade holds the field at world x = n * L / N, hence the half-texel shift.
+vec2 OceanUV(vec2 xz, int c) { return xz / uOceanLen[c] + 0.5 / uOceanN; }
+vec4 OceanDispFoam(vec2 xz, int c, float lod) { return textureLod(uDisp, vec3(OceanUV(xz, c), float(c)), lod); }
+
+// Height of the (horizontally displaced) surface at world xz. Matches OceanCPU for cascade 0.
+float OceanHeight(vec2 xz) {
+    vec2 p = xz;
+    for (int i = 0; i < 3; ++i) {
+        vec3 d = OceanDispFoam(p, 0, 0.0).xyz + OceanDispFoam(p, 1, 0.0).xyz;
+        p = xz - d.xz;
+    }
+    return OceanDispFoam(p, 0, 0.0).y + OceanDispFoam(p, 1, 0.0).y + OceanDispFoam(p, 2, 0.0).y;
+}
+
+float SkyHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+
+vec3 SkyColor(vec3 d) {
+    d = normalize(d);
+    float y = max(d.y, 0.0);
+    vec3 col = mix(uSkyHorizon, uSkyZenith, pow(y, 0.5));
+    float sd = max(dot(d, uSunDir), 0.0);
+    float clear = 1.0 - uCloud;
+    // glow around the sun (sunset gets a big warm one), and the disc itself
+    col += uSunColor * (pow(sd, 6.0) * 0.12 + pow(sd, 90.0) * 0.5) * (0.3 + 0.7 * clear);
+    float disc = mix(smoothstep(0.99955, 0.9998, sd) * 25.0, smoothstep(0.99975, 0.9999, sd) * 60.0, uNight);
+    col += uSunColor * disc * clear * clear;
+    // stars
+    if (uNight > 0.0 && d.y > 0.0) {
+        vec3 q = floor(d * 420.0);
+        float h = SkyHash(q);
+        float star = step(0.9965, h) * (0.4 + 0.6 * SkyHash(q + 7.0));
+        col += vec3(0.8, 0.85, 1.0) * star * uNight * clear * smoothstep(0.0, 0.25, d.y) * 0.25;
+    }
+    // clouds: a band low in the sky, and full overcast as uCloud rises
+    float n = sin(d.x * 9.0 + uTime * 0.01) * sin(d.z * 7.0 - 1.3) * 0.5 + 0.5;
+    float n2 = sin(d.x * 23.0 - d.z * 11.0 + uTime * 0.03) * sin(d.z * 19.0 + d.x * 5.0) * 0.5 + 0.5;
+    vec3 cloudCol = mix(uSkyHorizon, uFogColor, 0.5) * (0.7 + 0.3 * n2);
+    float band = smoothstep(0.0, 0.08, y) * (1.0 - smoothstep(0.08, 0.45, y));
+    col = mix(col, cloudCol, clamp(band * n * 0.45 + uCloud * (0.55 + 0.4 * n * n2), 0.0, 1.0));
+    // haze/fog swallowing the horizon
+    col = mix(col, uFogColor, uHaze * pow(1.0 - y, 3.0));
+    col += vec3(0.55, 0.6, 0.8) * uLightning * (0.4 + 0.6 * n2);
+    if (d.y < 0.0) col = mix(mix(uSkyHorizon, uFogColor, uHaze), uSkyHorizon * 0.35, clamp(-d.y * 4.0, 0.0, 1.0) * (1.0 - uHaze));
+    return col;
+}
+
+// Over-the-top clear water so you can see ships that got dunked
+const vec3 kWaterAbsorb = vec3(0.24, 0.055, 0.038);
+
+vec3 UnderwaterFogColor(float depthBelow, float viewY) {
+    vec3 base = vec3(0.010, 0.060, 0.090) * (0.4 + 0.6 * uSunColor.g);
+    base *= mix(0.45, 1.5, clamp(viewY * 0.5 + 0.5, 0.0, 1.0));
+    return base * exp(-max(depthBelow, 0.0) * 0.035);
+}
+
+float Caustics(vec2 p, float t) {
+    p *= 0.32;
+    float c = 0.0;
+    vec2 q = p;
+    for (int i = 0; i < 3; ++i) {
+        q = vec2(q.x + 0.9 * sin(q.y * 1.7 + t * 0.7 + float(i)), q.y + 0.9 * cos(q.x * 1.3 - t * 0.6));
+        c += 1.0 / (1.0 + 10.0 * abs(sin(q.x) * sin(q.y)));
+    }
+    c /= 3.0;
+    return c * c * c * 2.5;
+}

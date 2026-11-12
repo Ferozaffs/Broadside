@@ -1,0 +1,56 @@
+cmake_minimum_required(VERSION 3.24)
+project(Broadside C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
+
+# raylib (zlib license) built against an OpenGL 4.3 core context so we get compute shaders
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+set(OPENGL_VERSION "4.3" CACHE STRING "" FORCE)
+FetchContent_Declare(raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG 5.5
+    GIT_SHALLOW TRUE)
+
+# ENet (MIT license). Its own CMakeLists is ancient, so we compile the sources directly.
+FetchContent_Declare(enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG v1.3.18
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR _no_cmake_)
+
+FetchContent_MakeAvailable(raylib enet)
+
+add_library(enet_lib STATIC
+    ${enet_SOURCE_DIR}/callbacks.c
+    ${enet_SOURCE_DIR}/compress.c
+    ${enet_SOURCE_DIR}/host.c
+    ${enet_SOURCE_DIR}/list.c
+    ${enet_SOURCE_DIR}/packet.c
+    ${enet_SOURCE_DIR}/peer.c
+    ${enet_SOURCE_DIR}/protocol.c
+    ${enet_SOURCE_DIR}/unix.c
+    ${enet_SOURCE_DIR}/win32.c)
+target_include_directories(enet_lib PUBLIC ${enet_SOURCE_DIR}/include)
+if(WIN32)
+    target_link_libraries(enet_lib PUBLIC ws2_32 winmm)
+    target_compile_definitions(enet_lib PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+endif()
+
+file(GLOB BROADSIDE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
+add_executable(broadside ${BROADSIDE_SOURCES})
+target_link_libraries(broadside PRIVATE raylib enet_lib)
+target_compile_definitions(broadside PRIVATE BROADSIDE_SHADER_DIR="${CMAKE_SOURCE_DIR}/shaders/")
+if(MSVC)
+    target_compile_definitions(broadside PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    target_compile_options(broadside PRIVATE /W3 /wd4244 /wd4305)
+endif()
+
+# Ship the shaders next to the executable as well
+add_custom_command(TARGET broadside POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:broadside>/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/data $<TARGET_FILE_DIR:broadside>/data)

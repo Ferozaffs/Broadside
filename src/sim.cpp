@@ -1,0 +1,926 @@
+#include "sim.h"
+#include <algorithm>
+#include <cmath>
+
+// ============================================================================
+// Hull shape
+// ============================================================================
+namespace hull {
+float HalfWidth(float z) {
+    float t = Clamp(z / halfLength, -1.0f, 1.0f);
+    if (t > 0) return maxHalfBeam * (1.0f - 0.92f * powf(t, 2.2f));
+    return maxHalfBeam * (1.0f - 0.30f * powf(-t, 4.0f));
+}
+float KeelDepth(float z) {
+    float t = fabsf(Clamp(z / halfLength, -1.0f, 1.0f));
+    return 3.4f * (1.0f - 0.45f * t * t * t);
+}
+float DeckHeight(float z) {
+    float t = Clamp(z / halfLength, -1.0f, 1.0f);
+    return 2.4f + 0.9f * t * t;
+}
+float BottomAt(float x, float z) {
+    float w = HalfWidth(z), d = KeelDepth(z);
+    float u = Clamp(fabsf(x) / w, 0.0f, 1.0f);
+    return 0.5f - (d + 0.5f) * sqrtf(fmaxf(0.0f, 1.0f - powf(u, 3.0f)));
+}
+}  // namespace hull
+
+// ============================================================================
+// Arena: islands and sea stacks
+// ============================================================================
+namespace {
+struct Lcg {
+    uint32_t s;
+    float F() { s = s * 1664525u + 1013904223u; return ((s >> 8) & 0xFFFFFF) / 16777216.0f; }
+    float R(float a, float b) { return a + (b - a) * F(); }
+};
+}  // namespace
+
+std::vector<Rock> MakeRocks(uint32_t seed) {
+    std::vector<Rock> out;
+    Lcg g{seed * 747796405u + 2891336453u};
+    g.F();
+    auto add = [&](float x, float z, float r, float h, bool stack) {
+        Rock k;
+        k.x = x; k.z = z; k.r = r; k.h = h; k.stack = stack;
+        k.p = stack ? g.R(5.0f, 8.0f) : g.R(2.8f, 5.0f);
+        k.q = stack ? g.R(0.2f, 0.35f) : g.R(0.45f, 0.8f);
+        for (float& a : k.ph) a = g.R(0.0f, 2.0f * PI);
+        k.seed = (uint32_t)(g.F() * 4.0e9f);
+        out.push_back(k);
+    };
+    // the wall: a ring of overlapping islands (neighbouring coastlines always overlap, so no gaps)
+    auto ring = [&](float ringR, float rMin, float rMax, float hMin, float hMax, float spacing, float push) {
+        float ang = g.R(0.0f, 2.0f * PI), end = ang + 2.0f * PI;
+        float r = g.R(rMin, rMax);
+        while (ang < end - 0.5f * r / ringR) {
+            float rr = ringR + r * push + g.R(-10.0f, 30.0f);
+            add(cosf(ang) * rr, sinf(ang) * rr, r, g.R(hMin, hMax) * r, false);
+            float rn = g.R(rMin, rMax);
+            ang += (r + rn) * spacing / ringR;
+            r = rn;
+        }
+    };
+    ring(850.0f, 55.0f, 110.0f, 0.3f, 0.75f, 0.62f, 0.35f);
+    ring(1120.0f, 120.0f, 200.0f, 0.35f, 0.75f, 0.7f, 0.0f);  // taller backdrop behind it
+    // sea stacks just inside the wall: cover, and something to thread between
+    for (int i = 0; i < 16; ++i) {
+        float ang = g.R(0.0f, 2.0f * PI), rr = g.R(660.0f, 740.0f);
+        float x = cosf(ang) * rr, z = sinf(ang) * rr;
+        add(x, z, g.R(7.0f, 15.0f), g.R(20.0f, 48.0f), true);
+        int kids = (int)g.R(0.0f, 3.0f);
+        for (int j = 0; j < kids; ++j) add(x + g.R(-28.0f, 28.0f), z + g.R(-28.0f, 28.0f), g.R(3.0f, 6.0f), g.R(5.0f, 14.0f), true);
+    }
+    return out;
+}
+
+float RockCoast(const Rock& k, float a) {
+    float w = 0.13f * sinf(3.0f * a + k.ph[0]) + 0.06f * sinf(5.0f * a + k.ph[1]) + 0.04f * sinf(9.0f * a + k.ph[2]);
+    return k.r * (1.0f + (k.stack ? 0.5f : 1.0f) * w);
+}
+
+float RockHeight(const Rock& k, float x, float z) {
+    float dx = x - k.x, dz = z - k.z;
+    float d = sqrtf(dx * dx + dz * dz);
+    float c = RockCoast(k, atan2f(dz, dx));
+    if (d < c) return k.h * powf(fmaxf(0.0f, 1.0f - powf(d / c, k.p)), k.q);
+    return fmaxf(-50.0f, -(d - c) * (k.stack ? 3.0f : 1.0f));  // seabed slope
+}
+
+float RocksHeight(const std::vector<Rock>& rocks, float x, float z) {
+    float best = -1e9f;
+    for (const Rock& k : rocks) {
+        float dx = x - k.x, dz = z - k.z, lim = k.r * 1.25f + 50.0f;
+        if (dx * dx + dz * dz > lim * lim) continue;
+        best = fmaxf(best, RockHeight(k, x, z));
+    }
+    return best;
+}
+
+// ============================================================================
+// Physical constants of the ship derived from the hull shape
+// ============================================================================
+namespace {
+struct Column {
+    Vector3 bot, top;  // body space (relative to centre of mass)
+    float area;
+};
+
+struct ShipPhys {
+    std::vector<Column> cols;
+    float mass;
+    float totalVolume;
+    float restVol;       // submerged volume when floating level
+    float sternRestVol;  // same, for the aft quarter (where the rudder is)
+    float bowRestVol;    // same, for the forward half (most of the lateral area that resists yaw)
+    Vector3 inertia;  // body-space diagonal
+    Vector3 cdA;      // per-column quadratic drag area (x lateral, y vertical, z forward)
+    Vector3 linDrag;  // per-column linear drag (N per m/s)
+};
+
+const ShipPhys& Phys() {
+    static ShipPhys p = [] {
+        ShipPhys s;
+        const int NZ = 8, NX = 3;
+        float below = 0.0f;
+        s.totalVolume = 0.0f;
+        s.sternRestVol = s.bowRestVol = 0.0f;
+        for (int iz = 0; iz < NZ; ++iz) {
+            float z = -hull::halfLength + (iz + 0.5f) * (2 * hull::halfLength / NZ);
+            float w = hull::HalfWidth(z) * 0.95f;
+            for (int ix = 0; ix < NX; ++ix) {
+                float x = -w + (ix + 0.5f) * (2 * w / NX);
+                Column c;
+                float b = hull::BottomAt(x, z), t = hull::DeckHeight(z);
+                c.bot = Vector3Subtract({x, b, z}, hull::comOffset);
+                c.top = Vector3Subtract({x, t, z}, hull::comOffset);
+                c.area = (2 * w / NX) * (2 * hull::halfLength / NZ);
+                below += c.area * fmaxf(0.0f, -b);
+                if (z < -hull::halfLength * 0.5f) s.sternRestVol += c.area * fmaxf(0.0f, -b);
+                if (z > 0.0f) s.bowRestVol += c.area * fmaxf(0.0f, -b);
+                s.totalVolume += c.area * (t - b);
+                s.cols.push_back(c);
+            }
+        }
+        s.restVol = below;
+        s.mass = tune::rhoWater * below;  // floats with the waterline at hull y = 0
+        float W = 2 * hull::maxHalfBeam, H = 6.5f, Lh = 2 * hull::halfLength;
+        float k = 0.7f;
+        s.inertia = {k * s.mass / 12 * (H * H + Lh * Lh), k * s.mass / 12 * (W * W + Lh * Lh), k * s.mass / 12 * (W * W + H * H)};
+        float n = (float)s.cols.size();
+        s.cdA = {1.1f * (Lh * 3.4f) / n, 1.0f * (Lh * W * 0.75f) / n, 0.08f * (W * 3.4f) / n};
+        s.linDrag = {s.mass * 0.25f / n, s.mass * 0.6f / n, s.mass * 0.02f / n};
+        return s;
+    }();
+    return p;
+}
+
+Vector3 ToBody(Quaternion q, Vector3 v) { return Vector3RotateByQuaternion(v, QuaternionInvert(q)); }
+Vector3 ToWorld(Quaternion q, Vector3 v) { return Vector3RotateByQuaternion(v, q); }
+
+void ApplyImpulse(Ship& s, Vector3 J, Vector3 at) {
+    const ShipPhys& P = Phys();
+    s.vel = Vector3Add(s.vel, Vector3Scale(J, 1.0f / P.mass));
+    Vector3 r = Vector3Subtract(at, s.pos);
+    Vector3 tb = ToBody(s.rot, Vector3CrossProduct(r, J));
+    Vector3 dw = {tb.x / P.inertia.x, tb.y / P.inertia.y, tb.z / P.inertia.z};
+    s.angVel = Vector3Add(s.angVel, ToWorld(s.rot, dw));
+}
+
+bool SegmentBox(Vector3 p0, Vector3 p1, Vector3 bmin, Vector3 bmax, float& tHit) {
+    float t0 = 0.0f, t1 = 1.0f;
+    float p[3] = {p0.x, p0.y, p0.z}, d[3] = {p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+    float mn[3] = {bmin.x, bmin.y, bmin.z}, mx[3] = {bmax.x, bmax.y, bmax.z};
+    for (int i = 0; i < 3; ++i) {
+        if (fabsf(d[i]) < 1e-7f) {
+            if (p[i] < mn[i] || p[i] > mx[i]) return false;
+        } else {
+            float a = (mn[i] - p[i]) / d[i], b = (mx[i] - p[i]) / d[i];
+            if (a > b) std::swap(a, b);
+            t0 = fmaxf(t0, a);
+            t1 = fminf(t1, b);
+            if (t0 > t1) return false;
+        }
+    }
+    tHit = t0;
+    return true;
+}
+}  // namespace
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+Matrix ShipModelMatrix(Vector3 comPos, Quaternion rot) {
+    Matrix m = MatrixTranslate(-hull::comOffset.x, -hull::comOffset.y, -hull::comOffset.z);
+    m = MatrixMultiply(m, QuaternionToMatrix(rot));
+    return MatrixMultiply(m, MatrixTranslate(comPos.x, comPos.y, comPos.z));
+}
+
+Vector3 HullToWorld(Vector3 comPos, Quaternion rot, Vector3 h) {
+    return Vector3Add(comPos, ToWorld(rot, Vector3Subtract(h, hull::comOffset)));
+}
+
+namespace aimmap {
+constexpr float offset = 0.42f, gain = 1.35f;
+}
+float AimElevation(Vector3 aimWorld) {
+    float look = asinf(Clamp(Vector3Normalize(aimWorld).y, -1.0f, 1.0f));
+    return Clamp((look + aimmap::offset) * aimmap::gain, -0.6f, 0.85f);
+}
+Vector3 AimDirection(Vector3 aimWorld) {
+    Vector2 h = Vector2Normalize({aimWorld.x, aimWorld.z});
+    float e = AimElevation(aimWorld);
+    return {h.x * cosf(e), sinf(e), h.y * cosf(e)};
+}
+Vector3 AimForElevation(Vector2 horizDir, float elev) {
+    float look = elev / aimmap::gain - aimmap::offset;
+    Vector2 h = Vector2Normalize(horizDir);
+    return {h.x * cosf(look), sinf(look), h.y * cosf(look)};
+}
+
+int AimSide(Quaternion rot, Vector3 aimWorld) { return ToBody(rot, aimWorld).x >= 0.0f ? 0 : 1; }
+
+static const float kCannonZ[CANNONS_PER_SIDE] = {-9.0f, -3.0f, 3.0f, 9.0f};
+
+void CannonShot(Vector3 comPos, Quaternion rot, Vector3 vel, Vector3 angVel, Vector3 aimWorld, int side, int index,
+                Vector3& muzzle, Vector3& ballVel, float yawOff, float elevOff) {
+    // The camera's pitch commands a world-space elevation; gun crews compensate for roll and pitch,
+    // but only within what the carriages allow relative to the deck.
+    Vector3 want = AimDirection(aimWorld);
+    Vector3 a = Vector3Normalize(ToBody(rot, want));
+    float s = side == 0 ? 1.0f : -1.0f;
+    float yaw = Clamp(atan2f(a.z, fmaxf(fabsf(a.x), 1e-4f)), -0.45f, 0.45f);
+    float elev = Clamp(asinf(Clamp(a.y, -1.0f, 1.0f)), -0.55f, 0.70f);
+    yaw += yawOff;
+    elev += elevOff;
+    Vector3 dirB = {s * cosf(elev) * cosf(yaw), sinf(elev), cosf(elev) * sinf(yaw)};
+    float z = kCannonZ[index];
+    Vector3 mh = {s * (hull::HalfWidth(z) + 1.0f), 1.1f, z};
+    muzzle = HullToWorld(comPos, rot, mh);
+    Vector3 dir = ToWorld(rot, dirB);
+    Vector3 r = Vector3Subtract(muzzle, comPos);
+    Vector3 pointVel = Vector3Add(vel, Vector3CrossProduct(angVel, r));
+    ballVel = Vector3Add(pointVel, Vector3Scale(dir, tune::muzzleSpeed));
+}
+
+float ReloadTime(const Ship& s) { return tune::reloadTime * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f); }
+
+bool StepBall(Ball& b, const OceanCPU& ocean, float dt, bool* splashed, bool* skipped) {
+    if (splashed) *splashed = false;
+    if (skipped) *skipped = false;
+    b.age += dt;
+    if (!b.inWater) {
+        b.vel.y -= tune::gravity * dt;
+        b.vel = Vector3Scale(b.vel, 1.0f - 0.01f * dt);
+        Vector3 np = Vector3Add(b.pos, Vector3Scale(b.vel, dt));
+        float h = ocean.Height(np.x, np.z);
+        if (np.y < h) {
+            float speed = Vector3Length(b.vel);
+            float descent = -b.vel.y / fmaxf(speed, 1e-3f);
+            if (descent < 0.22f && speed > 35.0f && b.skips < 3) {
+                // ricochet off the water surface
+                b.vel.y = fabsf(b.vel.y) * 0.5f + 2.0f;
+                b.vel = Vector3Scale(b.vel, 0.72f);
+                np.y = h + 0.05f;
+                b.skips++;
+                if (skipped) *skipped = true;
+            } else {
+                b.inWater = true;
+                b.vel = Vector3Scale(b.vel, 0.35f);
+                if (splashed) *splashed = true;
+            }
+        }
+        b.pos = np;
+    } else {
+        b.waterTime += dt;
+        b.vel.y -= tune::gravity * 0.35f * dt;
+        b.vel = Vector3Scale(b.vel, expf(-2.2f * dt));
+        b.pos = Vector3Add(b.pos, Vector3Scale(b.vel, dt));
+    }
+    return b.waterTime > 3.5f || b.age > 15.0f || b.pos.y < -150.0f;
+}
+
+// ============================================================================
+// World
+// ============================================================================
+float World::RandF() {
+    rng = rng * 1664525u + 1013904223u;
+    return ((rng >> 8) & 0xFFFFFF) / 16777216.0f;
+}
+
+void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_) {
+    weather = weather_;
+    timeOfDay = timeOfDay_;
+    oceanParams = MakeOceanParams(seed, weather);
+    ocean.Init(oceanParams);
+    rng = seed * 2654435761u + 1;
+    time = 0.0;
+    tick = 0;
+    for (auto& s : ships) s = Ship{};
+    balls.clear();
+    events.clear();
+    rocks = MakeRocks(seed);
+    rockInner = 1e9f;
+    for (const Rock& k : rocks) rockInner = fminf(rockInner, sqrtf(k.x * k.x + k.z * k.z) - k.r * 1.25f - 50.0f);
+    for (int i = 0; i < tune::crateCount; ++i) {
+        crates[i] = Crate{};
+        crates[i].id = (uint8_t)i;
+        crates[i].timer = 0.5f + 0.4f * i;
+    }
+    (void)Phys();
+}
+
+int World::AddShip(const std::string& name, bool bot) {
+    for (int i = 0; i < MAX_SHIPS; ++i) {
+        if (ships[i].active) continue;
+        ships[i] = Ship{};
+        ships[i].active = true;
+        ships[i].id = (uint8_t)i;
+        ships[i].name = name;
+        ships[i].isBot = bot;
+        Respawn(ships[i]);
+        return i;
+    }
+    return -1;
+}
+
+void World::RemoveShip(int id) {
+    if (id < 0 || id >= MAX_SHIPS) return;
+    ships[id].active = false;
+    balls.erase(std::remove_if(balls.begin(), balls.end(), [&](const Ball& b) { return b.owner == id; }), balls.end());
+}
+
+void World::Respawn(Ship& s) {
+    float ang = RandF() * 2 * PI;
+    float r = 220.0f + RandF() * 200.0f;
+    float x = cosf(ang) * r, z = sinf(ang) * r;
+    s.pos = {x, ocean.Height(x, z) + 1.0f, z};
+    // face along the tangent so we start sailing around the arena
+    float heading = atan2f(-sinf(ang), cosf(ang)) + PI * 0.5f;
+    s.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
+    s.vel = {0, 0, 0};
+    s.angVel = {0, 0, 0};
+    s.hp = 100.0f;
+    s.alive = true;
+    s.deadTimer = 0;
+    s.buoyMul = 1.0f;
+    s.sail = 0.0f;
+    s.reload[0] = s.reload[1] = 0;
+    s.pending.clear();
+    s.airTime = 0;
+    s.airSpin = 0;
+    for (float& p : s.power) p = 0.0f;
+    s.lastAttacker = -1;
+    GameEvent e{EventType::Respawn};
+    e.a = s.id;
+    e.pos = s.pos;
+    events.push_back(e);
+}
+
+void World::Damage(Ship& v, float amount, int attacker) {
+    if (!v.alive) return;
+    v.hp -= amount;
+    if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
+    if (v.hp <= 0.0f) {
+        v.hp = 0.0f;
+        v.alive = false;
+        v.deadTimer = tune::respawnTime;
+        v.deaths++;
+        int killer = v.lastAttacker;
+        if (killer >= 0 && ships[killer].active) ships[killer].kills++;
+        GameEvent e{EventType::Kill};
+        e.a = (uint8_t)(killer >= 0 ? killer : 255);
+        e.b = v.id;
+        e.pos = v.pos;
+        events.push_back(e);
+    }
+}
+
+void World::ShipControls(Ship& s, float dt, bool authoritative) {
+    const PlayerInput& in = s.input;
+    if (!s.alive) {
+        s.sail = Lerp(s.sail, 0.0f, dt);
+        s.pending.clear();
+        for (float& p : s.power) p = 0.0f;
+        return;
+    }
+    for (float& p : s.power) p = fmaxf(0.0f, p - dt);
+    // throttle and rudder both respond quickly
+    float ds = Clamp(in.sail, -1.0f, 1.0f) - s.sail;
+    s.sail += Clamp(ds, -4.0f * dt, 4.0f * dt);
+    float dr = Clamp(in.rudder, -1.0f, 1.0f) - s.rudder;
+    s.rudder += Clamp(dr, -5.0f * dt, 5.0f * dt);
+
+    // fire: each new fireSeq value is one trigger pull
+    if (in.fireSeq != s.lastFireSeq) {
+        s.lastFireSeq = in.fireSeq;
+        int side = AimSide(s.rot, in.aim);
+        if (s.reload[side] <= 0.0f && s.pending.empty()) {
+            s.reload[side] = ReloadTime(s);
+            // deterministic ripple so the client can predict the recoil
+            bool barrage = s.power[PU_BARRAGE] > 0.0f;
+            for (int i = 0; i < CANNONS_PER_SIDE; ++i) {
+                s.pending.push_back({0.07f * i + 0.01f, side, i});
+                if (barrage) {  // two extra balls per gun, fanned out a little either side
+                    s.pending.push_back({0.07f * i + 0.03f, side, i, -0.04f, 0.012f, false});
+                    s.pending.push_back({0.07f * i + 0.05f, side, i, 0.04f, -0.008f, false});
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 2; ++i) s.reload[i] = fmaxf(0.0f, s.reload[i] - dt);
+    for (auto& p : s.pending) p.delay -= dt;
+    for (size_t i = 0; i < s.pending.size();) {
+        if (s.pending[i].delay <= 0) {
+            FireCannon(s, s.pending[i], authoritative);
+            s.pending.erase(s.pending.begin() + i);
+        } else ++i;
+    }
+}
+
+void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
+    Vector3 muzzle, v;
+    int side = shot.side;
+    CannonShot(s.pos, s.rot, s.vel, s.angVel, s.input.aim, side, shot.index, muzzle, v, shot.yaw, shot.elev);
+    // recoil (yes, you can broadside yourself sideways in mid-air)
+    Vector3 dir = Vector3Normalize(Vector3Subtract(v, s.vel));
+    if (shot.recoil) ApplyImpulse(s, Vector3Scale(dir, -tune::recoilImpulse), muzzle);
+    if (!authoritative) return;  // prediction only wants the recoil
+    Ball b;
+    b.id = nextBallId++;
+    if (nextBallId == 0) nextBallId = 1;
+    b.owner = s.id;
+    b.airShot = s.submerged <= 0.0f;
+    b.pos = muzzle;
+    b.vel = v;
+    balls.push_back(b);
+    if (!shot.recoil) return;  // barrage extras share the gun's smoke
+    GameEvent e{EventType::Fire};
+    e.a = s.id;
+    e.b = (uint8_t)side;
+    e.pos = muzzle;
+    e.dir = dir;
+    events.push_back(e);
+}
+
+void World::StepShip(Ship& s, float dt) {
+    const ShipPhys& P = Phys();
+    const float g = tune::gravity * tune::shipGravityScale;
+
+    float targetBuoy = s.alive ? 1.0f : 0.55f;  // wrecks sink slowly
+    s.buoyMul += (targetBuoy - s.buoyMul) * fminf(1.0f, dt * 1.5f);
+
+    Vector3 F = {0, -P.mass * g, 0};
+    Vector3 T = {0, 0, 0};
+    float subVol = 0.0f, sternVol = 0.0f, bowVol = 0.0f;
+    // a dunked hull pops back up harder than it floats (keeps landings to a dunk, not a dive)
+    float dunk = s.alive ? 1.0f + tune::dunkBuoyancy * Clamp(s.depthBelow / 4.0f, 0.0f, 1.0f) : 1.0f;
+    Vector3 waterVelAvg = {0, 0, 0};
+    float waterW = 0.0f;
+
+    for (const Column& c : P.cols) {
+        Vector3 wb = Vector3Add(s.pos, ToWorld(s.rot, c.bot));
+        Vector3 wt = Vector3Add(s.pos, ToWorld(s.rot, c.top));
+        Vector3 lo = wb.y < wt.y ? wb : wt;
+        Vector3 hi = wb.y < wt.y ? wt : wb;
+        Vector3 mid = Vector3Scale(Vector3Add(wb, wt), 0.5f);
+        WaterSample ws = ocean.Sample(mid.x, mid.z);
+        float span = fmaxf(hi.y - lo.y, 0.05f);
+        float frac = Clamp((ws.height - lo.y) / span, 0.0f, 1.0f);
+        if (frac <= 0.0f) continue;
+        float colLen = Vector3Distance(wb, wt);
+        float vol = c.area * colLen * frac;
+        subVol += vol;
+        if (c.bot.z < -hull::halfLength * 0.5f) sternVol += vol;
+        if (c.bot.z > 0.0f) bowVol += vol;
+        waterVelAvg = Vector3Add(waterVelAvg, Vector3Scale(ws.velocity, frac));
+        waterW += frac;
+
+        Vector3 at = Vector3Add(lo, Vector3Scale(Vector3Subtract(hi, lo), frac * 0.5f));
+        Vector3 r = Vector3Subtract(at, s.pos);
+        Vector3 Fb = {0, tune::rhoWater * g * vol * s.buoyMul * dunk, 0};
+
+        Vector3 pv = Vector3Add(s.vel, Vector3CrossProduct(s.angVel, r));
+        // Planing: a hull running over a rising surface sees the water come up at (speed x slope).
+        // Only the ramp side counts (the sea can't pull a hull down), which is what throws ships
+        // off the crests at speed.
+        Vector3 wv = ws.velocity;
+        Vector2 vh = {pv.x - ws.velocity.x, pv.z - ws.velocity.z};
+        float sp = Vector2Length(vh);
+        if (sp > 2.0f) {
+            Vector2 dir = Vector2Scale(vh, 1.0f / sp);
+            const float e = 2.0f;
+            float slope = (ocean.Height(mid.x + dir.x * e, mid.z + dir.y * e) - ocean.Height(mid.x - dir.x * e, mid.z - dir.y * e)) / (2 * e);
+            wv.y += fmaxf(0.0f, slope * sp) * tune::planing;
+        }
+        Vector3 vb = ToBody(s.rot, Vector3Subtract(pv, wv));
+        float q = 0.5f * tune::rhoWater * frac;
+        Vector3 Fdb = {-(q * P.cdA.x * fabsf(vb.x) + P.linDrag.x * frac) * vb.x,
+                       -(q * P.cdA.y * fabsf(vb.y) + P.linDrag.y * frac) * vb.y,
+                       -(q * P.cdA.z * fabsf(vb.z) + P.linDrag.z * frac) * vb.z};
+        Vector3 Fd = ToWorld(s.rot, Fdb);
+        Vector3 Fc = Vector3Add(Fb, Fd);
+        F = Vector3Add(F, Fc);
+        T = Vector3Add(T, Vector3CrossProduct(r, Fc));
+    }
+    s.submerged = subVol / P.totalVolume;
+    float inWater = Clamp(s.submerged * 4.0f, 0.0f, 1.0f);
+    // the drive is the sails: once the deck is under they stop pulling (otherwise a nose-down hull
+    // at full throttle planes itself down like a dive plane and cruises along 30 m under)
+    float sailsUp = 1.0f - Clamp(s.depthBelow / 2.5f, 0.0f, 1.0f);
+    if (waterW > 0) waterVelAvg = Vector3Scale(waterVelAvg, 1.0f / waterW);
+
+    Vector3 fwd = ToWorld(s.rot, {0, 0, 1});
+    Vector3 up = ToWorld(s.rot, {0, 1, 0});
+
+    // body-space angular acceleration from torques
+    Vector3 tb = ToBody(s.rot, T);
+    Vector3 alphaB = {tb.x / P.inertia.x, tb.y / P.inertia.y, tb.z / P.inertia.z};
+    Vector3 alpha = ToWorld(s.rot, alphaB);
+
+    // ---- arcade drive ----
+    Vector3 rel = Vector3Subtract(s.vel, waterVelAvg);
+    Vector3 right = ToWorld(s.rot, {1, 0, 0});
+    float vf = Vector3DotProduct(rel, fwd);
+    float vl = Vector3DotProduct(rel, right);
+    float yawRate = Vector3DotProduct(s.angVel, up);
+    // drive along the horizontal heading, so a nose-down landing doesn't motor the ship to the bottom
+    Vector3 fwdH = Vector3Normalize({fwd.x, 0.0f, fwd.z});
+    if (s.alive) {
+        // speed controller along the keel; still pushes a little in the air (it's that kind of game)
+        Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
+        float windDot = fh.x * oceanParams.windDir.x + fh.y * oceanParams.windDir.y;
+        float boost = s.power[PU_SPEED] > 0.0f ? tune::speedBoost : 1.0f;
+        float vmax = (s.sail >= 0.0f ? tune::topSpeed * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : tune::reverseSpeed) * boost;
+        if (fabsf(s.sail) > 0.02f) {
+            float acc = tune::driveAccel * boost;
+            float a = Clamp((s.sail * vmax - vf) * tune::driveGain, -acc, acc);
+            F = Vector3Add(F, Vector3Scale(fwdH, a * P.mass * inWater * sailsUp));
+        }
+        // keel grip: kill sideways slip and hand most of it back as forward speed, so turns carve
+        float grip = vl * tune::keelGrip * P.mass * inWater;
+        F = Vector3Add(F, Vector3Scale(right, -grip));
+        F = Vector3Add(F, Vector3Scale(fwdH, fabsf(grip) * 0.5f * (vf >= 0.0f ? 1.0f : -1.0f)));
+        // Rudder: a torque at the stern, fighting yaw resistance from however much hull is wet.
+        // Floating level the two balance at tune::turnRate. When the bow lifts off a crest mid-carve
+        // the rudder still bites but the resistance is gone, so the yaw rate whips up right at
+        // takeoff; in the air nothing touches it (angular momentum), which is where 360s come from.
+        float steerSign = vf < -1.0f ? -1.0f : 1.0f;  // reversed going astern, like a real rudder
+        float spdF = Clamp(fabsf(vf) / 10.0f, 0.0f, 1.0f);
+        float authority = tune::turnRateSlow + (tune::turnRate - tune::turnRateSlow) * spdF;
+        float wet = Clamp(subVol / P.restVol, 0.0f, 1.0f);
+        float bowWet = Clamp(bowVol / P.bowRestVol, 0.0f, 1.0f);
+        float sternWet = Clamp(sternVol / P.sternRestVol, 0.0f, 1.0f);
+        float resist = 0.2f * wet + 0.8f * bowWet;
+        alpha = Vector3Add(alpha, Vector3Scale(up, tune::yawGrip * (-s.rudder * steerSign * authority * sternWet * (1.0f + tune::sternKick * Clamp((0.3f - bowWet) / 0.3f, 0.0f, 1.0f)) - yawRate * resist)));
+        // lean out of the turn
+        alpha = Vector3Add(alpha, Vector3Scale(fwd, tune::heel * yawRate * vf * inWater));
+    } else {
+        alpha = Vector3Add(alpha, Vector3Scale(up, -yawRate * 1.5f * Clamp(subVol / P.restVol, 0.0f, 1.0f)));
+    }
+
+    // roll/pitch damping and a gentle self-righting assist
+    Vector3 nonYaw = Vector3Subtract(s.angVel, Vector3Scale(up, yawRate));
+    alpha = Vector3Add(alpha, Vector3Scale(nonYaw, -(0.9f * inWater + 0.05f)));
+    Vector3 rightAxis = Vector3CrossProduct(up, {0, 1, 0});
+    if (up.y < -0.2f && Vector3Length(rightAxis) < 0.5f) rightAxis = fwd;  // fully capsized
+    float dunked = Clamp(s.depthBelow / 2.0f, 0.0f, 1.0f);  // level out under water so she pops straight up
+    alpha = Vector3Add(alpha, Vector3Scale(rightAxis, (up.y < 0.3f ? 2.5f : 0.6f + 2.4f * dunked) * (0.3f + inWater)));
+
+    // soft arena boundary
+    Vector2 hp = {s.pos.x, s.pos.z};
+    float dist = Vector2Length(hp);
+    if (dist > tune::arenaRadius) {
+        Vector2 n = Vector2Scale(hp, 1.0f / dist);
+        float push = (dist - tune::arenaRadius) * 0.08f * P.mass;
+        F = Vector3Add(F, {-n.x * push, 0, -n.y * push});
+    }
+
+    s.vel = Vector3Add(s.vel, Vector3Scale(F, dt / P.mass));
+    s.angVel = Vector3Add(s.angVel, Vector3Scale(alpha, dt));
+    if (Vector3Length(s.angVel) > 6.0f) s.angVel = Vector3Scale(Vector3Normalize(s.angVel), 6.0f);
+    s.pos = Vector3Add(s.pos, Vector3Scale(s.vel, dt));
+    Quaternion w = {s.angVel.x, s.angVel.y, s.angVel.z, 0.0f};
+    Quaternion dq = QuaternionMultiply(w, s.rot);
+    s.rot = QuaternionNormalize({s.rot.x + 0.5f * dt * dq.x, s.rot.y + 0.5f * dt * dq.y, s.rot.z + 0.5f * dt * dq.z,
+                                 s.rot.w + 0.5f * dt * dq.w});
+
+    float deckY = HullToWorld(s.pos, s.rot, {0, hull::DeckHeight(0), 0}).y;
+    s.depthBelow = ocean.Height(s.pos.x, s.pos.z) - deckY;
+}
+
+void World::Collisions() {
+    const ShipPhys& P = Phys();
+    const float R = 5.0f;
+    const float zs[3] = {-10.0f, 0.0f, 10.0f};
+    for (int a = 0; a < MAX_SHIPS; ++a) {
+        if (!ships[a].active) continue;
+        for (int b = a + 1; b < MAX_SHIPS; ++b) {
+            if (!ships[b].active) continue;
+            Ship& A = ships[a];
+            Ship& B = ships[b];
+            if (Vector3Distance(A.pos, B.pos) > 45.0f) continue;
+            for (float za : zs)
+                for (float zb : zs) {
+                    Vector3 pa = HullToWorld(A.pos, A.rot, {0, 0.8f, za});
+                    Vector3 pb = HullToWorld(B.pos, B.rot, {0, 0.8f, zb});
+                    Vector3 d = Vector3Subtract(pa, pb);
+                    float len = Vector3Length(d);
+                    if (len >= 2 * R || len < 1e-4f) continue;
+                    Vector3 n = Vector3Scale(d, 1.0f / len);
+                    float pen = 2 * R - len;
+                    A.pos = Vector3Add(A.pos, Vector3Scale(n, pen * 0.5f));
+                    B.pos = Vector3Subtract(B.pos, Vector3Scale(n, pen * 0.5f));
+                    Vector3 c = Vector3Scale(Vector3Add(pa, pb), 0.5f);
+                    Vector3 va = Vector3Add(A.vel, Vector3CrossProduct(A.angVel, Vector3Subtract(c, A.pos)));
+                    Vector3 vb = Vector3Add(B.vel, Vector3CrossProduct(B.angVel, Vector3Subtract(c, B.pos)));
+                    float vn = Vector3DotProduct(Vector3Subtract(va, vb), n);
+                    if (vn >= 0) continue;
+                    float j = -(1.0f + 0.35f) * vn / (2.0f / P.mass) * 0.6f;
+                    ApplyImpulse(A, Vector3Scale(n, j), c);
+                    ApplyImpulse(B, Vector3Scale(n, -j), c);
+                    float impact = -vn;
+                    if (impact > 5.0f) {
+                        float dmg = (impact - 5.0f) * 1.6f;
+                        bool crush = fabsf(n.y) > 0.5f;
+                        Ship& top = n.y > 0 ? A : B;
+                        Ship& bottom = n.y > 0 ? B : A;
+                        if (crush) {
+                            Damage(bottom, dmg * 2.0f, top.id);
+                            Damage(top, dmg * 0.3f, bottom.id);
+                        } else {
+                            Damage(A, dmg, B.id);
+                            Damage(B, dmg, A.id);
+                        }
+                        GameEvent e{EventType::Ram};
+                        e.a = top.id;
+                        e.b = bottom.id;
+                        e.flags = crush ? EF_CRUSH : 0;
+                        e.pos = c;
+                        e.value = dmg;
+                        events.push_back(e);
+                    }
+                }
+        }
+    }
+}
+
+// Ships against the island ring: the rock is a heightfield, so cliffs push sideways and beaches
+// push up and out. Impacts hurt; scraping along doesn't.
+void World::RockCollide(Ship& s, bool authoritative) {
+    if (rocks.empty() || !s.active) return;
+    if (sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z) < rockInner - 30.0f) return;
+    const ShipPhys& P = Phys();
+    static const Vector3 pts[] = {{0, -1.2f, 16.5f}, {0, -1.2f, -15.5f}, {3.6f, -1.0f, -9}, {-3.6f, -1.0f, -9}, {4.3f, -1.0f, 1},
+                                  {-4.3f, -1.0f, 1}, {2.8f, -1.0f, 10},  {-2.8f, -1.0f, 10}, {0, -3.0f, 0},   {0, 2.6f, 17.0f}};
+    float worst = 0.0f;
+    Vector3 worstAt{};
+    for (const Vector3& hp : pts) {
+        Vector3 w = HullToWorld(s.pos, s.rot, hp);
+        float H = RocksHeight(rocks, w.x, w.z);
+        if (H <= w.y) continue;
+        const float e = 0.75f;
+        float gx = (RocksHeight(rocks, w.x + e, w.z) - RocksHeight(rocks, w.x - e, w.z)) / (2 * e);
+        float gz = (RocksHeight(rocks, w.x, w.z + e) - RocksHeight(rocks, w.x, w.z - e)) / (2 * e);
+        Vector3 n = Vector3Normalize({-gx, 1.0f, -gz});
+        float pen = fminf((H - w.y) * n.y, 3.0f);
+        s.pos = Vector3Add(s.pos, Vector3Scale(n, pen * 0.6f));
+        Vector3 r = Vector3Subtract(w, s.pos);
+        Vector3 pv = Vector3Add(s.vel, Vector3CrossProduct(s.angVel, r));
+        float vn = Vector3DotProduct(pv, n);
+        if (vn < 0.0f) {
+            Vector3 vt = Vector3Subtract(pv, Vector3Scale(n, vn));
+            ApplyImpulse(s, Vector3Scale(n, -1.2f * vn * P.mass * 0.45f), w);
+            ApplyImpulse(s, Vector3Scale(vt, -0.04f * P.mass), w);  // a little scraping friction
+            if (-vn > worst) { worst = -vn; worstAt = w; }
+        }
+        // and a nudge off the rocks, so nobody ends up beached for good
+        Vector3 out = Vector3Normalize({n.x, 0.0f, n.z});
+        if (Vector3Length({n.x, 0.0f, n.z}) > 0.05f) s.vel = Vector3Add(s.vel, Vector3Scale(out, 3.0f * SIM_DT));
+    }
+    if (authoritative && worst > 8.0f && s.alive) {
+        float dmg = (worst - 8.0f) * tune::rockDamage;
+        GameEvent ev{EventType::Ram};
+        ev.a = ev.b = s.id;
+        ev.flags = EF_ROCK;
+        ev.pos = worstAt;
+        ev.value = dmg;
+        events.push_back(ev);
+        Damage(s, dmg, -1);
+    }
+}
+
+void World::PlaceCrate(Crate& c) {
+    for (int tries = 0; tries < 40; ++tries) {
+        float ang = RandF() * 2.0f * PI, r = 60.0f + RandF() * 560.0f;
+        float x = cosf(ang) * r, z = sinf(ang) * r;
+        if (RocksHeight(rocks, x, z) > -8.0f) continue;
+        bool crowded = false;
+        for (const Ship& s : ships)
+            if (s.active && Vector2Distance({s.pos.x, s.pos.z}, {x, z}) < 80.0f) crowded = true;
+        for (const Crate& o : crates)
+            if (o.active && &o != &c && Vector2Distance({o.x, o.z}, {x, z}) < 150.0f) crowded = true;
+        c.x = x;
+        c.z = z;
+        if (!crowded) break;
+    }
+    c.type = (uint8_t)std::min((int)(RandF() * PU_COUNT), PU_COUNT - 1);
+    c.active = true;
+    GameEvent e{EventType::CrateSpawn};
+    e.a = c.id;
+    e.b = c.type;
+    e.pos = {c.x, ocean.Height(c.x, c.z), c.z};
+    events.push_back(e);
+}
+
+void World::UpdateCrates(float dt) {
+    for (Crate& c : crates) {
+        if (!c.active) {
+            c.timer -= dt;
+            if (c.timer <= 0.0f) PlaceCrate(c);
+            continue;
+        }
+        Vector3 cp = {c.x, ocean.Height(c.x, c.z), c.z};
+        for (Ship& s : ships) {
+            if (!s.active || !s.alive || Vector3Distance(s.pos, cp) > 35.0f) continue;
+            // closest point on the keel line (bow to stern at the waterline)
+            Vector3 a = HullToWorld(s.pos, s.rot, {0, 0, -15.5f}), b = HullToWorld(s.pos, s.rot, {0, 0, 16.5f});
+            Vector3 ab = Vector3Subtract(b, a);
+            float t = Clamp(Vector3DotProduct(Vector3Subtract(cp, a), ab) / Vector3DotProduct(ab, ab), 0.0f, 1.0f);
+            if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 7.0f) continue;
+            float dur = tune::powerMin + RandF() * (tune::powerMax - tune::powerMin);
+            s.power[c.type] = fmaxf(s.power[c.type], dur);
+            GameEvent e{EventType::Pickup};
+            e.a = s.id;
+            e.b = c.type;
+            e.pos = cp;
+            e.value = dur;
+            events.push_back(e);
+            c.active = false;
+            c.timer = tune::crateRespawn;
+            break;
+        }
+    }
+}
+
+void World::UpdateBalls(float dt) {
+    for (size_t i = 0; i < balls.size();) {
+        Ball& b = balls[i];
+        Vector3 prev = b.pos;
+        bool splashed, skipped;
+        bool dead = StepBall(b, ocean, dt, &splashed, &skipped);
+        if (!dead && sqrtf(b.pos.x * b.pos.x + b.pos.z * b.pos.z) > rockInner && b.pos.y < RocksHeight(rocks, b.pos.x, b.pos.z)) {
+            GameEvent e{EventType::Splash};  // smacked into an island
+            e.a = b.owner;
+            e.flags = EF_ROCK;
+            e.pos = prev;
+            events.push_back(e);
+            balls[i] = balls.back();
+            balls.pop_back();
+            continue;
+        }
+        if (splashed || skipped) {
+            GameEvent e{EventType::Splash};
+            e.a = b.owner;
+            e.flags = skipped ? EF_SKIP : 0;
+            e.pos = b.pos;
+            events.push_back(e);
+        }
+        // hit test against every ship (owner only after the ball has cleared the hull)
+        for (int s = 0; s < MAX_SHIPS && !dead; ++s) {
+            Ship& sh = ships[s];
+            if (!sh.active || !sh.alive) continue;
+            if (s == b.owner && b.age < 0.4f) continue;
+            if (Vector3Distance(sh.pos, b.pos) > 60.0f) continue;
+            Quaternion inv = QuaternionInvert(sh.rot);
+            Vector3 h0 = Vector3Add(Vector3RotateByQuaternion(Vector3Subtract(prev, sh.pos), inv), hull::comOffset);
+            Vector3 h1 = Vector3Add(Vector3RotateByQuaternion(Vector3Subtract(b.pos, sh.pos), inv), hull::comOffset);
+            float t;
+            if (!SegmentBox(h0, h1, hull::boxMin, hull::boxMax, t)) continue;
+            Vector3 hitPos = Vector3Lerp(prev, b.pos, t);
+            float speed = Vector3Length(b.vel);
+            float speedF = Clamp(speed / tune::muzzleSpeed, 0.2f, 1.3f);
+            float descent = -b.vel.y / fmaxf(speed, 1e-3f);
+            float plunge = 1.0f + 2.0f * Clamp((descent - 0.3f) / 0.5f, 0.0f, 1.0f);
+            float mult = speedF * plunge * (b.airShot ? 1.5f : 1.0f) * (b.inWater ? 0.6f : 1.0f);
+            float dmg = tune::ballDamage * mult;
+            ApplyImpulse(sh, Vector3Scale(Vector3Normalize(b.vel), tune::ballKnockback * speedF), hitPos);
+            GameEvent e{EventType::Hit};
+            e.a = b.owner;
+            e.b = sh.id;
+            e.flags = (plunge > 1.5f ? EF_PLUNGING : 0) | (b.airShot ? EF_AIRSHOT : 0);
+            e.pos = hitPos;
+            e.dir = Vector3Normalize(b.vel);
+            e.value = dmg;
+            events.push_back(e);
+            Damage(sh, dmg, b.owner);
+            dead = true;
+        }
+        if (dead) {
+            balls[i] = balls.back();
+            balls.pop_back();
+        } else ++i;
+    }
+}
+
+void World::BotThink(Ship& s, float dt) {
+    PlayerInput& in = s.input;
+    if (!s.alive) return;
+    s.botTimer -= dt;
+    // nearest living enemy
+    Ship* target = nullptr;
+    float best = 1e9f;
+    for (auto& o : ships)
+        if (o.active && o.alive && o.id != s.id) {
+            float d = Vector3Distance(o.pos, s.pos);
+            if (d < best) { best = d; target = &o; }
+        }
+    Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+    float heading = atan2f(fwd.x, fwd.z);
+    float desired = heading;
+    in.sail = 1.0f;
+    if (!target) {
+        desired = atan2f(-s.pos.x, -s.pos.z) + 1.2f;  // circle the arena
+    } else {
+        Vector3 to = Vector3Subtract(target->pos, s.pos);
+        float bearing = atan2f(to.x, to.z);
+        if (best > 320.0f) desired = bearing;
+        else {
+            if (s.botTimer <= 0) { s.botSide = AimSide(s.rot, to); s.botTimer = 6.0f; }
+            desired = bearing + (s.botSide == 0 ? -PI * 0.5f : PI * 0.5f);  // present the broadside
+            if (best < 120.0f) desired += (s.botSide == 0 ? -0.5f : 0.5f);  // open the range
+        }
+        // aim with lead + ballistic elevation
+        float flight = best / tune::muzzleSpeed;
+        Vector3 lead = Vector3Add(target->pos, Vector3Scale(target->vel, flight));
+        Vector3 d = Vector3Subtract(lead, s.pos);
+        float range = sqrtf(d.x * d.x + d.z * d.z);
+        float sn = Clamp(tune::gravity * range / (tune::muzzleSpeed * tune::muzzleSpeed), -1.0f, 1.0f);
+        float elev = 0.5f * asinf(sn) + atan2f(d.y, range);
+        in.aim = AimForElevation({d.x, d.z}, elev);
+        int side = AimSide(s.rot, in.aim);
+        Vector3 ab = Vector3RotateByQuaternion(in.aim, QuaternionInvert(s.rot));
+        float yawOff = fabsf(atan2f(ab.z, fabsf(ab.x)));
+        if (best < 520.0f && yawOff < 0.4f && s.reload[side] <= 0.0f && RandF() < 0.05f) in.fireSeq++;
+    }
+    auto wrap = [](float a) {
+        while (a > PI) a -= 2 * PI;
+        while (a < -PI) a += 2 * PI;
+        return a;
+    };
+    // nothing to shoot nearby: go for a crate
+    if (!target || best > 320.0f) {
+        float cb = 450.0f;
+        for (const Crate& c : crates) {
+            float d = Vector2Distance({c.x, c.z}, {s.pos.x, s.pos.z});
+            if (c.active && d < cb && (!target || d < best * 0.8f)) { cb = d; desired = atan2f(c.x - s.pos.x, c.z - s.pos.z); }
+        }
+    }
+    // stay off the rocks: turn for the middle near the wall, or when something solid is dead ahead
+    float dc = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+    float home = atan2f(-s.pos.x, -s.pos.z);
+    float k = Clamp((dc - 600.0f) / 100.0f, 0.0f, 1.0f);
+    Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, 90.0f));
+    if (RocksHeight(rocks, probe.x, probe.z) > -6.0f) k = 1.0f;
+    desired = heading + wrap(desired - heading) * (1.0f - k) + wrap(home - heading) * k;
+    float err = wrap(desired - heading);
+    in.rudder = Clamp(-err * 2.0f, -1.0f, 1.0f);  // positive rudder turns to starboard (-x)
+}
+
+void World::UpdateAirTime(Ship& s, float dt, bool authoritative) {
+    Vector3 up = Vector3RotateByQuaternion({0, 1, 0}, s.rot);
+    if (s.submerged <= 0.0f) {
+        s.airTime += dt;
+        s.airSpin += Vector3DotProduct(s.angVel, up) * dt;
+        return;
+    }
+    int halfTurns = (int)((fabsf(s.airSpin) + 0.45f) / PI);  // a 150-degree spin still counts as a 180
+    if (authoritative && s.alive && (s.airTime > 1.0f || (halfTurns >= 1 && s.airTime > 0.5f))) {
+        Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+        Vector2 vh = {s.vel.x, s.vel.z};
+        float c = Vector2Length(vh) > 3.0f ? (fwd.x * vh.x + fwd.z * vh.y) / Vector2Length(vh) : 1.0f;
+        GameEvent e{EventType::BigAir};
+        e.a = s.id;
+        e.b = (uint8_t)std::min(halfTurns, 255);
+        e.flags = fabsf(c) > 0.87f ? EF_CLEAN : 0;  // within 30 degrees of the travel line (forwards or fakie)
+        e.pos = s.pos;
+        e.value = s.airTime;
+        events.push_back(e);
+    }
+    s.airSpin = 0.0f;
+    if (s.airTime > 0.25f) s.lastAirTime = s.airTime;
+    s.airTime = 0.0f;
+}
+
+void World::PredictStep(Ship& s) {
+    const float dt = SIM_DT;
+    ShipControls(s, dt, false);
+    for (int i = 0; i < 2; ++i) StepShip(s, dt / 2);
+    RockCollide(s, false);
+    UpdateAirTime(s, dt, false);
+}
+
+void World::Step() {
+    const float dt = SIM_DT;
+    time += dt;
+    tick++;
+    ocean.Update(time);
+
+    for (auto& s : ships) {
+        if (!s.active) continue;
+        if (s.isBot) BotThink(s, dt);
+        ShipControls(s, dt, true);
+        const int sub = 2;
+        for (int i = 0; i < sub; ++i) StepShip(s, dt / sub);
+        RockCollide(s, true);
+        UpdateAirTime(s, dt, true);
+        if (!s.alive) {
+            s.deadTimer -= dt;
+            if (s.deadTimer <= 0) Respawn(s);
+        }
+    }
+    Collisions();
+    UpdateBalls(dt);
+    UpdateCrates(dt);
+}
