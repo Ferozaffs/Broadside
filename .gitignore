@@ -6,3 +6,4 @@ dist/
 *.gltf
 *.pak
 *.zip
+playtest/

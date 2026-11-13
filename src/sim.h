@@ -236,6 +236,8 @@ public:
     // Client-side prediction: advance one ship by SIM_DT using its input, against `ocean` as it
     // currently stands. Same code path as the server, minus anything that spawns or damages.
     void PredictStep(Ship& s);
+    // --autopilot playtests: the client runs the bot brain on a mirror of what it can see
+    void AutopilotThink(Ship& s, float dt) { BotThink(s, dt); }
 
     OceanCPU ocean;
     OceanParams oceanParams;

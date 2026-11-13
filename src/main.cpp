@@ -48,6 +48,9 @@ struct Options {
     bool crateCam = false;     // --crate-cam: look at the first crate (screenshots)
     int harbourCam = -1;       // --harbour-cam i: look at harbour i (screenshots)
     bool showScores = false;   // --scores: hold the scoreboard open (screenshots)    // visual test: show all power-ups as active on the HUD
+    bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
+    float recordSec = 0, recordStart = 0;  // --record <sec> <file.mp4> [--record-start <sec>]: video via ffmpeg
+    std::string recordPath;
     bool camOverride = false;
     float camYaw = 0, camPitch = 0.3f, camDist = 70;
     int width = 1600, height = 900;
@@ -81,6 +84,11 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         } else if (a == "--fleets") o.fleets = true;
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
+        else if (a == "--autopilot") o.autopilot = true;
+        else if (a == "--record") {
+            o.recordSec = (float)atof(next("30").c_str());
+            o.recordPath = next("broadside.mp4");
+        } else if (a == "--record-start") o.recordStart = (float)atof(next("0").c_str());
         else if (a == "--fake-lag") o.fakeLagMs = atoi(next("100").c_str());
         else if (a == "--test-damage") o.testDamage = (float)atof(next("20").c_str());
         else if (a == "--test-power") o.testPower = true;
@@ -283,6 +291,14 @@ private:
     double ServerNow() const { return GetTime() + clockOffset; }
     void Interpolate();
     void UpdateInput(float dt);
+    void Autopilot(float dt, PlayerInput& in);
+    void RecordFrame();
+    FILE* recPipe = nullptr;
+    int apPulls = 0, apJumps = 0, apEscortN = 0;
+    float apMaxAir = 0, apMaxAlt = 0;
+    double apEscortSum = 0, apEscortT = 0;
+    void AutopilotReport();
+    long recFrames = 0;
     void Send(const std::vector<uint8_t>& data, bool reliable);
     void Reconcile();
     void ApplyPrediction(float dt);
@@ -454,6 +470,7 @@ void Game::StartSession(bool host, int bots) {
     history.clear();
     predValid = false;
     showDebug = opt.demo;
+    if (opt.autopilot) showHelp = false;
 }
 
 void Game::Disconnect(const std::string& why) {
@@ -650,7 +667,7 @@ void Game::UpdateInput(float dt) {
 
     PlayerInput in;
     bool active = !paused;
-    if (active) {
+    if (active && !opt.autopilot) {
         Vector2 md = GetMouseDelta();
         camYaw -= md.x * 0.0035f;
         camPitch = Clamp(camPitch + md.y * 0.0030f, -0.75f, 1.35f);
@@ -687,6 +704,7 @@ void Game::UpdateInput(float dt) {
             camPitch = 0.12f;
         }
     }
+    if (opt.autopilot && myId >= 0 && view[myId].present) Autopilot(dt, in);
     in.sail = sailTarget;
     in.fireSeq = fireSeq;
     in.aim = SolveAim(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
@@ -713,6 +731,139 @@ void Game::UpdateInput(float dt) {
         }
     }
     if (steps == 6) inputAcc = 0;  // we fell far behind (window drag etc.)
+}
+
+// --autopilot (recorded playtests): the server's bot brain steers our ship from a mirror of what this
+// client can see, while the camera, reticle solver, aim assist and trigger go through the normal player path.
+void Game::Autopilot(float dt, PlayerInput& in) {
+    auto wrap = [](float a) {
+        while (a > PI) a -= 2 * PI;
+        while (a < -PI) a += 2 * PI;
+        return a;
+    };
+    float t = (float)(GetTime() - sessionStart);
+    pred.mode = (uint8_t)curMode;
+    pred.fleets = curFleets;
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        Ship& o = pred.ships[id];
+        const ViewShip& v = view[id];
+        o.id = id;
+        o.active = v.present;
+        if (!v.present) continue;
+        o.alive = (v.s.flags & SF_ALIVE) != 0;
+        o.stowed = false;
+        o.pos = v.s.pos;
+        o.vel = v.s.vel;
+        o.rot = v.s.rot;
+        o.hp = v.s.hp;
+        o.team = v.s.team;
+        o.leader = v.s.leader;
+        o.pirate = (v.s.flags & SF_PIRATE) != 0;
+        for (int k = 0; k < 2; ++k) o.reload[k] = v.s.reload[k];
+    }
+    pred.chests[0].active = !chests.empty();
+    if (!chests.empty()) { pred.chests[0].x = chests[0].x; pred.chests[0].z = chests[0].z; }
+    for (int i = 0; i < tune::crateCount; ++i) {
+        pred.crates[i].active = i < (int)crates.size();
+        if (pred.crates[i].active) { pred.crates[i].x = crates[i].x; pred.crates[i].z = crates[i].z; }
+    }
+    Ship& me = pred.ships[myId];
+    if (predValid) { me.pos = predShip.pos; me.vel = predShip.vel; me.rot = predShip.rot; }
+    me.input = PlayerInput{};
+    pred.AutopilotThink(me, dt);
+    sailTarget = me.input.sail;
+    in.rudder = me.input.rudder;
+
+    // the camera looks at the enemy we'd shoot at (the treasure carrier first in pirate mode)
+    const NetShip& my = view[myId].s;
+    int tgt = -1;
+    float best = 1e9f, bestScore = 1e9f;
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        if (!view[id].present || !(view[id].s.flags & SF_ALIVE) || !IsEnemy(id)) continue;
+        float d = Vector3Distance(view[id].s.pos, my.pos);
+        float sc = (curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) ? d * 0.4f : d;
+        if (sc < bestScore) { bestScore = sc; best = d; tgt = id; }
+    }
+    float wantYaw, wantPitch = 0.16f;
+    if (tgt >= 0 && best < 480.0f) {
+        Vector3 d = Vector3Subtract(view[tgt].s.pos, my.pos);
+        wantYaw = atan2f(-d.x, -d.z);
+        wantPitch = 0.08f + 0.1f * Clamp((best - 80.0f) / 300.0f, 0.0f, 1.0f);
+        // pull the trigger when the battery facing the reticle is loaded and the carriage can lay onto it
+        int side = AimSide(my.rot, curInput.aim);
+        static double lastPull = 0;
+        if (aimRange > 0 && aimRange < 520.0f && !aimClamped && my.reload[side] <= 0.0f && GetTime() - lastPull > 0.5) {
+            fireSeq++;
+            apPulls++;
+            lastPull = GetTime();
+        }
+    } else {  // cruising: look past the bow, swinging slowly from quarter to quarter
+        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, my.rot);
+        wantYaw = atan2f(-f.x, -f.z) + 0.9f * sinf(t * 0.12f);
+        wantPitch = 0.22f;
+    }
+    camYaw += wrap(wantYaw - camYaw) * fminf(1.0f, dt * 2.5f);
+    camPitch += (wantPitch - camPitch) * fminf(1.0f, dt * 2.0f);
+    if (!opt.camOverride) camDist += (85.0f - camDist) * fminf(1.0f, dt);
+    // stats for the report
+    static float apPrevAir = 0;
+    if (apPrevAir > 1.0f && my.airTime <= 0) apJumps++;  // landings after more than a second of air
+    apPrevAir = my.airTime;
+    apMaxAir = fmaxf(apMaxAir, my.airTime);
+    if (my.airTime > 0) apMaxAlt = fmaxf(apMaxAlt, my.pos.y - Ocean().Height(my.pos.x, my.pos.z));
+    if ((my.flags & SF_ALIVE) && GetTime() - apEscortT > 1.0) {
+        apEscortT = GetTime();
+        for (int id = 0; id < MAX_SHIPS; ++id)
+            if (view[id].present && view[id].s.leader == myId && (view[id].s.flags & SF_ALIVE)) {
+                apEscortSum += Vector3Distance(view[id].s.pos, my.pos);
+                apEscortN++;
+            }
+    }
+}
+
+void Game::AutopilotReport() {
+    if (myId < 0) return;
+    const NetShip& my = view[myId].s;
+    printf("[autopilot] %.0f s: trigger pulls %d, kills %d, deaths %d, hp %.0f/%.0f, banked %d, jumps %d (longest %.1f s, highest %.0f m)",
+           GetTime() - sessionStart, apPulls, my.kills, my.deaths, my.hp, my.maxHp, my.banked, apJumps, apMaxAir, apMaxAlt);
+    if (apEscortN) printf(", escorts avg %.0f m from us", apEscortSum / apEscortN);
+    printf("\n");
+    for (int id = 0; id < MAX_SHIPS; ++id)
+        if (view[id].present && view[id].s.leader < 0)
+            printf("   %-18s kills %2d deaths %2d banked %d%s\n", info[id].name.c_str(), view[id].s.kills, view[id].s.deaths,
+                   view[id].s.banked, id == myId ? "  <- us" : "");
+    fflush(stdout);
+}
+
+// --record: raw frames into ffmpeg at a steady 30 fps (frames are repeated if the game runs slower)
+void Game::RecordFrame() {
+    double rt = GetTime() - sessionStart - opt.recordStart;
+    if (rt < 0) return;
+    long due = (long)(rt * 30.0) + 1;
+    if (recFrames < due) {
+        rlDrawRenderBatchActive();
+        Image img = LoadImageFromScreen();
+        if (!recPipe) {
+            const char* ff = getenv("BS_FFMPEG") ? getenv("BS_FFMPEG") : "ffmpeg";
+            std::string cmd = TextFormat("%s -y -loglevel error -f rawvideo -pix_fmt rgba -s %dx%d -r 30 -i - -c:v libx264 "
+                                         "-preset veryfast -crf 21 -pix_fmt yuv420p -movflags +faststart \"%s\"",
+                                         ff, img.width, img.height, opt.recordPath.c_str());
+            recPipe = _popen(cmd.c_str(), "wb");
+            recFrames = due - 1;
+        }
+        if (recPipe) {
+            size_t n = (size_t)img.width * img.height * 4;
+            for (int k = 0; recFrames < due && k < 4; ++k, ++recFrames) fwrite(img.data, 1, n, recPipe);
+            recFrames = due;
+        }
+        UnloadImage(img);
+    }
+    if (rt > opt.recordSec) {
+        if (recPipe) _pclose(recPipe);
+        recPipe = nullptr;
+        if (opt.autopilot) AutopilotReport();
+        quit = true;
+    }
 }
 
 // Where is the reticle pointing? The first thing the camera ray meets: an enemy hull, the sea, or the
@@ -2187,6 +2338,7 @@ void Game::Frame() {
         UnloadImage(img);
         quit = true;
     }
+    if (!opt.recordPath.empty() && mode == Mode::Playing) RecordFrame();
     EndDrawing();
 }
 

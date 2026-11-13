@@ -235,10 +235,10 @@ int RunSimTest() {
             }
             if (getenv("BS_FLEETLOG") && i % 60 == 0 && i < 40 * 60) {
                 const Ship& C = g.ships[c];
-                printf("  t=%3.0f captain %.0f,%.0f v %.1f sail %.2f |", i / 60.0f, C.pos.x, C.pos.z, Vector3Length(C.vel), C.sail);
+                printf("  t=%3.0f captain r %.0f v %.1f sail %.2f |", i / 60.0f, sqrtf(C.pos.x * C.pos.x + C.pos.z * C.pos.z), Vector3Length(C.vel), C.sail);
                 for (const Ship& x : g.ships)
                     if (x.active && x.leader == c)
-                        printf(" e%d d %.0f v %.1f sail %.2f rud %.2f hdgErr %.0f air %.1f sub %.2f", x.slot, Vector3Distance(x.pos, C.pos), Vector3Length(x.vel), x.sail, x.rudder,
+                        printf(" e%d r %.0f d %.0f v %.1f sail %.2f rud %.2f hdgErr %.0f air %.1f sub %.2f", x.slot, sqrtf(x.pos.x * x.pos.x + x.pos.z * x.pos.z), Vector3Distance(x.pos, C.pos), Vector3Length(x.vel), x.sail, x.rudder,
                                [&] {
                                    static const Vector2 off[] = {{-42, -48}, {42, -48}, {0, -100}};
                                    Vector3 sl = HullToWorld(C.pos, C.rot, Vector3Add({off[x.slot].x, 0, off[x.slot].y}, hull::comOffset));

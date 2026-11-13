@@ -64,11 +64,22 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       the hard screen-space dots are gone (soft far halos only past ~220 m).
 - Protocol v7.
 
+## Playtest 2026-11-13 (recorded)
+- [x] --autopilot: the bot brain sails our ship from what the client can see; the camera looks at the nearest enemy
+      (the treasure carrier first) and the trigger goes through the normal reticle/aim-solver path. Prints a report.
+- [x] --record <sec> <file.mp4> [--record-start <sec>]: frames piped to ffmpeg at a steady 30 fps (BS_FFMPEG = path).
+- [x] Recorded FFA, fleets, pirate, night, fog, teams/storm and a host + joining client (40 ms fake lag) on one PC:
+      all modes work, the client joined and played the same match, prediction corrections avg 0.4 m.
+- [x] Escorts kept running aground: they always have a goal (their slot) so they used the harbour-approach rules
+      (wall at 760 m, 35 m rock probe). Now only a captain heading for a harbour gets those; escorts may sail 20 m
+      further out than their captain (600-650 m), outer slots are pulled inside, and a second 40 m rock probe.
+- playtest/ (gitignored) holds the clips; playtest/make_trailer.py cuts the trailer.
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).
 - Bots still run aground near harbours now and then.
-- Two-PC network test still never done.
+- Two-PC network test still never done (one-PC host + client works).
 
 ## Later / ideas
 - Base top speed is unchanged (58 kn); only Fair Wind makes it faster. Raise tune::topSpeed if wanted.

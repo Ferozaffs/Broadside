@@ -925,10 +925,15 @@ void World::BotThink(Ship& s, float dt) {
 
     // where this ship wants to be when it isn't fighting
     bool haveGoal = false, fight = target != nullptr;
+    float wallLimit = 600.0f;  // how far out this ship may sail before it turns for the middle
     Vector3 goal{};
     const Ship* cap = s.leader >= 0 && ships[s.leader].active ? &ships[s.leader] : nullptr;
     if (cap && cap->alive) {  // escort: keep station on the captain unless an enemy is close to us both
         goal = SlotPos(*cap, s.slot);
+        float gr = sqrtf(goal.x * goal.x + goal.z * goal.z);
+        // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
+        wallLimit = Clamp(sqrtf(cap->pos.x * cap->pos.x + cap->pos.z * cap->pos.z) + 20.0f, 600.0f, 650.0f);
+        if (gr > wallLimit) goal = Vector3Scale(goal, wallLimit / gr);
         float ds = flat(goal, s.pos);
         s.catchUp = Clamp((ds - 15.0f) / 60.0f, 0.0f, 1.0f) * tune::escortCatchUp;
         // Hopelessly far off (thrown by a jump, stuck on a rock, left behind by a speed power-up):
@@ -1040,9 +1045,12 @@ void World::BotThink(Ship& s, float dt) {
     // (harbours sit close to the wall, so heading for one is allowed in)
     float dc = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
     float home = atan2f(-s.pos.x, -s.pos.z);
-    float k = Clamp((dc - (haveGoal ? 760.0f : 600.0f)) / 100.0f, 0.0f, 1.0f);
-    Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the goal
-    if (RocksHeight(rocks, probe.x, probe.z) > -6.0f) k = 1.0f;
+    // (escorts always have a goal, their slot, but only a captain heading for a harbour may go near the wall)
+    bool harbourRun = haveGoal && !cap;
+    float k = Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
+    Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
+    Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
+    if (RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f) k = 1.0f;
     desired = heading + wrap(desired - heading) * (1.0f - k) + wrap(home - heading) * k;
     float err = wrap(desired - heading);
     in.rudder = Clamp(-err * 2.0f, -1.0f, 1.0f);  // positive rudder turns to starboard (-x)
