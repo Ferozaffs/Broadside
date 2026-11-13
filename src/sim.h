@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-constexpr int MAX_SHIPS = 8;
+constexpr int MAX_SHIPS = 32;  // captains plus their fleets
 constexpr float SIM_DT = 1.0f / 60.0f;
 constexpr int CANNONS_PER_SIDE = 4;
 
@@ -24,14 +24,19 @@ constexpr float topSpeed = 30.0f;           // m/s full ahead (about 58 kn)
 constexpr float reverseSpeed = 22.0f;       // m/s full astern
 constexpr float driveAccel = 16.0f;         // max m/s^2 the drive can push or brake
 constexpr float driveGain = 3.0f;           // 1/s, how hard it chases the target speed
-constexpr float turnRate = 1.15f;           // rad/s yaw at speed
-constexpr float turnRateSlow = 0.40f;       // rad/s yaw when stopped (spin on the spot)
+constexpr float turnRate = 1.7f;           // rad/s yaw at speed
+constexpr float turnRateSlow = 0.55f;       // rad/s yaw when stopped (spin on the spot)
 constexpr float keelGrip = 2.2f;            // 1/s lateral slip damping, so turns carve rather than skid
 constexpr float heel = 0.03f;              // lean out of turns (cosmetic, but physical)
-constexpr float sternKick = 2.0f;          // extra rudder bite while the bow is out and the stern still digs in
+constexpr float sternKick = 1.1f;          // extra rudder bite while the bow is out and the stern still digs in
 constexpr float yawGrip = 3.5f;            // 1/s, how quickly the wetted hull settles the yaw rate
+constexpr float airYawControl = 1.4f;      // rad/s^2 of yaw the rudder still gives in the air (a little)
+constexpr float airControlRate = 1.6f;     // rad/s: the rudder can't wind an air spin up past this
+constexpr float airSpinCap = 2.6f;         // rad/s: faster air spins bleed off (keeps 360s, stops 1080 blenders)
+constexpr float underwaterBrake = 1.6f;    // 1/s forward speed loss once the deck is well under
 constexpr float dunkBuoyancy = 1.5f;       // extra buoyancy once the deck is under (pops ships back up)
 constexpr float planing = 1.2f;            // how hard rising water under a fast hull throws it up
+constexpr float planingMax = 13.0f;        // m/s cap on that throw (keeps launches big, not orbital)
 constexpr float muzzleSpeed = 95.0f;
 constexpr float reloadTime = 3.5f;
 constexpr float ballDamage = 8.0f;
@@ -47,6 +52,17 @@ constexpr float rapidReload = 0.4f;        // reload time multiplier
 constexpr float speedBoost = 1.4f;         // top speed / acceleration multiplier
 constexpr int barrageBalls = 3;            // balls per gun with the barrage power-up
 constexpr float respawnTime = 7.0f;
+// fleets, harbours and game modes
+constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
+constexpr float escortHp = 60.0f;
+constexpr float escortSpeed = 1.15f;       // escorts are a little quicker so they can keep station
+constexpr float pirateHp = 250.0f;         // one against many
+constexpr float pirateReload = 0.8f;
+constexpr float harbourRadius = 85.0f;
+constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
+constexpr int chestSlots = 8;              // pirate booty (the first chestCount respawn on their own)
+constexpr int chestCount = 5;
+constexpr float chestRespawn = 8.0f;
 }  // namespace tune
 
 // ---- hull shape (hull space: +z bow, +y up, +x port, origin at waterline amidships) ----
@@ -62,6 +78,16 @@ const Vector3 comOffset = {0.0f, -0.9f, 0.0f};  // centre of mass in hull space
 const Vector3 boxMin = {-4.9f, -3.7f, -16.6f};
 const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
+
+// ---- game modes and harbours -----------------------------------------------------
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_COUNT = 3 };
+struct Harbour {
+    float x, z;  // where ships tie up (the pier runs from here to the island behind it)
+    float ang;   // bearing from the arena centre
+};
+std::vector<Harbour> MakeHarbours(uint32_t seed);
+// Who may use harbour i: -1 anyone, else that team (in pirate mode team 1 is the pirate, harbour 0 his cove)
+int HarbourOwner(int mode, int i);
 
 // ---- power-ups ---------------------------------------------------------------
 enum PowerUp : uint8_t { PU_RELOAD = 0, PU_BARRAGE = 1, PU_SPEED = 2, PU_COUNT = 3 };
@@ -126,6 +152,16 @@ struct Ship {
     float power[PU_COUNT] = {0, 0, 0};  // seconds left on each power-up
     int kills = 0, deaths = 0;
     int lastAttacker = -1;
+    // side and fleet
+    int8_t team = -1;     // teams / pirate mode (pirate side = 1); -1 in free-for-all
+    int8_t leader = -1;   // escorts: the captain they sail with
+    uint8_t slot = 0;     // escorts: place in the formation
+    float catchUp = 0.0f;  // escorts: extra speed while they're far off station
+    bool stowed = false;  // escort that went down and waits for its captain to respawn or reach a harbour
+    bool pirate = false;
+    float maxHp = 100.0f;
+    int booty = 0;        // pirate: chests aboard
+    int banked = 0;       // pirate: chests brought home (score)
     uint8_t lastFireSeq = 0;
     uint32_t lastInputSeq = 0;
     PlayerInput input;
@@ -146,8 +182,15 @@ struct Ball {
     Vector3 pos{}, vel{};
 };
 
-enum class EventType : uint8_t { Fire = 1, Hit = 2, Kill = 3, BigAir = 4, Ram = 5, Splash = 6, Respawn = 7, Pickup = 8, CrateSpawn = 9 };
-enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
+enum class EventType : uint8_t {
+    Fire = 1, Hit = 2, Kill = 3, BigAir = 4, Ram = 5, Splash = 6, Respawn = 7, Pickup = 8, CrateSpawn = 9,
+    Resupply = 10,   // a = captain, b = escorts recovered at a harbour
+    Booty = 11,      // a = ship that hauled it in, b = booty now aboard the pirate
+    Bank = 12,       // a = pirate, b = booty banked at the cove
+    NewPirate = 13,  // a = the new pirate, b = the old one (255 = none)
+    ChestSpawn = 14,
+};
+enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
 struct GameEvent {
     EventType type;
@@ -174,10 +217,13 @@ bool StepBall(Ball& b, const OceanCPU& ocean, float dt, bool* splashed = nullptr
 
 class World {
 public:
-    void Init(uint32_t seed, uint8_t weather = 0, uint8_t timeOfDay = 0);
+    void Init(uint32_t seed, uint8_t weather = 0, uint8_t timeOfDay = 0, uint8_t mode = MODE_FFA, bool fleets = false);
     void Step();  // one SIM_DT tick
     int AddShip(const std::string& name, bool bot);
     void RemoveShip(int id);
+    int CaptainOf(int id) const { return (id >= 0 && id < MAX_SHIPS && ships[id].leader >= 0) ? ships[id].leader : id; }
+    bool Enemies(const Ship& a, const Ship& b) const;
+    bool FriendlyHarbour(const Ship& s, int h) const;
     Ship* GetShip(int id) { return (id >= 0 && id < MAX_SHIPS && ships[id].active) ? &ships[id] : nullptr; }
     // Client-side prediction: advance one ship by SIM_DT using its input, against `ocean` as it
     // currently stands. Same code path as the server, minus anything that spawns or damages.
@@ -187,6 +233,11 @@ public:
     OceanParams oceanParams;
     double time = 0.0;
     uint8_t weather = 0, timeOfDay = 0;  // chosen by the host, synced in MSG_WELCOME
+    uint8_t mode = MODE_FFA;
+    bool fleets = false;
+    std::vector<Harbour> harbours;
+    Crate chests[tune::chestSlots];  // pirate booty
+    int teamScore[2] = {0, 0};       // teams: ships sunk; pirate mode: [1] = booty banked
     uint32_t tick = 0;
     Ship ships[MAX_SHIPS];
     std::vector<Ball> balls;
@@ -207,6 +258,15 @@ private:
     void Respawn(Ship& s);
     void Damage(Ship& victim, float amount, int attacker);
     void BotThink(Ship& s, float dt);
+    void SpawnFleet(Ship& captain);
+    void PlaceEscort(Ship& e, const Ship& captain, bool atHarbour, Vector2 harbourPos);
+    Vector3 SlotPos(const Ship& captain, int slot) const;
+    void UpdateHarbours(float dt);
+    void UpdateChests(float dt);
+    void PlaceChest(Crate& c, bool random, float x, float z);
+    void EnsurePirate();
+    void SetPirate(int id);
+    float MaxHpOf(const Ship& s) const;
     float rockInner = 1e9f;  // no rock comes closer to the centre than this
     uint16_t nextBallId = 1;
     uint32_t rng = 12345;

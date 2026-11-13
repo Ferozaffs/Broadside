@@ -3,9 +3,9 @@
 #include <chrono>
 #include <cstdio>
 
-static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate"};
+static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue"};
 
-bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather) {
+bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets) {
     Stop();
     if (!NetInit()) return false;
     if (!net.Start(port, 32)) {
@@ -13,9 +13,11 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
         return false;
     }
     for (int& p : peerShip) p = -1;
-    world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay);
-    for (int i = 0; i < bots; ++i) world.AddShip(kBotNames[i % 6], true);
+    world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets);
+    for (int i = 0; i < bots; ++i)
+        if (world.AddShip(kBotNames[i % 8], true) < 0) break;
     world.events.clear();
+    for (int i = 0; i < MAX_SHIPS; ++i) announced[i] = world.ships[i].active;
     running = true;
     thread = std::thread([this] { Run(); });
     printf("[server] listening on UDP %u, seed %u, %d bot(s)\n", port, seed, bots);
@@ -36,8 +38,23 @@ void GameServer::SendPlayerInfo(int id, int toPeer) {
     w.Put((uint8_t)id);
     w.Put((uint8_t)(s.isBot ? 1 : 0));
     w.PutString(s.name);
+    w.Put(s.leader);
     if (toPeer < 0) net.Broadcast(w.buf.data(), w.buf.size(), true);
     else net.Send((uint32_t)toPeer, w.buf.data(), w.buf.size(), true);
+}
+
+void GameServer::AnnounceShips() {
+    for (int i = 0; i < MAX_SHIPS; ++i) {
+        bool on = world.ships[i].active;
+        if (on && !announced[i]) SendPlayerInfo(i, -1);
+        if (!on && announced[i]) {
+            ByteWriter w;
+            w.Put(MSG_PLAYER_LEFT);
+            w.Put((uint8_t)i);
+            net.Broadcast(w.buf.data(), w.buf.size(), true);
+        }
+        announced[i] = on;
+    }
 }
 
 void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
@@ -66,11 +83,13 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put(world.oceanParams.seed);
         w.Put(world.timeOfDay);
         w.Put(world.weather);
+        w.Put(world.mode);
+        w.Put((uint8_t)(world.fleets ? 1 : 0));
         w.Put(world.time);
         net.Send(peer, w.buf.data(), w.buf.size(), true);
         for (int i = 0; i < MAX_SHIPS; ++i)
-            if (world.ships[i].active && i != id) SendPlayerInfo(i, (int)peer);
-        SendPlayerInfo(id, -1);
+            if (world.ships[i].active && announced[i] && i != id) SendPlayerInfo(i, (int)peer);
+        AnnounceShips();  // the new captain (and fleet) to everyone
         printf("[server] %s joined as ship %d\n", name.c_str(), id);
     } else if (type == MSG_INPUT) {
         int id = peerShip[peer];
@@ -101,10 +120,7 @@ void GameServer::Run() {
                 printf("[server] %s left\n", world.ships[id].name.c_str());
                 world.RemoveShip(id);
                 peerShip[e.peer] = -1;
-                ByteWriter w;
-                w.Put(MSG_PLAYER_LEFT);
-                w.Put((uint8_t)id);
-                net.Broadcast(w.buf.data(), w.buf.size(), true);
+                AnnounceShips();
             }
         }
 
@@ -116,6 +132,7 @@ void GameServer::Run() {
         while (acc >= SIM_DT) {
             acc -= SIM_DT;
             world.Step();
+            AnnounceShips();
             for (const GameEvent& ge : world.events) {
                 ByteWriter w;
                 WriteEvent(w, ge);

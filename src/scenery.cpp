@@ -36,14 +36,16 @@ Color Scenery::PowerColor(int t) {
     switch (t) {
         case PU_RELOAD: return {255, 176, 48, 255};
         case PU_BARRAGE: return {240, 78, 60, 255};
-        default: return {70, 200, 255, 255};
+        case PU_SPEED: return {70, 200, 255, 255};
+        default: return {255, 214, 70, 255};  // booty
     }
 }
 const char* Scenery::PowerName(int t) {
     switch (t) {
         case PU_RELOAD: return "RAPID RELOAD";
         case PU_BARRAGE: return "TRIPLE SHOT";
-        default: return "FAIR WIND";
+        case PU_SPEED: return "FAIR WIND";
+        default: return "BOOTY";
     }
 }
 
@@ -53,7 +55,36 @@ static void Tri2(Image* img, Vector2 a, Vector2 b, Vector2 c, Color col) {
     ImageDrawTriangle(img, a, c, b, col);
 }
 
+static Texture2D MakeChestTexture() {
+    const int S = 128;
+    Image img = GenImageColor(S, S, {90, 52, 30, 255});
+    for (int y = 0; y < S; ++y)
+        for (int x = 0; x < S; ++x) {
+            float grain = 0.85f + 0.15f * sinf(y * 0.22f + sinf(x * 0.05f) * 3.0f) + 0.08f * (Hash3(x, y, 9) - 0.5f);
+            ImageDrawPixel(&img, x, y, Shade({104, 60, 34, 255}, grain));
+        }
+    Color gold = {236, 186, 60, 255}, goldDk = {150, 104, 30, 255};
+    for (int b = 0; b < 2; ++b) {  // two gilded bands
+        int x0 = b ? S - 34 : 22;
+        ImageDrawRectangle(&img, x0, 0, 12, S, goldDk);
+        ImageDrawRectangle(&img, x0 + 2, 0, 8, S, gold);
+    }
+    ImageDrawRectangleLines(&img, {0, 0, (float)S, (float)S}, 8, goldDk);
+    ImageDrawRectangleLines(&img, {2, 2, (float)S - 4, (float)S - 4}, 3, gold);
+    // a fat doubloon in the middle
+    ImageDrawCircle(&img, S / 2, S / 2, 26, goldDk);
+    ImageDrawCircle(&img, S / 2, S / 2, 23, gold);
+    ImageDrawCircle(&img, S / 2, S / 2, 15, {255, 226, 120, 255});
+    ImageDrawRectangle(&img, S / 2 - 3, S / 2 - 11, 6, 22, goldDk);
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    GenTextureMipmaps(&t);
+    SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+    return t;
+}
+
 static Texture2D MakeCrateTexture(int type) {
+    if (type >= PU_COUNT) return MakeChestTexture();
     const int S = 128;
     Image img = GenImageColor(S, S, {150, 104, 58, 255});
     for (int y = 0; y < S; ++y) {
@@ -107,12 +138,17 @@ void Scenery::Init(Shader lit) {
     rockMat = LoadMaterialDefault();
     rockMat.shader = lit;
     crateMesh = GenMeshCube(2.8f, 2.8f, 2.8f);
-    for (int t = 0; t < PU_COUNT; ++t) {
+    for (int t = 0; t <= PU_COUNT; ++t) {
         crateTex[t] = MakeCrateTexture(t);
         crateMat[t] = LoadMaterialDefault();
         crateMat[t].shader = lit;
         crateMat[t].maps[MATERIAL_MAP_DIFFUSE].texture = crateTex[t];
     }
+    partMat = LoadMaterialDefault();
+    partMat.shader = lit;
+    cube = GenMeshCube(1, 1, 1);
+    cyl = GenMeshCylinder(0.5f, 1.0f, 14);
+    cone = GenMeshCone(0.5f, 1.0f, 14);
     ready = true;
 }
 
@@ -120,7 +156,7 @@ void Scenery::DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, floa
     if (!ready) return;
     r.SetLitParams(0.0f, glow);
     Matrix m = MatrixMultiply(QuaternionToMatrix(rot), MatrixTranslate(pos.x, pos.y, pos.z));
-    DrawMesh(crateMesh, crateMat[type % PU_COUNT], m);
+    DrawMesh(crateMesh, crateMat[type < 0 || type > PU_COUNT ? 0 : type], m);
     r.SetLitParams(0.0f, 0.0f);
 }
 
@@ -266,4 +302,90 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v) {
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
     r.SetShore(0.0f);
+}
+
+// ---- harbours ------------------------------------------------------------------------
+void Scenery::Part(const Mesh& m, Matrix world, Color c) {
+    partMat.maps[MATERIAL_MAP_DIFFUSE].color = c;
+    DrawMesh(m, partMat, world);
+}
+
+void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Rock>& rocks) {
+    ports.clear();
+    for (const Harbour& h : hs) {
+        Port p;
+        p.ang = h.ang;
+        p.out = {cosf(h.ang), sinf(h.ang)};
+        // walk out from the anchorage until we're on the island: that's where the pier starts
+        float coast = 900.0f;
+        for (float r = 740.0f; r < 920.0f; r += 2.0f)
+            if (RocksHeight(rocks, p.out.x * r, p.out.y * r) > 1.5f) { coast = r; break; }
+        p.pierFrom = coast + 6.0f;
+        p.pierTo = 752.0f;
+        p.dock = {h.x, 0.0f, h.z};
+        p.lamp = {p.out.x * (p.pierTo - 2.0f), 27.0f, p.out.y * (p.pierTo - 2.0f)};
+        ports.push_back(p);
+    }
+}
+
+void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time) {
+    if (!ready) return;
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(v.target, v.pos));
+    r.SetLitParams(0.0f, 0.0f);
+    const Color wood = {112, 80, 52, 255}, woodDk = {70, 50, 34, 255}, stone = {150, 142, 128, 255};
+    for (size_t i = 0; i < ports.size(); ++i) {
+        const Port& p = ports[i];
+        Vector3 mid = {p.out.x * (p.pierFrom + p.pierTo) * 0.5f, 0, p.out.y * (p.pierFrom + p.pierTo) * 0.5f};
+        if (Vector3DotProduct(Vector3Subtract(mid, v.pos), fwd) < -150.0f) continue;  // behind the camera
+        float len = p.pierFrom - p.pierTo;
+        Matrix rot = MatrixRotateY(-p.ang + PI * 0.5f);  // local +z runs outwards along the pier
+        auto at = [&](float rr, float side, float y) {
+            Vector2 sd = {-p.out.y, p.out.x};
+            return Vector3{p.out.x * rr + sd.x * side, y, p.out.y * rr + sd.y * side};
+        };
+        auto box = [&](Vector3 c, Vector3 size, Color col) {
+            Part(cube, MatrixMultiply(MatrixMultiply(MatrixScale(size.x, size.y, size.z), rot), MatrixTranslate(c.x, c.y, c.z)), col);
+        };
+        auto column = [&](const Mesh& m, Vector3 base, float rad, float h, Color col) {
+            Part(m, MatrixMultiply(MatrixScale(rad * 2, h, rad * 2), MatrixTranslate(base.x, base.y, base.z)), col);
+        };
+        // pier deck on pilings
+        box(at(p.pierTo + len * 0.5f, 0, 2.6f), {9.0f, 0.7f, len}, wood);
+        box(at(p.pierTo + len * 0.5f, 4.3f, 3.4f), {0.4f, 0.9f, len}, woodDk);
+        box(at(p.pierTo + len * 0.5f, -4.3f, 3.4f), {0.4f, 0.9f, len}, woodDk);
+        for (float d = p.pierTo + 3.0f; d < p.pierFrom; d += 9.0f)
+            for (int sd = -1; sd <= 1; sd += 2) column(cyl, at(d, sd * 3.8f, -8.0f), 0.55f, 10.6f, woodDk);
+        // stone head at the end, lighthouse on it
+        column(cyl, at(p.pierTo - 2.0f, 0, -8.0f), 7.0f, 12.0f, stone);
+        Vector3 lb = at(p.pierTo - 2.0f, 0, 4.0f);
+        for (int band = 0; band < 5; ++band)  // red and white rings
+            column(cyl, {lb.x, lb.y + band * 3.6f, lb.z}, 3.0f - band * 0.22f, 3.6f, band % 2 ? Color{196, 52, 44, 255} : Color{236, 232, 222, 255});
+        column(cyl, {lb.x, lb.y + 18.0f, lb.z}, 2.4f, 0.6f, {40, 40, 44, 255});
+        r.SetLitParams(0.0f, 1.0f);
+        column(cyl, {lb.x, lb.y + 18.6f, lb.z}, 1.7f, 3.0f, {255, 220, 150, 255});  // the lamp room glows
+        r.SetLitParams(0.0f, 0.0f);
+        column(cone, {lb.x, lb.y + 21.6f, lb.z}, 2.5f, 3.0f, {40, 40, 44, 255});
+        // a big flag in the owner's colours, flying from a mast beside the lighthouse
+        Vector3 fp = at(p.pierTo + 8.0f, 6.0f, 3.0f);
+        column(cyl, fp, 0.25f, 22.0f, woodDk);
+        float wave = sinf(time * 3.0f + i) * 0.15f;
+        Matrix fr = MatrixMultiply(MatrixRotateY(-p.ang + wave), MatrixTranslate(fp.x, fp.y + 19.5f, fp.z));
+        Part(cube, MatrixMultiply(MatrixMultiply(MatrixScale(0.15f, 4.5f, 7.0f), MatrixTranslate(0, 0, 3.6f)), fr), flag[i]);
+        // warehouses on the quay where the pier meets the island
+        for (int k = -1; k <= 1; k += 2) {
+            Vector3 hc = at(p.pierFrom - 4.0f, k * 14.0f, 0);
+            hc.y = 2.0f;
+            box({hc.x, hc.y + 3.0f, hc.z}, {10.0f, 6.0f, 8.0f}, {170, 150, 120, 255});
+            box({hc.x, hc.y + 6.6f, hc.z}, {11.0f, 1.4f, 9.0f}, {120, 58, 40, 255});
+        }
+        // buoys round the anchorage, bobbing on the swell
+        for (int b = 0; b < 10; ++b) {
+            float a = b * 2.0f * PI / 10.0f;
+            float bx = p.dock.x + cosf(a) * tune::harbourRadius, bz = p.dock.z + sinf(a) * tune::harbourRadius;
+            if (Vector2Length({bx, bz}) > p.pierTo - 4.0f && fabsf(atan2f(bz, bx) - atan2f(p.dock.z, p.dock.x)) < 0.02f) continue;
+            float by = ocean.Height(bx, bz);
+            column(cyl, {bx, by - 0.6f, bz}, 0.9f, 2.0f, flag[i]);
+            column(cone, {bx, by + 1.4f, bz}, 0.7f, 1.6f, {230, 226, 214, 255});
+        }
+    }
 }

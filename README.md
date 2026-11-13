@@ -30,12 +30,30 @@ Everyone must run the same version.
 
 Sail through the floating crates for 15-30 s power-ups: **Rapid Reload**, **Triple Shot** and **Fair Wind**.
 
+### Game modes
+
+The host picks the game in the menu:
+
+- **Free-for-all**: everyone against everyone.
+- **Teams**: red against blue. No friendly fire; each side has a home harbour.
+- **Pirate**: one pirate (tougher, faster reload, black sails) against everyone else. Only the pirate can haul
+  the floating treasure chests aboard, and has to sail them home to the pirate cove to bank them. Whoever sinks
+  the pirate becomes the pirate.
+
+**Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
+alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
+sail into a friendly harbour, which also repairs your hull.
+
+Aiming: the cannonballs land where the reticle points (on an enemy hull, the sea or the rocks). The guns only
+swing about 26 degrees either side of the beam; "CARRIAGE LIMIT" means they can't reach.
+
 ## Building
 
 Windows with Visual Studio 2026 (C++ workload): run `build.bat`. CMake fetches raylib 5.5 and ENet 1.3.18.
 The game is `build/broadside.exe`.
 
-`broadside.exe --simtest` runs the headless physics checks.
+`broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
+Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`.
 
 ### Ship model
 

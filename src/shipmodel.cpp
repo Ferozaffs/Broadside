@@ -475,7 +475,9 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
     auto T = [&](Color c) { return ColorTint(c, tint); };
     Matrix I = MatrixIdentity();
 
-    if (hasExt) {
+    // far away (fleets mean up to 32 ships) the 150k-triangle model is a few pixels: use the
+    // procedural low-poly galleon instead
+    if (hasExt && camDist < 650.0f) {
         Matrix m = MatrixMultiply(extFix, model);
         rlDisableBackfaceCulling();  // sails and thin rigging are single-sided in most models
         float flutter = 0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f);

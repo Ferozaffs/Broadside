@@ -24,6 +24,36 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Floating crates with timed power-ups (15-30 s): Rapid Reload (x0.4), Triple Shot (12 balls), Fair Wind (x1.4 speed). 7 crates, respawn 10 s.
 - [x] Arena edge: ring of islands + sea stacks from the match seed (src/scenery.cpp), solid for ships/balls/camera, surf foam.
 
+## Round 4 feedback (2026-11-13, done while the user slept)
+- [x] Foam: foam bias was 0.35 (Garrett's sample scene: 0.85). Now 0.8, add 0.1, threshold 0. BS_FOAM=bias,thr,add,decay overrides.
+- [x] Steering quicker: turnRate 1.7 (was 1.15), slow 0.55, rudder slew 7/s. 360 at speed ~2.9 s.
+- [x] Slight air control: rudder gives 1.4 rad/s^2 of yaw in the air, but can't wind a spin past 1.6 rad/s.
+      Air spin above 2.6 rad/s bleeds off. sternKick 2.0 -> 1.1. Planing throw capped at 13 m/s (one seed launched 72 m).
+- [x] Underwater brake: a hull with the deck >0.5 m under loses forward speed (1.6/s). Dunks avg 0.65 s, max ~1 s / 3 m.
+- [x] Aim: the reticle point is now where the balls land. Client raycasts the reticle (enemy hull / sea / rock), solves the
+      exact ballistic elevation (gravity + StepBall drag, low arc, ship velocity incl. roll) from the battery that faces
+      it, and sends the barrel direction (AimElevation is now identity). Assist pulls the point onto an enemy near the
+      reticle with lead. Test: BS_AIMSIDE=1 BS_AIMLOG=1 --demo prints the miss (0-3 m at 100-500 m within traverse).
+- [x] Game modes (menu GAME: Free-for-all / Teams / Pirate, SHIPS: Solo / Fleets; --mode, --fleets):
+  - Teams: join the smaller side, red vs blue, no friendly fire (balls pass through friends, rams don't hurt),
+    team score = enemy ships sunk, spawn off your own harbour.
+  - Fleets: 3 AI escorts per captain (60 hp, 15% faster + catch-up speed), formation behind the captain, they fight
+    enemies near you. Lost escorts stay lost until you sink (fresh fleet on respawn) or reach a friendly harbour.
+  - Pirate: one pirate (250 hp, 0.8x reload, black sails) vs everyone. Booty chests (5) only the pirate side can haul
+    aboard; bank them at the pirate cove (harbour 0). Pirate sinks -> booty spills as chests, killer becomes pirate.
+    The first human to join takes the black flag from a bot.
+- [x] Harbours: 4 per map (MakeHarbours(seed)), sea stacks cleared around them; pier, lighthouse, owner flag, buoy ring.
+      Friendly harbour repairs 12 hp/s and restores lost escorts. Teams: harbour 0 red, 2 blue, 1/3 neutral.
+- [x] MAX_SHIPS 32, protocol v6, distant ships (>650 m) use the procedural low-poly hull, ships behind the camera skipped.
+- [x] simtest: fleet station-keeping test (BS_FLEETSTRAIGHT, BS_FLEETLOG) and 6-minute bot matches per mode checking
+      friendly fire, harbour refits, booty, pirate hand-over (BS_NOMODES=1 skips them).
+
+## Known issues / next
+- Escorts keep station loosely: ~60-130 m off their slot behind a straight-sailing captain, ~150 m+ behind a bot
+  that circles at full speed (big jumps throw them off). They do follow and fight near you.
+- Bots still run aground near harbours now and then.
+- Not yet pushed to GitHub / released (v0.4.0 zip built locally in dist/). Two-PC network test still never done.
+
 ## Later / ideas
 - Base top speed is unchanged (58 kn); only Fair Wind makes it faster. Raise tune::topSpeed if wanted.
 - Test flags added: --test-power, --crate-cam, --freecam px py pz tx ty tz, BS_AIMTEST=1 (with --demo).

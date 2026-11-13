@@ -2,6 +2,7 @@
 #include "sim.h"
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 
 static float Heading(const Ship& s) {
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
@@ -98,7 +99,7 @@ int RunSimTest() {
     int jumps = 0, big = 0, spins = 0, clean = 0;
     float takeoffYaw = 0, maxTakeoffYaw = 0, spdSum = 0, maxDepth = 0;
     float dunkT = 0, dunkSum = 0, dunkMax = 0;
-    int dunks = 0, rockHits = 0;
+    int dunks = 0, rockHits = 0, maxSpin = 0;
     for (int i = 0; i < 180 * 60; ++i) {
         float t = i * SIM_DT;
         // carve hard for 4 s, run straight for 4 s, carve the other way (no input matters in the air)
@@ -130,6 +131,7 @@ int RunSimTest() {
                 jumps++;
                 if (e.value > 2.0f) big++;
                 if (e.b >= 2) spins++;
+                maxSpin = std::max(maxSpin, (int)e.b * 180);
                 if (e.b >= 1 && (e.flags & EF_CLEAN)) clean++;
                 if (jumps <= 14)
                     printf("  jump %.1f s  takeoff yaw %.2f  spin %d deg  %s\n", e.value, takeoffYaw, e.b * 180,
@@ -141,7 +143,7 @@ int RunSimTest() {
         maxAir = fmaxf(maxAir, s.airTime);
         minUp = fminf(minUp, Vector3RotateByQuaternion({0, 1, 0}, s.rot).y);
     }
-    printf("dunks (deck >1 m under): %d, avg %.2f s, max %.2f s, rock hits %d\n", dunks, dunks ? dunkSum / dunks : 0.0f, dunkMax, rockHits);
+    printf("dunks (deck >1 m under): %d, avg %.2f s, max %.2f s, rock hits %d, biggest spin %d deg\n", dunks, dunks ? dunkSum / dunks : 0.0f, dunkMax, rockHits, maxSpin);
     printf("air: %.0f%% airborne, jumps>1s %d (%d over 2 s, %d with 360+, %d clean spins) in 3 min, max %.2f s, max height %.1f m, min up.y %.2f, hp %.0f, max takeoff yaw %.2f, avg speed %.1f, max dunk %.1f m\n",
            100 * total / 180, jumps, big, spins, clean, maxAir, maxH, minUp, s.hp, maxTakeoffYaw, spdSum / (180 * 60), maxDepth);
 
@@ -199,6 +201,99 @@ int RunSimTest() {
         });
         printf("rocks: %d hits, %.0f damage, furthest out %.0f m, now %.0f m from centre, speed %.1f, hp %.0f alive %d\n", hits, dmg, maxR,
                sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z), Vector3Length(s.vel), s.hp, (int)s.alive);
+    }
+
+    {  // 6b) a lone captain bot and its fleet: do the escorts keep station?
+        World g;
+        g.Init(1, 0, 0, MODE_FFA, true);
+        int c = g.AddShip("lonely", true);
+        float err[3] = {0, 0, 0};
+        int n = 0;
+        bool straight = getenv("BS_FLEETSTRAIGHT") != nullptr;
+        if (straight) g.ships[c].isBot = false;
+        for (int i = 0; i < 120 * 60; ++i) {
+            if (straight) {  // captain: full ahead, gentle weave, home when near the wall
+                Ship& C = g.ships[c];
+                C.input.sail = 1.0f;
+                Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, C.rot);
+                float home = atan2f(-C.pos.x, -C.pos.z), hd = atan2f(f.x, f.z), e = home - hd;
+                while (e > PI) e -= 2 * PI;
+                while (e < -PI) e += 2 * PI;
+                C.input.rudder = sqrtf(C.pos.x * C.pos.x + C.pos.z * C.pos.z) > 450.0f ? Clamp(-e * 2.0f, -1.0f, 1.0f) : 0.0f;
+            }
+            g.Step();
+            g.events.clear();
+            if (i > 10 * 60 && i % 30 == 0) {
+                for (const Ship& x : g.ships)
+                    if (x.active && x.leader == c) {
+                        // distance from its slot
+                        static const Vector2 off[] = {{-42, -48}, {42, -48}, {0, -100}};
+                        Vector3 slot = HullToWorld(g.ships[c].pos, g.ships[c].rot, Vector3Add({off[x.slot].x, 0, off[x.slot].y}, hull::comOffset));
+                        err[x.slot] += Vector2Distance({slot.x, slot.z}, {x.pos.x, x.pos.z});
+                    }
+                n++;
+            }
+            if (getenv("BS_FLEETLOG") && i % 60 == 0 && i < 40 * 60) {
+                const Ship& C = g.ships[c];
+                printf("  t=%3.0f captain %.0f,%.0f v %.1f sail %.2f |", i / 60.0f, C.pos.x, C.pos.z, Vector3Length(C.vel), C.sail);
+                for (const Ship& x : g.ships)
+                    if (x.active && x.leader == c)
+                        printf(" e%d d %.0f v %.1f sail %.2f rud %.2f hdgErr %.0f air %.1f sub %.2f", x.slot, Vector3Distance(x.pos, C.pos), Vector3Length(x.vel), x.sail, x.rudder,
+                               [&] {
+                                   static const Vector2 off[] = {{-42, -48}, {42, -48}, {0, -100}};
+                                   Vector3 sl = HullToWorld(C.pos, C.rot, Vector3Add({off[x.slot].x, 0, off[x.slot].y}, hull::comOffset));
+                                   Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, x.rot);
+                                   float e = atan2f(sl.x - x.pos.x, sl.z - x.pos.z) - atan2f(f.x, f.z);
+                                   while (e > PI) e -= 2 * PI;
+                                   while (e < -PI) e += 2 * PI;
+                                   return e * RAD2DEG;
+                               }(), x.airTime, x.submerged);
+                printf("\n");
+            }
+        }
+        printf("fleet station keeping (alone, 2 min): slot error %.0f / %.0f / %.0f m\n", err[0] / n, err[1] / n, err[2] / n);
+    }
+    if (getenv("BS_NOMODES")) return 0;
+    // 7) game modes: whole bot matches, checking the rules hold
+    const char* modeName[] = {"free-for-all", "teams", "pirate"};
+    for (int m = 0; m < MODE_COUNT; ++m) {
+        World g;
+        g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true);
+        int captains = m == MODE_PIRATE ? 5 : 4;
+        for (int i = 0; i < captains; ++i) g.AddShip(TextFormat("bot%d", i), true);
+        int active = 0;
+        for (const Ship& x : g.ships) active += x.active;
+        int kills = 0, friendly = 0, resupply = 0, booty = 0, denied = 0, banks = 0, pirates = 0, hits = 0, aground = 0, groundings = 0;
+        float stationErr = 0;
+        int stationN = 0;
+        const float mins = 6.0f;
+        for (int i = 0; i < (int)(mins * 60 * 60); ++i) {
+            g.Step();
+            for (const GameEvent& e : g.events) {
+                if (e.type == EventType::Hit) {
+                    hits++;
+                    if (e.a != e.b && g.ships[e.a].active && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
+                }
+                if (e.type == EventType::Kill) kills++;
+                if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { aground++; if (e.value > 6.0f) groundings++; }
+                if (e.type == EventType::Resupply) resupply += e.b;
+                if (e.type == EventType::Booty) (e.flags & EF_DENY) ? denied++ : booty++;
+                if (e.type == EventType::Bank) banks += e.b;
+                if (e.type == EventType::NewPirate) pirates++;
+            }
+            g.events.clear();
+            if (i % 60 == 0)  // how well escorts keep station on a living captain
+                for (const Ship& x : g.ships)
+                    if (x.active && x.alive && !x.stowed && x.leader >= 0 && g.ships[x.leader].alive) {
+                        Vector3 slotDiff = Vector3Subtract(x.pos, g.ships[x.leader].pos);
+                        stationErr += Vector2Length({slotDiff.x, slotDiff.z});
+                        stationN++;
+                    }
+        }
+        printf("mode %-12s ships %d, %.0f min: %d hits, %d sunk, friendly-fire hits %d, escorts recovered in harbour %d, escort avg %.0f m from captain, team score %d-%d, rock hits %d (%d hard)",
+               modeName[m], active, mins, hits, kills, friendly, resupply, stationN ? stationErr / stationN : 0.0f, g.teamScore[0], g.teamScore[1], aground, groundings);
+        if (m == MODE_PIRATE) printf(", booty grabbed %d, chests sunk by navy %d, banked %d, pirate changed hands %d", booty, denied, banks, pirates);
+        printf("\n");
     }
     return 0;
 }

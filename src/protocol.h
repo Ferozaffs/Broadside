@@ -6,16 +6,16 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 5;
+constexpr uint16_t PROTOCOL_VERSION = 6;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
 enum MsgType : uint8_t {
     MSG_HELLO = 1,        // C->S  version, name
     MSG_INPUT = 2,        // C->S  input (unreliable)
-    MSG_WELCOME = 3,      // S->C  your id, ocean seed, time of day, weather, server time
+    MSG_WELCOME = 3,      // S->C  your id, ocean seed, time of day, weather, mode, fleets, server time
     MSG_SNAPSHOT = 4,     // S->C  world state (unreliable)
-    MSG_PLAYER_INFO = 5,  // S->C  id, name, isBot
+    MSG_PLAYER_INFO = 5,  // S->C  id, isBot, name, leader
     MSG_PLAYER_LEFT = 6,  // S->C  id
     MSG_EVENT = 7,        // S->C  game event (reliable)
     MSG_REJECT = 8,       // S->C  reason string
@@ -90,7 +90,7 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
 }
 
 // ---- snapshot -------------------------------------------------------------------
-enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_BOT = 8 };
+enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_BOT = 8 };
 
 struct NetShip {
     uint8_t id = 0, flags = 0;
@@ -102,6 +102,10 @@ struct NetShip {
     float power[PU_COUNT] = {0, 0, 0};  // seconds left on each power-up
     uint32_t ack = 0;  // last input seq the server applied for this ship
     uint16_t kills = 0, deaths = 0;
+    int8_t team = -1, leader = -1;
+    float maxHp = 100;
+    uint8_t booty = 0;
+    uint16_t banked = 0;
     Vector3 pos{}, vel{}, angVel{};
     Quaternion rot{0, 0, 0, 1};
 };
@@ -123,20 +127,29 @@ struct Snapshot {
     std::vector<NetShip> ships;
     std::vector<NetBall> balls;
     std::vector<NetCrate> crates;
+    std::vector<NetCrate> chests;  // pirate booty (type unused)
+    uint16_t teamScore[2] = {0, 0};
 };
 
 inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(MSG_SNAPSHOT);
     w.Put(world.time);
     w.Put(world.tick);
+    w.Put((uint16_t)world.teamScore[0]);
+    w.Put((uint16_t)world.teamScore[1]);
     uint8_t n = 0;
-    for (auto& s : world.ships) n += s.active ? 1 : 0;
+    for (auto& s : world.ships) n += (s.active && !s.stowed) ? 1 : 0;
     w.Put(n);
     for (auto& s : world.ships) {
-        if (!s.active) continue;
+        if (!s.active || s.stowed) continue;  // lost escorts waiting in the wings aren't in the world
         w.Put(s.id);
-        w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0)));
-        w.PutU8f(s.hp / 100.0f);
+        w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0) | (s.pirate ? SF_PIRATE : 0)));
+        w.Put(s.team);
+        w.Put(s.leader);
+        w.Put((uint8_t)Clamp(s.maxHp * 0.5f, 1.0f, 255.0f));
+        w.Put((uint8_t)std::min(s.booty, 255));
+        w.Put((uint16_t)std::min(s.banked, 65535));
+        w.PutU8f(s.hp / s.maxHp);
         w.Put((int8_t)(Clamp(s.sail, -1.0f, 1.0f) * 127));
         w.Put((int8_t)(s.rudder * 127));
         w.PutU8f(s.submerged);
@@ -178,17 +191,33 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(c.x);
         w.Put(c.z);
     }
+    uint8_t nh = 0;
+    for (const Crate& c : world.chests) nh += c.active ? 1 : 0;
+    w.Put(nh);
+    for (const Crate& c : world.chests) {
+        if (!c.active) continue;
+        w.Put(c.id);
+        w.Put(c.x);
+        w.Put(c.z);
+    }
 }
 
 inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.time = r.Get<double>();
     s.tick = r.Get<uint32_t>();
+    s.teamScore[0] = r.Get<uint16_t>();
+    s.teamScore[1] = r.Get<uint16_t>();
     uint8_t n = r.Get<uint8_t>();
     s.ships.resize(n);
     for (auto& sh : s.ships) {
         sh.id = r.Get<uint8_t>();
         sh.flags = r.Get<uint8_t>();
-        sh.hp = r.GetU8f() * 100.0f;
+        sh.team = r.Get<int8_t>();
+        sh.leader = r.Get<int8_t>();
+        sh.maxHp = r.Get<uint8_t>() * 2.0f;
+        sh.booty = r.Get<uint8_t>();
+        sh.banked = r.Get<uint16_t>();
+        sh.hp = r.GetU8f() * sh.maxHp;
         sh.sail = r.Get<int8_t>() / 127.0f;
         sh.rudder = r.Get<int8_t>() / 127.0f;
         sh.submerged = r.GetU8f();
@@ -224,6 +253,13 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     for (auto& c : s.crates) {
         c.id = r.Get<uint8_t>();
         c.type = r.Get<uint8_t>();
+        c.x = r.Get<float>();
+        c.z = r.Get<float>();
+    }
+    uint8_t nh = r.Get<uint8_t>();
+    s.chests.resize(r.ok ? nh : 0);
+    for (auto& c : s.chests) {
+        c.id = r.Get<uint8_t>();
         c.x = r.Get<float>();
         c.z = r.Get<float>();
     }

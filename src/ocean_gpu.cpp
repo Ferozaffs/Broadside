@@ -1,6 +1,8 @@
 #include "ocean_gpu.h"
 #include "gl43.h"
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 using namespace gl;
@@ -79,10 +81,18 @@ void OceanGPU::Update(double time, float dt) {
     // 3) assemble displacement / slope / foam
     UseProgram(progAssemble);
     Uniform2f(GetUniformLocation(progAssemble, "uLambda"), params.lambda, params.lambda);
-    Uniform1f(GetUniformLocation(progAssemble, "uFoamDecay"), 0.0175f * 60.0f * fminf(dt, 0.1f));
-    Uniform1f(GetUniformLocation(progAssemble, "uFoamBias"), 0.35f);
-    Uniform1f(GetUniformLocation(progAssemble, "uFoamThreshold"), 0.05f);
-    Uniform1f(GetUniformLocation(progAssemble, "uFoamAdd"), 0.07f * 60.0f * fminf(dt, 0.1f));
+    // whitecaps: Garrett's sample scene uses bias 0.85 (we run a rougher sea, so a touch less) (rates are per 60 Hz frame there); BS_FOAM overrides for tuning
+    static float foamBias = 0.8f, foamThreshold = 0.0f, foamAdd = 0.1f, foamDecay = 0.0175f;
+    static bool foamEnv = [] {
+        if (const char* e = getenv("BS_FOAM")) sscanf(e, "%f,%f,%f,%f", &foamBias, &foamThreshold, &foamAdd, &foamDecay);
+        return true;
+    }();
+    (void)foamEnv;
+    float frames = 60.0f * fminf(dt, 0.1f);
+    Uniform1f(GetUniformLocation(progAssemble, "uFoamDecay"), foamDecay * frames);
+    Uniform1f(GetUniformLocation(progAssemble, "uFoamBias"), foamBias);
+    Uniform1f(GetUniformLocation(progAssemble, "uFoamThreshold"), foamThreshold);
+    Uniform1f(GetUniformLocation(progAssemble, "uFoamAdd"), foamAdd * frames);
     BindImageTexture(0, specTex, 0, TRUE_, 0, READ_ONLY, RGBA32F);
     BindImageTexture(1, dispTex, 0, TRUE_, 0, READ_WRITE, RGBA16F);
     BindImageTexture(2, slopeTex, 0, TRUE_, 0, WRITE_ONLY, RG16F);

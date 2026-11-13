@@ -1,4 +1,4 @@
-// Client-side scenery: the island ring around the arena and the floating power-up crates.
+// Client-side scenery: the island ring around the arena, harbours, and the floating crates and booty.
 #pragma once
 #include "raylib.h"
 #include "raymath.h"
@@ -15,9 +15,14 @@ public:
     void Build(const std::vector<Rock>& rocks);
     void DrawIslands(Renderer& r, const RenderView& v);
     // pos = centre of the crate, rot = how the swell tilts it
-    void DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, float glow);
+    void DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, float glow);  // type PU_COUNT = booty chest
+    // Harbours: a pier out from the island, a lighthouse on its end and a ring of buoys around the
+    // anchorage. flag[i] = owner colour of harbour i. Returns the lighthouse lamp positions in `lamps`.
+    void BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Rock>& rocks);
+    void DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time);
+    Vector3 Lamp(int i) const { return i < (int)ports.size() ? ports[i].lamp : Vector3{}; }
 
-    static Color PowerColor(int type);
+    static Color PowerColor(int type);  // PU_COUNT = booty (gold)
     static const char* PowerName(int type);
 
 private:
@@ -28,8 +33,18 @@ private:
     };
     std::vector<Island> islands;
     Material rockMat{};
-    Material crateMat[PU_COUNT]{};
+    Material crateMat[PU_COUNT + 1]{};
     Mesh crateMesh{};
-    Texture2D crateTex[PU_COUNT]{};
+    Texture2D crateTex[PU_COUNT + 1]{};
+    struct Port {
+        Vector3 dock{}, lamp{};
+        Vector2 out{};  // unit vector from the centre towards the island
+        float pierFrom = 0, pierTo = 0;  // radii
+        float ang = 0;
+    };
+    std::vector<Port> ports;
+    Mesh cube{}, cyl{}, cone{};
+    Material partMat{};
+    void Part(const Mesh& m, Matrix world, Color c);
     bool ready = false;
 };
