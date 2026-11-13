@@ -121,6 +121,14 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Feed: others' air only for 360s or >3.5 s, power-ups only yours or within 450 m, groundings once per 30 s.
 - Protocol v8.
 
+## Reviewer plan, part 2: joining (2026-11-13)
+- [x] src/upnp.cpp: hosting asks the router (UPnP IGD via SSDP + SOAP, plain winsock) to forward the UDP port to this
+      PC, reads its public address, removes the mapping on leave/quit. HUD: "FRIENDS JOIN <ip>", F2 copies, LAN
+      address; clear messages for UPnP switched off (names the router and this PC's address), refused, CGNAT.
+- [x] Tested against a fake IGD (scratchpad fake_igd.py; BS_UPNP_SSDP=127.0.0.1:19000 --upnp-map-test 27615): finds it,
+      maps, reads the address, unmaps. --upnp-probe is a read-only check of the real network. BS_NOUPNP=1 disables.
+- The user's own router (192.168.1.1) answers SSDP only as a WPS device: UPnP port forwarding is off there.
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).

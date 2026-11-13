@@ -7,6 +7,7 @@
 #include "raymath.h"
 #include "render.h"
 #include "audio.h"
+#include "upnp.h"
 #include "rlgl.h"
 #include "server.h"
 #include "shipmodel.h"
@@ -21,6 +22,8 @@
 #include <ctime>
 #include <algorithm>
 #include <deque>
+#include <thread>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -316,7 +319,8 @@ public:
 
 private:
     void SetOcean(uint32_t seed, int weather);
-    void StartSession(bool host, int bots);
+    void StartSession(bool host, int bots, bool open = false);  // open: ask the router to forward the port (real hosting)
+    bool portOpened = false;
     void Disconnect(const std::string& why);
     void PollNet();
     void HandleMessage(const std::vector<uint8_t>& data);
@@ -443,7 +447,7 @@ void Game::Init() {
     if (opt.camOverride) { camYaw = opt.camYaw; camPitch = opt.camPitch; camDist = opt.camDist; }
     if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
     switch (opt.start) {
-        case Options::Host: StartSession(true, opt.bots); break;
+        case Options::Host: StartSession(true, opt.bots, true); break;
         case Options::Practice: StartSession(true, botCount); break;
         case Options::Join: StartSession(false, 0); break;
         default: break;
@@ -456,6 +460,7 @@ void Game::Shutdown() {
                predStatMax, opt.fakeLagMs);
     net.Disconnect();
     server.Stop();
+    if (portOpened) { upnp::Stop(); portOpened = false; }
     if (soundOn) sfx::Shutdown();
 }
 
@@ -468,7 +473,7 @@ void Game::SetOcean(uint32_t seed, int weather) {
     oceanGpu.Init(pred.oceanParams);
 }
 
-void Game::StartSession(bool host, int bots) {
+void Game::StartSession(bool host, int bots, bool open) {
     status.clear();
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
@@ -476,6 +481,10 @@ void Game::StartSession(bool host, int bots) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
+        }
+        if (open && !getenv("BS_NOUPNP")) {
+            upnp::Start(opt.port);
+            portOpened = true;
         }
     }
     const char* addr = host ? "127.0.0.1" : addrBuf.c_str();
@@ -517,6 +526,7 @@ void Game::StartSession(bool host, int bots) {
 void Game::Disconnect(const std::string& why) {
     net.Disconnect();
     server.Stop();
+    if (portOpened) { upnp::Stop(); portOpened = false; }
     mode = Mode::Menu;
     status = why;
     paused = false;
@@ -2687,6 +2697,30 @@ void Game::DrawHUD() {
     Text(TextFormat("%s  \xC2\xB7  %u ms  \xC2\xB7  %d fps", server.Running() ? "HOSTING" : "ONLINE", net.RoundTripMs() + 2 * opt.fakeLagMs,
                     GetFPS()),
          24, 20, 15, A(kDim, 0.9f));
+    if (portOpened) {
+        upnp::State us = upnp::GetState();
+        std::string ext = upnp::ExternalIp(), lan = upnp::LocalIp();
+        float yy = 40;
+        if (us == upnp::State::Mapped && !ext.empty() && !upnp::CarrierNat()) {
+            Text(TextFormat("FRIENDS JOIN  %s%s", ext.c_str(), opt.port == DEFAULT_PORT ? "" : TextFormat(":%u", opt.port)), 24, yy, 17, kGold, true);
+            Text(TextFormat("F2 copies   \xC2\xB7   same network: %s", lan.c_str()), 24, yy + 22, 13, A(kDim, 0.9f));
+        } else if (us != upnp::State::Idle) {
+            std::string d = upnp::Describe();
+            size_t cut = d.find(": ");  // "what's wrong: what to do" on two lines
+            std::string l1 = cut == std::string::npos ? d : d.substr(0, cut), l2 = cut == std::string::npos ? "" : d.substr(cut + 2);
+            Text(l1.c_str(), 24, yy, 14, us == upnp::State::Working ? A(kDim, 0.9f) : kGold);
+            if (!l2.empty()) { yy += 18; Text(l2.c_str(), 24, yy, 13, A(kText, 0.85f)); }
+            if (!lan.empty()) Text(TextFormat("same network: %s   \xC2\xB7   F2 copies", lan.c_str()), 24, yy + 20, 13, A(kDim, 0.9f));
+        }
+        if (IsKeyPressed(KEY_F2)) {
+            std::string a = us == upnp::State::Mapped && !ext.empty() && !upnp::CarrierNat() ? ext : lan;
+            if (!a.empty()) {
+                if (opt.port != DEFAULT_PORT) a += TextFormat(":%u", opt.port);
+                SetClipboardText(a.c_str());
+                Feed(TextFormat("Copied %s - send it to your friends", a.c_str()), kGold);
+            }
+        }
+    }
     if (showDebug)
         Text(TextFormat("prediction  corr %.2f m  avg %.3f m  max %.2f m  unacked %d   assist %.2f on %d", lastCorrection,
                         predStatN ? predStatSum / predStatN : 0.0, predStatMax, (int)history.size(), assist, assistTarget),
@@ -2791,7 +2825,7 @@ void Game::DrawMenu() {
     TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
     y += 192;
     if (Button({x, y, fw, 54}, "Join battle", true)) StartSession(false, 0);
-    if (Button({x, y + 64, fw - 128, 54}, "Host battle")) StartSession(true, botCount);
+    if (Button({x, y + 64, fw - 128, 54}, "Host battle")) StartSession(true, botCount, true);
     // bot stepper
     Rectangle st = {x + fw - 120, y + 64, 120, 54};
     DrawRectangleRounded(st, 0.4f, 8, {255, 255, 255, 14});
@@ -2915,6 +2949,15 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--simtest")) return RunSimTest();
         if (!strcmp(argv[i], "--sfx-export") && i + 1 < argc) return sfx::ExportAll(argv[i + 1]) ? 0 : 1;
+        if (!strcmp(argv[i], "--upnp-probe")) { printf("%s\n", upnp::Probe().c_str()); return 0; }
+        if (!strcmp(argv[i], "--upnp-map-test") && i + 1 < argc) {  // map, report, unmap (no window)
+            upnp::Start((uint16_t)atoi(argv[i + 1]));
+            for (int k = 0; k < 200 && upnp::GetState() == upnp::State::Working; ++k) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            printf("state %d: %s\n  public %s  lan %s  cgnat %d\n", (int)upnp::GetState(), upnp::Describe().c_str(), upnp::ExternalIp().c_str(),
+                   upnp::LocalIp().c_str(), (int)upnp::CarrierNat());
+            upnp::Stop();
+            return 0;
+        }
     }
     Options opt;
     ParseArgs(argc, argv, opt);

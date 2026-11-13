@@ -12,8 +12,10 @@ Download the latest zip from [Releases](../../releases), unzip it anywhere and r
 (Windows, needs an OpenGL 4.3 GPU).
 
 - **Practice**: play against bots.
-- **Host**: others join with your IP. The host must allow `broadside.exe` through Windows Firewall, and
-  for play over the internet forward **UDP port 27615** on the router.
+- **Host**: the game asks your router to open **UDP port 27615** (UPnP) and shows the address friends should
+  type at the top left (**F2** copies it). If the router has UPnP switched off, the game says so: switch it on in
+  the router's settings, or forward UDP 27615 to your PC by hand. Allow `broadside.exe` through Windows Firewall
+  when asked. Friends on the same network use the "same network" address.
 - **Join**: type the host's IP address.
 
 Everyone must run the same version.
