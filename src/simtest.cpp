@@ -11,6 +11,8 @@ static float Heading(const Ship& s) {
 static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateByQuaternion({0, 0, 1}, s.rot)); }
 
 int RunSimTest() {
+    if (getenv("BS_ONLYDUELS")) goto duels;
+    {
     World w;
     w.rounds = false;
     w.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1);
@@ -254,6 +256,105 @@ int RunSimTest() {
             }
         }
         printf("fleet station keeping (alone, 2 min): slot error %.0f / %.0f / %.0f m\n", err[0] / n, err[1] / n, err[2] / n);
+    }
+    {  // 6d) classes: how each one sails (same sea, same weaving course)
+        for (int c = 0; c < SC_COUNT; ++c) {
+            World g;
+            g.rounds = false;
+            g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1);
+            int id = g.AddShip("t", false, c);
+            Ship& S = g.ships[id];
+            float airT = 0, maxAir = 0, maxH = 0, maxV = 0, sumV = 0, turn180 = -1;
+            int jumps = 0, n = 0;
+            float prevAir = 0, startHd = 0;
+            for (int i = 0; i < 150 * 60; ++i) {
+                float t = i / 60.0f;
+                S.input.sail = 1.0f;
+                Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, S.rot);
+                float home = atan2f(-S.pos.x, -S.pos.z), hd = atan2f(f.x, f.z), e = home - hd;
+                while (e > PI) e -= 2 * PI;
+                while (e < -PI) e += 2 * PI;
+                bool turnTest = t >= 120.0f;
+                if (turnTest && turn180 < 0 && i == 120 * 60) startHd = hd;
+                S.input.rudder = turnTest ? 1.0f : (sqrtf(S.pos.x * S.pos.x + S.pos.z * S.pos.z) > 420.0f ? Clamp(-e * 2.0f, -1.0f, 1.0f) : 0.35f * sinf(t * 0.4f));
+                g.Step();
+                g.events.clear();
+                if (t > 10 && !turnTest) {
+                    float v = Vector2Length({S.vel.x, S.vel.z});
+                    maxV = fmaxf(maxV, v);
+                    sumV += v;
+                    n++;
+                    if (S.airTime > 0) airT += 1.0f / 60.0f;
+                    maxAir = fmaxf(maxAir, S.airTime);
+                    if (S.airTime > 0) maxH = fmaxf(maxH, S.pos.y - g.ocean.Height(S.pos.x, S.pos.z));
+                    if (prevAir > 1.0f && S.airTime <= 0) jumps++;
+                    prevAir = S.airTime;
+                }
+                if (turnTest && turn180 < 0) {
+                    float d = hd - startHd;
+                    while (d > PI) d -= 2 * PI;
+                    while (d < -PI) d += 2 * PI;
+                    if (fabsf(d) > PI * 0.97f) turn180 = t - 120.0f;
+                }
+            }
+            printf("class %-17s scale %.2f mass %4.0f t: top %.1f m/s avg %.1f, 180 deg turn %.1f s, airborne %2.0f%%, jumps>1s %d, longest %.1f s, highest %.0f m\n",
+                   ClassOf(c).name, ClassOf(c).scale, 0.0, maxV, sumV / fmaxf(1, n), turn180, 100.0f * airT / (140.0f), jumps, maxAir, maxH);
+        }
+    }
+    }
+duels:
+    if (!getenv("BS_NODUELS")) {  // 6e) duels: does each class beat the one it should?
+        const int N = getenv("BS_DUELS") ? atoi(getenv("BS_DUELS")) : 24;
+        for (int a = 0; a < SC_COUNT; ++a)
+            for (int b = a + 1; b < SC_COUNT; ++b) {
+                if (getenv("BS_DUELPAIR") && atoi(getenv("BS_DUELPAIR")) != a * 3 + b) continue;
+                int winA = 0, winB = 0, draws = 0, rakes = 0, hitsN = 0;
+                float dmgBy[2][4] = {};  // [taken by A/B][balls, raked balls, rams, rocks]
+                int shotsBy[2] = {}, hitsOn[2] = {};
+                float tSum = 0;
+                for (int k = 0; k < N; ++k) {
+                    World g;
+                    g.rounds = false;
+                    g.Init(1000 + k * 7919 + a * 31 + b * 131);
+                    // alternate who joins first so neither always spawns in the same place
+                    int ia = k % 2 ? g.AddShip("A", true, a) : -1;
+                    int ib = g.AddShip("B", true, b);
+                    if (ia < 0) ia = g.AddShip("A", true, a);
+                    int winner = -1;
+                    float t = 0;
+                    for (int i = 0; i < 240 * 60 && winner < 0; ++i) {
+                        g.Step();
+                        for (const GameEvent& e : g.events) {
+                            if (e.type == EventType::Kill && winner < 0) winner = e.b == ia ? ib : ia;
+                            if (e.type == EventType::Hit) {
+                                hitsN++; rakes += (e.flags & EF_RAKE) ? 1 : 0;
+                                int v = e.b == ia ? 0 : 1;
+                                dmgBy[v][(e.flags & EF_RAKE) ? 1 : 0] += e.value;
+                                hitsOn[v]++;
+                            }
+                            if (e.type == EventType::Fire) shotsBy[e.a == ia ? 0 : 1] += e.b == 2 ? 1 : ClassOf(g.ships[e.a].cls).guns;
+                            if (e.type == EventType::Ram && (e.flags & EF_ROCK)) dmgBy[e.a == ia ? 0 : 1][3] += e.value;
+                            else if (e.type == EventType::Ram) { dmgBy[0][2] += e.value; dmgBy[1][2] += e.value; }
+                        }
+                        g.events.clear();
+                        t = i / 60.0f;
+                    }
+                    if (winner < 0) {  // time: whoever has more of their hull left
+                        float fa = g.ships[ia].hp / g.ships[ia].maxHp, fb = g.ships[ib].hp / g.ships[ib].maxHp;
+                        if (fabsf(fa - fb) < 0.05f) { draws++; continue; }
+                        winner = fa > fb ? ia : ib;
+                    }
+                    (winner == ia ? winA : winB)++;
+                    tSum += t;
+                }
+                printf("duel %-16s vs %-16s: %2d - %2d  (%d even), avg %.0f s, raking hits %d%%\n", ClassOf(a).name, ClassOf(b).name, winA, winB, draws,
+                       tSum / fmaxf(1, winA + winB), hitsN ? 100 * rakes / hitsN : 0);
+                for (int v = 0; v < 2; ++v)
+                    printf("   %-16s took: balls %.0f, raked %.0f, rams ~%.0f, rocks %.0f; it fired %d balls, was hit %d times (hit rate on it %.0f%%)\n",
+                           ClassOf(v ? b : a).name, dmgBy[v][0], dmgBy[v][1], dmgBy[v][2], dmgBy[v][3], shotsBy[v], hitsOn[v],
+                           shotsBy[1 - v] ? 100.0f * hitsOn[v] / shotsBy[1 - v] : 0.0f);
+                fflush(stdout);
+            }
     }
     if (getenv("BS_NOMODES")) return 0;
     {  // 6c) rounds: a short round ends, awards are handed out, nobody is hurt during the results, the next round starts clean

@@ -129,6 +129,22 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       maps, reads the address, unmaps. --upnp-probe is a read-only check of the real network. BS_NOUPNP=1 disables.
 - The user's own router (192.168.1.1) answers SSDP only as a WPS device: UPnP port forwarding is off there.
 
+## Ship classes + tracers (2026-11-13)
+- [x] Cutter / Frigate / Ship of the Line (sim.cpp kClasses): the same hull scaled 0.7 / 1 / 1.3, so mass, inertia,
+      buoyancy, drag, hit box, rocks, collisions, wakes, fx and the model all follow. Per class: hp 55/100/160, speed
+      36/30/24, turn, planing, guns 3/4/6 a side (two gun decks on the big one), reload, ball speed, damage, gun arc
+      +-40/34/26 deg. Cutter has a bow chaser (third trigger side, +-29 deg off the bow).
+- [x] Raking fire: a ball running along the hull (in at bow or stern) does extra damage scaled by deck length:
+      +0 on a cutter, +12% frigate, +25% ship of the line. "RAKED!" on hits.
+- [x] Pick the class in the menu (cards with stat bars) or with 1/2/3 while sunk or between rounds; it applies at the
+      next respawn (MSG_SET_CLASS). Bots pick a mix; fleet escorts are cutters. Protocol v9.
+- [x] Measured (simtest 6d): cutter airborne 24% / jumps to 45 m, frigate 20%, ship of the line 5% / 10 m.
+- [x] Duels (simtest 6e, BS_ONLYDUELS=1 BS_DUELPAIR=1|2|5 BS_DUELS=n, run pairs in parallel): final 32 each -
+      cutter v frigate 15-15, cutter v line 16-15, frigate v line 11-16. No class dominates; bot duels are noisy
+      (+-9%) and bots don't rake on purpose, so players will separate them more. 7 tuning passes, see playtest/duel*.
+- [x] Tracers: balls in flight glow like red-hot shot with a fading streak; bright at night/fog, faint at noon.
+- Real models for the cutter and ship of the line still to come (scaled frigate for now).
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).

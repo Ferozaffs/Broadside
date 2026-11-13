@@ -30,10 +30,27 @@ Everyone must run the same version.
 | Mouse wheel | Camera distance; roll all the way in to stand on the quarterdeck |
 | V | Deck view on / off |
 | M | Sound on / off |
+| 1 / 2 / 3 | Next ship: cutter / frigate / ship of the line |
 | Tab | Scores |
 | F1 | Hide help |
 
 Sail through the floating crates for 15-30 s power-ups: **Rapid Reload**, **Triple Shot** and **Fair Wind**.
+
+### Ships
+
+Pick your ship in the menu; while you wait to respawn (or between rounds) press **1 / 2 / 3** to sail something
+else next time.
+
+| | Cutter | Frigate | Ship of the Line |
+| --- | --- | --- | --- |
+| Hull | 55 | 100 | 160 |
+| Top speed | 36 m/s | 30 m/s | 24 m/s |
+| Guns a side | 3 light, quick reload, swing 40 deg | 4, swing 34 deg | 6 heavy on two decks, slow reload, swing 26 deg |
+| Special | bow chaser: one gun that fires forward | the all-rounder | lands like a hammer |
+
+A cutter flies off every swell; a ship of the line barely leaves the water but out-guns a frigate. **Raking fire**:
+a shot that runs along a ship's length (in at the bow or stern) does extra damage, more the longer the deck - so get
+off a big ship's beam and onto its ends. With Fleets, every captain's escorts are cutters.
 
 ### Game modes
 

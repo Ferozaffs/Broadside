@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 8;
+constexpr uint16_t PROTOCOL_VERSION = 9;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -19,6 +19,7 @@ enum MsgType : uint8_t {
     MSG_PLAYER_LEFT = 6,  // S->C  id
     MSG_EVENT = 7,        // S->C  game event (reliable)
     MSG_REJECT = 8,       // S->C  reason string
+    MSG_SET_CLASS = 9,    // C->S  class to sail after the next sinking / round
 };
 
 struct ByteWriter {
@@ -95,7 +96,8 @@ enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_BOT = 8 };
 struct NetShip {
     uint8_t id = 0, flags = 0;
     float hp = 100, sail = 0, rudder = 0, submerged = 0, depthBelow = 0, airTime = 0, lastAirTime = 0;
-    float reload[2] = {0, 0};
+    float reload[3] = {0, 0, 0};
+    uint8_t cls = SC_FRIGATE;
     float deadTimer = 0;
     float buoyMul = 1;
     float airSpin = 0;  // local only (own predicted ship), not sent
@@ -151,7 +153,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0) | (s.pirate ? SF_PIRATE : 0)));
         w.Put(s.team);
         w.Put(s.leader);
-        w.Put((uint8_t)Clamp(s.maxHp * 0.5f, 1.0f, 255.0f));
+        w.Put((uint8_t)Clamp(roundf(s.maxHp), 1.0f, 255.0f));  // whole points (cutter 55 .. ship of the line + treasure 180)
         w.PutU8f(s.bankTimer / tune::bankTime);  // pirate: unloading progress
         w.Put((uint16_t)std::min(s.banked, 65535));
         w.PutU8f(s.hp / s.maxHp);
@@ -161,8 +163,8 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((int16_t)Clamp(s.depthBelow * 100.0f, -32000.0f, 32000.0f));
         w.Put((uint16_t)Clamp(s.airTime * 100.0f, 0.0f, 65000.0f));
         w.Put((uint16_t)Clamp(s.lastAirTime * 100.0f, 0.0f, 65000.0f));
-        w.PutU8f(s.reload[0] / tune::reloadTime);
-        w.PutU8f(s.reload[1] / tune::reloadTime);
+        w.Put(s.cls);
+        for (int k = 0; k < 3; ++k) w.PutU8f(s.reload[k] / tune::reloadMax);
         w.PutU8f(s.deadTimer / tune::respawnTime);
         w.Put((uint16_t)(Clamp(s.buoyMul, 0.0f, 6.0f) * 10000.0f));
         for (float p : s.power) w.Put((uint8_t)ceilf(Clamp(p * 4.0f, 0.0f, 255.0f)));
@@ -222,7 +224,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.flags = r.Get<uint8_t>();
         sh.team = r.Get<int8_t>();
         sh.leader = r.Get<int8_t>();
-        sh.maxHp = r.Get<uint8_t>() * 2.0f;
+        sh.maxHp = (float)r.Get<uint8_t>();
         sh.unload = r.GetU8f();
         sh.banked = r.Get<uint16_t>();
         sh.hp = r.GetU8f() * sh.maxHp;
@@ -232,8 +234,8 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.depthBelow = r.Get<int16_t>() / 100.0f;
         sh.airTime = r.Get<uint16_t>() / 100.0f;
         sh.lastAirTime = r.Get<uint16_t>() / 100.0f;
-        sh.reload[0] = r.GetU8f() * tune::reloadTime;
-        sh.reload[1] = r.GetU8f() * tune::reloadTime;
+        sh.cls = r.Get<uint8_t>();
+        for (int k = 0; k < 3; ++k) sh.reload[k] = r.GetU8f() * tune::reloadMax;
         sh.deadTimer = r.GetU8f() * tune::respawnTime;
         sh.buoyMul = r.Get<uint16_t>() / 10000.0f;
         for (float& p : sh.power) p = r.Get<uint8_t>() / 4.0f;

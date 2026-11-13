@@ -66,6 +66,8 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
     if (type == MSG_HELLO) {
         uint16_t ver = r.Get<uint16_t>();
         std::string name = r.GetString();
+        uint8_t cls = r.Get<uint8_t>();
+        if (!r.ok || cls >= SC_COUNT) cls = SC_FRIGATE;
         if (name.empty()) name = "Sailor";
         auto reject = [&](const char* why) {
             ByteWriter w;
@@ -76,7 +78,8 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         };
         if (ver != PROTOCOL_VERSION) return reject("version mismatch");
         if (peerShip[peer] >= 0) return;
-        int id = world.AddShip(name, false);
+        int id = world.AddShip(name, false, cls);
+        if (id >= 0) world.ships[id].fixedCls = false;
         if (id < 0) return reject("server full");
         peerShip[peer] = id;
         ByteWriter w;
@@ -93,6 +96,10 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
             if (world.ships[i].active && announced[i] && i != id) SendPlayerInfo(i, (int)peer);
         AnnounceShips();  // the new captain (and fleet) to everyone
         printf("[server] %s joined as ship %d\n", name.c_str(), id);
+    } else if (type == MSG_SET_CLASS) {
+        int id = peerShip[peer];
+        uint8_t cls = r.Get<uint8_t>();
+        if (id >= 0 && r.ok && cls < SC_COUNT) world.ships[id].nextCls = cls;  // takes effect at the next respawn
     } else if (type == MSG_INPUT) {
         int id = peerShip[peer];
         if (id < 0) return;

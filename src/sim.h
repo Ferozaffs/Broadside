@@ -11,7 +11,28 @@
 
 constexpr int MAX_SHIPS = 32;  // captains plus their fleets
 constexpr float SIM_DT = 1.0f / 60.0f;
-constexpr int CANNONS_PER_SIDE = 4;
+constexpr int CANNONS_PER_SIDE = 4;  // the frigate (and the low-poly stand-in model)
+constexpr int MAX_GUNS = 6;          // per side, any class
+
+// ---- ship classes ---------------------------------------------------------------
+// Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
+// follow `scale`. How each one rides the swell falls out of that: a short light hull gets thrown off every
+// crest, a long heavy one spans them.
+enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_COUNT = 3 };
+struct ShipClass {
+    const char* name;
+    const char* blurb;
+    float scale, hp;
+    float topSpeed, reverseSpeed, turnRate, turnRateSlow;
+    float planing;          // multiplier on how hard a rising crest throws the hull
+    int guns;               // per side
+    float gunZ[MAX_GUNS];   // along the hull (frigate units, scaled)
+    float gunY[MAX_GUNS];   // height (two gun decks on the ship of the line)
+    float reload, muzzleSpeed, damage;
+    bool chaser;            // a bow chaser: one gun that fires forward
+    float traverse;         // rad the broadside guns swing either side of the beam
+};
+const ShipClass& ClassOf(int id);
 
 // ---- tuning (over the top on purpose) ---------------------------------------
 namespace tune {
@@ -45,7 +66,7 @@ constexpr float planing = 1.2f;            // how hard rising water under a fast
 constexpr float planingMax = 13.0f;        // m/s cap on that throw (keeps launches big, not orbital)
 constexpr float muzzleSpeed = 95.0f;
 constexpr float reloadTime = 3.5f;
-constexpr float gunTraverse = 0.6f;        // rad the carriages swing either side of the beam (~34 deg)
+constexpr float gunTraverse = 0.6f;        // rad the carriages swing either side of the beam (~34 deg; per class now, see ShipClass)
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
@@ -67,7 +88,14 @@ constexpr float respawnTime = 7.0f;
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
 constexpr float escortHp = 60.0f;
 constexpr float escortSpeed = 1.15f;       // escorts are a little quicker so they can keep station
-constexpr float pirateHp = 120.0f;         // the treasure carrier: one against many
+constexpr float pirateHpBonus = 20.0f;     // the treasure carrier: a little tougher than its class
+constexpr float chaserReload = 2.2f;       // the cutter's bow chaser
+constexpr float chaserCone = 0.5f;         // rad either side of the bow it covers
+constexpr float chaserDamage = 0.8f;
+constexpr float rakeBonus = 0.25f;         // raking fire (a ball in at the bow or stern, down the length of the decks):
+                                           // +0 on a cutter's short deck .. +25% down a ship of the line's
+constexpr float rakeCos = 0.82f;           // how close to the keel line it must travel (~35 deg)
+constexpr float reloadMax = 6.0f;          // (network encoding range for reload timers)
 constexpr float pirateReload = 0.8f;
 constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
@@ -156,7 +184,10 @@ struct Ship {
     float deadTimer = 0.0f;
     float sail = 0.0f, rudder = 0.0f;
     float buoyMul = 1.0f;       // current (smoothed) buoyancy multiplier (wrecks sink)
-    float reload[2] = {0, 0};  // 0 = port(+x), 1 = starboard(-x)
+    float reload[3] = {0, 0, 0};  // 0 = port(+x), 1 = starboard(-x), 2 = bow chaser
+    uint8_t cls = SC_FRIGATE;      // ship class
+    uint8_t nextCls = SC_FRIGATE;  // what this captain sails after the next sinking (or round)
+    bool fixedCls = false;         // bots: keep the class (tests)
     float submerged = 0.0f;     // fraction of hull volume under water
     float depthBelow = 0.0f;    // how far the deck is under the surface
     float airTime = 0.0f;
@@ -190,6 +221,7 @@ struct Ship {
 };
 
 struct Ball {
+    float dmgMul = 1.0f;  // the gun it came out of
     uint16_t id = 0;
     uint8_t owner = 0;
     bool inWater = false;
@@ -212,7 +244,7 @@ enum class EventType : uint8_t {
     MatchStart = 17, // b = round number
     Warning = 18,    // b = seconds left in the round (60 / 10)
 };
-enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
+enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
 struct GameEvent {
     EventType type;
@@ -223,17 +255,21 @@ struct GameEvent {
 };
 
 // ---- shared helpers ----------------------------------------------------------
-Matrix ShipModelMatrix(Vector3 comPos, Quaternion rot);  // hull space -> world
-Vector3 HullToWorld(Vector3 comPos, Quaternion rot, Vector3 hullPoint);
+Matrix ShipModelMatrix(Vector3 comPos, Quaternion rot, float scale = 1.0f);  // hull space -> world
+Vector3 HullToWorld(Vector3 comPos, Quaternion rot, Vector3 hullPoint, float scale = 1.0f);
+// world point -> frigate hull space of a ship of this scale (for hit boxes)
+Vector3 WorldToHull(Vector3 comPos, Quaternion rot, Vector3 p, float scale = 1.0f);
+// which guns a trigger pull fires for this aim: 0 port, 1 starboard, 2 bow chaser (classes that have one)
+int GunSide(int cls, Quaternion rot, Vector3 aimWorld);
 int AimSide(Quaternion rot, Vector3 aimWorld);  // 0 port, 1 starboard
 // Camera look direction -> commanded world elevation (radians) / barrel direction.
 float AimElevation(Vector3 aimWorld);
 Vector3 AimDirection(Vector3 aimWorld);
 Vector3 AimForElevation(Vector2 horizDir, float elev);  // inverse, for bots
 // Muzzle position and ball velocity for cannon `index` on the side picked by aim.
-void CannonShot(Vector3 comPos, Quaternion rot, Vector3 vel, Vector3 angVel, Vector3 aimWorld, int side, int index,
+void CannonShot(int cls, Vector3 comPos, Quaternion rot, Vector3 vel, Vector3 angVel, Vector3 aimWorld, int side, int index,
                 Vector3& muzzle, Vector3& ballVel, float yawOff = 0.0f, float elevOff = 0.0f);
-float ReloadTime(const Ship& s);
+float ReloadTime(const Ship& s, int side = 0);  // side 2 = bow chaser
 // Returns true when the ball should be removed.
 bool StepBall(Ball& b, const OceanCPU& ocean, float dt, bool* splashed = nullptr, bool* skipped = nullptr);
 
@@ -241,7 +277,7 @@ class World {
 public:
     void Init(uint32_t seed, uint8_t weather = 0, uint8_t timeOfDay = 0, uint8_t mode = MODE_FFA, bool fleets = false);
     void Step();  // one SIM_DT tick
-    int AddShip(const std::string& name, bool bot);
+    int AddShip(const std::string& name, bool bot, int cls = -1);  // cls -1: bots pick, players sail a frigate
     void RemoveShip(int id);
     int CaptainOf(int id) const { return (id >= 0 && id < MAX_SHIPS && ships[id].leader >= 0) ? ships[id].leader : id; }
     bool Enemies(const Ship& a, const Ship& b) const;

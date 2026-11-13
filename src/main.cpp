@@ -52,6 +52,7 @@ struct Options {
     bool crateCam = false;     // --crate-cam: look at the first crate (screenshots)
     int harbourCam = -1;       // --harbour-cam i: look at harbour i (screenshots)
     bool showScores = false;   // --scores: hold the scoreboard open (screenshots)    // visual test: show all power-ups as active on the HUD
+    int shipClass = SC_FRIGATE;  // --class cutter|frigate|line
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
     float recordSec = 0, recordStart = 0;  // --record <sec> <file.mp4> [--record-start <sec>]: video via ffmpeg
     std::string recordPath;
@@ -89,6 +90,10 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
         else if (a == "--autopilot") o.autopilot = true;
+        else if (a == "--class") {
+            std::string c = next("frigate");
+            o.shipClass = c == "cutter" ? SC_CUTTER : (c == "line" ? SC_LINE : SC_FRIGATE);
+        }
         else if (a == "--record") {
             o.recordSec = (float)atof(next("30").c_str());
             o.recordPath = next("broadside.mp4");
@@ -235,6 +240,10 @@ public:
     int todSel = 0, weatherSel = 0;  // host's choice in the menu (the menu backdrop previews it)
     int curTod = 0, curWeather = 0;  // the match we're in
     int modeSel = 0, fleetSel = 0;   // host's choice of game
+    int classSel = SC_FRIGATE;       // the ship we sail (from the next sinking or round)
+    void PickClass(int c);
+    void DrawClassCards(Rectangle area, bool keys, bool row);
+    float ScaleOf(int id) const { return id >= 0 && id < MAX_SHIPS ? ClassOf(view[id].s.cls).scale : 1.0f; }
     int curMode = MODE_FFA;
     bool curFleets = false;
     uint16_t teamScore[2] = {0, 0};
@@ -272,6 +281,7 @@ public:
     std::vector<LanternPt> lanternPts;  // this frame's lanterns, for their reflections on the water
     Texture2D beamTex{};                // lighthouse beam: bright at the lamp, fading out
     void DrawLanternReflections();
+    void DrawTracers(const Camera3D& cam);
     void DrawLighthouseBeams(const Camera3D& cam);
     void DrawCrates(bool menu);
     // aiming: the guns are laid onto the point under the reticle (plus a gentle assist onto enemies)
@@ -290,7 +300,7 @@ public:
     std::vector<Vector3> HitPointsWorld(int id, const NetShip& s) const;
     void ShipDamageFx(int id, const NetShip& s, float dt);
     void DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Color team, float flash, float hpFrac, bool alive,
-                  Vector3 pos, Quaternion rot, float phase);
+                  Vector3 pos, Quaternion rot, float phase, float scale = 1.0f);
     Texture2D softTex{};
     // wakes: each ship's recent track (redrawn into the renderer's wake map every frame), and foam patches
     struct WakePt { Vector2 p, d; double t; float spd; bool water; };
@@ -445,6 +455,7 @@ void Game::Init() {
     fleetSel = opt.fleets ? 1 : 0;
 
     if (opt.camOverride) { camYaw = opt.camYaw; camPitch = opt.camPitch; camDist = opt.camDist; }
+    classSel = opt.shipClass;
     if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
     switch (opt.start) {
         case Options::Host: StartSession(true, opt.bots, true); break;
@@ -550,6 +561,7 @@ void Game::PollNet() {
             w.Put(MSG_HELLO);
             w.Put(PROTOCOL_VERSION);
             w.PutString(nameBuf.empty() ? "Captain" : nameBuf);
+            w.Put((uint8_t)classSel);
             net.Send(w.buf.data(), w.buf.size(), true);
             helloSent = true;
         } else if (e.type == NetEvent::Disconnect) {
@@ -717,6 +729,8 @@ void Game::UpdateInput(float dt) {
         else DisableCursor();
     }
     if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
+    for (int c = 0; c < SC_COUNT; ++c)
+        if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) PickClass(c);
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
         Feed(sfx::Muted() ? "Sound off  (M)" : "Sound on  (M)", ui::kDim);
@@ -825,7 +839,8 @@ void Game::Autopilot(float dt, PlayerInput& in) {
         o.team = v.s.team;
         o.leader = v.s.leader;
         o.pirate = (v.s.flags & SF_PIRATE) != 0;
-        for (int k = 0; k < 2; ++k) o.reload[k] = v.s.reload[k];
+        for (int k = 0; k < 3; ++k) o.reload[k] = v.s.reload[k];
+        o.cls = v.s.cls;
     }
     pred.chests[0].active = !chests.empty();
     if (!chests.empty()) { pred.chests[0].x = chests[0].x; pred.chests[0].z = chests[0].z; }
@@ -856,7 +871,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
         wantYaw = atan2f(-d.x, -d.z);
         wantPitch = 0.08f + 0.1f * Clamp((best - 80.0f) / 300.0f, 0.0f, 1.0f);
         // pull the trigger when the battery facing the reticle is loaded and the carriage can lay onto it
-        int side = AimSide(my.rot, curInput.aim);
+        int side = GunSide(my.cls, my.rot, curInput.aim);
         static double lastPull = 0;
         if (aimRange > 0 && aimRange < 520.0f && !aimClamped && my.reload[side] <= 0.0f && GetTime() - lastPull > 0.5) {
             fireSeq++;
@@ -940,12 +955,13 @@ void Game::DrawFiringArcs() {
     if (!(s.flags & SF_ALIVE)) return;
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
     float hd = atan2f(f.x, f.z);
-    int aimSide = AimSide(s.rot, curInput.aim);
+    int aimSide = GunSide(s.cls, s.rot, curInput.aim);
+    const ShipClass& SC = ClassOf(s.cls);
     rlDrawRenderBatchActive();
     rlSetTexture(rlGetTextureIdDefault());  // plain white (0 would keep whatever was bound last)
     rlDisableBackfaceCulling();
     rlBegin(RL_QUADS);
-    for (int side = 0; side < 2; ++side) {
+    for (int side = 0; side < (SC.chaser ? 3 : 2); ++side) {
         bool active = side == aimSide;
         bool ready = s.reload[side] <= 0.01f;
         Color c = active ? (ready ? ui::kGold : Color{230, 236, 240, 255}) : Color{230, 236, 240, 255};
@@ -953,8 +969,8 @@ void Game::DrawFiringArcs() {
         float sg = side == 0 ? 1.0f : -1.0f;
         for (int edge = -1; edge <= 1; edge += 2) {
             // body-space direction of this edge -> world heading
-            float yaw = edge * tune::gunTraverse;
-            Vector3 dB = {sg * cosf(yaw), 0, sinf(yaw)};
+            float yaw = edge * (side == 2 ? tune::chaserCone : SC.traverse);
+            Vector3 dB = side == 2 ? Vector3{sinf(yaw), 0, cosf(yaw)} : Vector3{sg * cosf(yaw), 0, sinf(yaw)};
             float a = hd + atan2f(dB.x, dB.z);
             Vector2 d = {sinf(a), cosf(a)}, n = {-d.y, d.x};
             for (float r = 14.0f; r < 470.0f; r += 16.0f) {
@@ -1083,6 +1099,49 @@ void Game::UpdateSound(float dt, bool menu) {
     sfx::Update();
 }
 
+void Game::PickClass(int c) {
+    if (c < 0 || c >= SC_COUNT) return;
+    bool changed = c != classSel;
+    classSel = c;
+    if (mode != Mode::Playing) return;
+    ByteWriter w;
+    w.Put(MSG_SET_CLASS);
+    w.Put((uint8_t)c);
+    Send(w.buf, true);
+    bool now = myId >= 0 && view[myId].present && view[myId].s.cls == c;
+    if (changed && !now) Feed(TextFormat("Next time you put to sea it'll be in a %s", ClassOf(c).name), ui::kGold);
+}
+
+// The three classes side by side (menu: a column on the right; in game: a row while you wait to respawn)
+void Game::DrawClassCards(Rectangle area, bool keys, bool row) {
+    using namespace ui;
+    float gap = 10;
+    float cw = row ? (area.width - gap * 2) / 3 : area.width, ch = row ? area.height : (area.height - gap * 2) / 3;
+    for (int c = 0; c < SC_COUNT; ++c) {
+        const ShipClass& C = ClassOf(c);
+        Rectangle r = row ? Rectangle{area.x + c * (cw + gap), area.y, cw, ch} : Rectangle{area.x, area.y + c * (ch + gap), cw, ch};
+        bool sel = c == classSel;
+        bool hover = !keys && CheckCollisionPointRec(GetMousePosition(), r);
+        Panel(r, sel ? Color{40, 34, 18, 235} : (hover ? Color{24, 32, 44, 235} : Color{12, 18, 26, 220}), 10);
+        if (sel) DrawRectangleRoundedLinesEx(r, 0.12f, 8, 2.0f, kGold);
+        if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) PickClass(c);
+        float x = r.x + 14, y = r.y + 10;
+        if (keys) { Keycap(TextFormat("%d", c + 1), x, y + 2, 14); x += 26; }
+        Text(C.name, x, y, 19, sel ? kGold : kText, true, Left, false);
+        y += 26;
+        float fire = C.guns * C.damage / C.reload / (6 * 1.25f / 4.5f);
+        const float vals[4] = {C.topSpeed / 36.0f, C.turnRate / 2.4f, C.hp / 170.0f, fire};
+        const char* names[4] = {"SPEED", "AGILITY", "HULL", "GUNS"};
+        float bw = (r.width - 28 - 3 * 8) / 4;
+        for (int k = 0; k < 4; ++k) {
+            float bx = r.x + 14 + k * (bw + 8);
+            Label(names[k], bx, y, 9, kDim);
+            Bar({bx, y + 13, bw, 5}, Clamp(vals[k], 0.05f, 1.0f), sel ? kGold : A(kText, 0.8f), {255, 255, 255, 25});
+        }
+        if (r.height > 96) Text(C.blurb, r.x + 14, y + 26, 13, A(kDim, 0.95f), false, Left, false);
+    }
+}
+
 // Where is the reticle pointing? The first thing the camera ray meets: an enemy hull, the sea, or the
 // islands. Returns false when it only finds sky.
 bool Game::ReticlePoint(Vector3 dir, Vector3& out) {
@@ -1092,8 +1151,9 @@ bool Game::ReticlePoint(Vector3 dir, Vector3& out) {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& o = view[id].s;
         Quaternion inv = QuaternionInvert(o.rot);
-        Vector3 p0 = Vector3Add(Vector3RotateByQuaternion(Vector3Subtract(rv.pos, o.pos), inv), hull::comOffset);
-        Vector3 d = Vector3RotateByQuaternion(dir, inv);
+        float S = ClassOf(o.cls).scale;
+        Vector3 p0 = WorldToHull(o.pos, o.rot, rv.pos, S);
+        Vector3 d = Vector3Scale(Vector3RotateByQuaternion(dir, inv), 1.0f / S);  // t stays in world metres
         float t0 = 0.0f, t1 = 3000.0f;
         float p[3] = {p0.x, p0.y, p0.z}, dd[3] = {d.x, d.y, d.z};
         float mn[3] = {hull::boxMin.x, hull::boxMin.y, hull::boxMin.z}, mx[3] = {hull::boxMax.x, hull::boxMax.y, hull::boxMax.z};
@@ -1137,8 +1197,8 @@ bool Game::ReticlePoint(Vector3 dir, Vector3& out) {
 // Barrel direction that drops a ball from `from` (moving with `shipVel`) onto `target`. Exact for the
 // ball model in StepBall (gravity + linear drag 0.01/s); takes the low arc, and the longest shot the
 // carriages allow when the target is out of range.
-static Vector3 BallisticAim(Vector3 from, Vector3 shipVel, Vector3 target) {
-    const float v0 = tune::muzzleSpeed, g = tune::gravity, k = 0.01f;
+static Vector3 BallisticAim(Vector3 from, Vector3 shipVel, Vector3 target, float v0) {
+    const float g = tune::gravity, k = 0.01f;
     Vector3 d = Vector3Subtract(target, from);
     Vector2 dh = {d.x, d.z};
     float D = Vector2Length(dh);
@@ -1185,7 +1245,8 @@ Vector3 Game::SolveAim(Vector3 dir) {
     assistTarget = -1;
     if (myId < 0 || !view[myId].present || !(view[myId].s.flags & SF_ALIVE)) return dir;
     const NetShip& me = view[myId].s;
-    Vector3 from = HullToWorld(me.pos, me.rot, {0, 1.1f, 0});
+    const ShipClass& MC = ClassOf(me.cls);
+    Vector3 from = HullToWorld(me.pos, me.rot, {0, 1.1f, 0}, MC.scale);
     Vector3 P;
     if (!ReticlePoint(dir, P)) {  // sky: aim at a point far out along the look direction (max range)
         Vector2 h = Vector2Normalize({dir.x, dir.z});
@@ -1221,7 +1282,7 @@ Vector3 Game::SolveAim(Vector3 dir) {
         if (k <= bestK) continue;
         Vector3 lead = Vector3Add(now, {0, 2.0f, 0});
         for (int it = 0; it < 3; ++it) {
-            float t = Vector2Length({lead.x - from.x, lead.z - from.z}) / (tune::muzzleSpeed * 0.93f);
+            float t = Vector2Length({lead.x - from.x, lead.z - from.z}) / (MC.muzzleSpeed * 0.93f);
             lead = Vector3Add(Vector3Add(now, {0, 2.0f, 0}), Vector3Scale({o.vel.x, 0.0f, o.vel.z}, t));
         }
         bestK = k;
@@ -1235,10 +1296,11 @@ Vector3 Game::SolveAim(Vector3 dir) {
     aimPoint = P;
     // fire from the middle of the battery on the side facing the aim point, with the speed that
     // spot on the hull has right now (rolling and yawing included)
-    int side = AimSide(me.rot, Vector3Subtract(P, me.pos));
-    Vector3 gun = HullToWorld(me.pos, me.rot, {(side == 0 ? 1.0f : -1.0f) * (hull::HalfWidth(0.0f) + 1.0f), 1.1f, 0.0f});
+    int side = GunSide(me.cls, me.rot, Vector3Subtract(P, me.pos));
+    Vector3 gun = side == 2 ? HullToWorld(me.pos, me.rot, {0.0f, 2.0f, hull::halfLength + 1.2f}, MC.scale)
+                            : HullToWorld(me.pos, me.rot, {(side == 0 ? 1.0f : -1.0f) * (hull::HalfWidth(0.0f) + 0.6f), 1.1f, 0.0f}, MC.scale);
     Vector3 gunVel = Vector3Add(me.vel, Vector3CrossProduct(me.angVel, Vector3Subtract(gun, me.pos)));
-    return BallisticAim(gun, gunVel, P);
+    return BallisticAim(gun, gunVel, P, MC.muzzleSpeed);
 }
 
 void Game::Send(const std::vector<uint8_t>& data, bool reliable) {
@@ -1279,8 +1341,8 @@ void Game::Reconcile() {
     s.buoyMul = ns->buoyMul;
     s.hp = ns->hp;
     s.airTime = ns->airTime;
-    s.reload[0] = ns->reload[0];
-    s.reload[1] = ns->reload[1];
+    for (int k = 0; k < 3; ++k) s.reload[k] = ns->reload[k];
+    s.cls = ns->cls;
     for (int i = 0; i < PU_COUNT; ++i) s.power[i] = ns->power[i];
     s.pirate = (ns->flags & SF_PIRATE) != 0;
     s.maxHp = ns->maxHp;
@@ -1342,7 +1404,7 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
     // along the camera's own up axis so the ship stays low in frame even when looking down steeply.
     // Zoomed in past 22 m the camera slides down into the ship and ends up standing on the quarterdeck.
     float fp = DeckView();
-    float dist = fmaxf(camDist, 22.0f) * (1.0f - 0.35f * aimZoom);
+    float dist = fmaxf(camDist, 22.0f) * (1.0f - 0.35f * aimZoom) * (myId >= 0 && view[myId].present ? 0.6f + 0.4f * ScaleOf(myId) : 1.0f);
     float yaw = camYaw;
     if (getenv("BS_CAMREL") && myId >= 0 && view[myId].present) {  // test shots: yaw relative to the ship's heading
         Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, view[myId].s.rot);
@@ -1350,7 +1412,8 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
     }
     Vector3 off = {cosf(camPitch) * sinf(yaw), sinf(camPitch), cosf(camPitch) * cosf(yaw)};
     Vector3 camUp = Vector3Normalize(Vector3Subtract({0, 1, 0}, Vector3Scale(off, off.y)));
-    Vector3 want = Vector3Add(Vector3Add(focus, {0, 10.0f, 0}), Vector3Scale(camUp, 0.36f * dist));
+    float myS = myId >= 0 && view[myId].present ? ScaleOf(myId) : 1.0f;
+    Vector3 want = Vector3Add(Vector3Add(focus, {0, 10.0f * myS, 0}), Vector3Scale(camUp, 0.36f * dist));
     if (!camInit) { camTarget = want; camInit = true; }
     camTarget = Vector3Lerp(camTarget, want, fminf(1.0f, dt * 8.0f));
     Vector3 chasePos = Vector3Add(camTarget, Vector3Scale(off, dist));
@@ -1361,7 +1424,9 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         // eye height on the quarterdeck, fixed to the hull: it rises, falls and rolls with her
         const NetShip& me = view[myId].s;
         Vector3 eyeLocal = {deckEye.x, hull::DeckHeight(-11.0f) + deckEye.y, -11.0f + deckEye.z};
-        Vector3 eye = HullToWorld(me.pos, me.rot, eyeLocal);
+        float es = ClassOf(me.cls).scale;
+        eyeLocal.y = hull::DeckHeight(-11.0f) + deckEye.y / es;  // the eye stays a person's height above the deck
+        Vector3 eye = HullToWorld(me.pos, me.rot, eyeLocal, es);
         Vector3 eyeTarget = Vector3Subtract(eye, Vector3Scale(off, 60.0f));
         chasePos = Vector3Lerp(chasePos, eye, fp);
         chaseTarget = Vector3Lerp(chaseTarget, eyeTarget, fp);
@@ -1408,7 +1473,8 @@ void Game::PlayEvent(const GameEvent& e) {
     switch (e.type) {
         case EventType::Fire: {
             fx.CannonFire(e.pos, e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
-            sfx::Play(sfx::Cannon, e.pos, 0.55f);
+            sfx::Play(sfx::Cannon, e.pos, e.b == 2 ? 0.35f : 0.55f,
+                      e.a < MAX_SHIPS && view[e.a].present ? (view[e.a].s.cls == SC_LINE ? 0.82f : view[e.a].s.cls == SC_CUTTER ? 1.18f : 1.0f) : 1.0f);
             if (e.a == myId) shake = fmaxf(shake, 0.35f);
             break;
         }
@@ -1447,7 +1513,7 @@ void Game::PlayEvent(const GameEvent& e) {
             fx.Explosion(e.pos, e.dir, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 1.4f : 1.0f);
             if (e.b < MAX_SHIPS && view[e.b].present) {
                 const NetShip& v = view[e.b].s;
-                Vector3 local = Vector3Add(Vector3RotateByQuaternion(Vector3Subtract(e.pos, v.pos), QuaternionInvert(v.rot)), hull::comOffset);
+                Vector3 local = WorldToHull(v.pos, v.rot, e.pos, ClassOf(v.cls).scale);
                 auto& hh = hullHits[e.b];
                 if (hh.size() >= 12) hh.erase(hh.begin());
                 hh.push_back({local, Rnd(1.6f, 2.4f) * ((e.flags & EF_PLUNGING) ? 1.3f : 1.0f)});
@@ -1459,10 +1525,11 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.a == myId && e.b != myId) {
                 sfx::PlayFlat(sfx::Confirm, 0.45f, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 0.85f : 1.0f);
                 hitMarker = 0.35f;
-                hitMarkerGold = (e.flags & (EF_PLUNGING | EF_AIRSHOT)) != 0;
+                hitMarkerGold = (e.flags & (EF_PLUNGING | EF_AIRSHOT | EF_RAKE)) != 0;
                 std::string t = TextFormat("+%d", (int)roundf(e.value));
                 if (e.flags & EF_PLUNGING) t += " PLUNGING!";
                 if (e.flags & EF_AIRSHOT) t += " AIR SHOT!";
+                if (e.flags & EF_RAKE) t += " RAKED!";
                 floats.push_back({Vector3Add(e.pos, {0, 6, 0}), t, hitMarkerGold ? ui::kGold : ui::kText, 1.6f});
             }
             break;
@@ -1638,7 +1705,7 @@ void Game::SpawnShipFx(float dt) {
         if (prevAir[id] > 0.4f && s.airTime < 0.01f) {
             int n = (int)Clamp(prevAir[id] * 60.0f, 40.0f, 220.0f);
             for (int i = 0; i < n; ++i) {
-                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-5, 5), 0.0f, Rnd(-15, 15)});
+                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-5, 5), 0.0f, Rnd(-15, 15)}, ClassOf(s.cls).scale);
                 Vector3 v = {Rnd(-8, 8), Rnd(8, 22), Rnd(-8, 8)};
                 Emit(p, v, Rnd(1.0f, 2.2f), Rnd(0.6f, 1.4f), 0.8f, {235, 245, 250, 220}, 0);
             }
@@ -1654,7 +1721,7 @@ void Game::SpawnShipFx(float dt) {
             sfx::Play(sfx::Whoosh, s.pos, 0.7f);
             int n = (int)Clamp(s.vel.y * 10.0f, 40.0f, 160.0f);
             for (int i = 0; i < n; ++i) {
-                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4.5f, 4.5f), -2.5f, Rnd(-16, 6)});
+                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4.5f, 4.5f), -2.5f, Rnd(-16, 6)}, ClassOf(s.cls).scale);
                 Vector3 v = Vector3Add(Vector3Scale(s.vel, 0.35f), {Rnd(-7, 7), Rnd(2, 9), Rnd(-7, 7)});
                 Emit(p, v, Rnd(0.8f, 1.8f), Rnd(0.7f, 1.6f), 0.9f, {235, 245, 250, 220}, 0);
             }
@@ -1668,7 +1735,7 @@ void Game::SpawnShipFx(float dt) {
         if (s.submerged > 0.05f && s.airTime <= 0 && speed > 7.0f && s.depthBelow < 0.0f) {
             float rate = speed * 1.2f * dt;
             for (int i = 0; i < (int)rate + (Rnd(0, 1) < fmodf(rate, 1.0f) ? 1 : 0); ++i) {
-                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-2, 2), 0.3f, 14.5f});
+                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-2, 2), 0.3f, 14.5f}, ClassOf(s.cls).scale);
                 Vector3 side = Vector3RotateByQuaternion({Rnd(-1, 1) > 0 ? 5.0f : -5.0f, 0, 0}, s.rot);
                 Emit(p, Vector3Add(Vector3Add(side, {0, Rnd(3, 7), 0}), Vector3Scale(s.vel, 0.4f)), Rnd(0.6f, 1.1f), Rnd(0.4f, 0.9f),
                      0.6f, {235, 245, 250, 200}, 0);
@@ -1678,7 +1745,7 @@ void Game::SpawnShipFx(float dt) {
         if (s.depthBelow > 0.0f) {
             int n = 2;
             for (int i = 0; i < n; ++i) {
-                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4, 4), Rnd(-3, 2), Rnd(-14, 14)});
+                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4, 4), Rnd(-3, 2), Rnd(-14, 14)}, ClassOf(s.cls).scale);
                 if (p.y < Ocean().Height(p.x, p.z))
                     Emit(p, {Rnd(-0.5f, 0.5f), Rnd(1, 3), Rnd(-0.5f, 0.5f)}, Rnd(2, 4), Rnd(0.2f, 0.6f), 0.1f, {200, 235, 255, 180}, 3);
             }
@@ -1711,20 +1778,22 @@ void Game::DrawTrajectory() {
     if (!(s.flags & SF_ALIVE)) return;
     Camera3D cam = rv.AsCamera();
     Vector3 aim = curInput.aim;
-    int side = AimSide(s.rot, aim);
+    int side = GunSide(s.cls, s.rot, aim);
     bool ready = s.reload[side] <= 0.01f;
     aimRange = -1.0f;
-    for (int idx = 0; idx < CANNONS_PER_SIDE; ++idx) {
+    int guns = side == 2 ? 1 : ClassOf(s.cls).guns;
+    for (int idx = 0; idx < guns; ++idx) {
         Vector3 muzzle, vel;
-        CannonShot(s.pos, s.rot, s.vel, s.angVel, aim, side, idx, muzzle, vel);
-        if (idx == 1) {
+        CannonShot(s.cls, s.pos, s.rot, s.vel, s.angVel, aim, side, idx, muzzle, vel);
+        if (idx == (guns > 1 ? 1 : 0)) {
             Vector3 d = Vector3Normalize(Vector3Subtract(vel, s.vel));
             aimElevDeg = asinf(Clamp(d.y, -1.0f, 1.0f)) * RAD2DEG;
             Vector2 wantH = Vector2Normalize({aim.x, aim.z}), gotH = Vector2Normalize({d.x, d.z});
             aimClamped = fabsf(AimElevation(aim) * RAD2DEG - aimElevDeg) > 1.5f || Vector2DotProduct(wantH, gotH) < 0.9985f;
             Vector3 ab = Vector3RotateByQuaternion(AimDirection(aim), QuaternionInvert(s.rot));
             float yawB = atan2f(ab.z, fmaxf(fabsf(ab.x), 1e-4f));
-            arcOut = yawB > tune::gunTraverse + 0.02f ? 1 : (yawB < -tune::gunTraverse - 0.02f ? -1 : 0);
+            float tv = ClassOf(s.cls).traverse;
+            arcOut = side == 2 ? 0 : (yawB > tv + 0.02f ? 1 : (yawB < -tv - 0.02f ? -1 : 0));
             if (opt.demo && getenv("BS_AIMLOG")) {  // test log: where the ball's free flight passes the reticle point (waves ignored)
                 static double lastLog = 0;
                 if (GetTime() - lastLog > 1.0) {
@@ -1776,22 +1845,22 @@ static void LanternSpots(float mastTop, Vector3 out[4]) {
 
 std::vector<Vector3> Game::HitPointsWorld(int id, const NetShip& s) const {
     std::vector<Vector3> out;
-    for (const HullHit& h : hullHits[id]) out.push_back(HullToWorld(s.pos, s.rot, h.local));
+    for (const HullHit& h : hullHits[id]) out.push_back(HullToWorld(s.pos, s.rot, h.local, ClassOf(s.cls).scale));
     return out;
 }
 
 void Game::DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Color team, float flash, float hpFrac, bool alive,
-                    Vector3 pos, Quaternion rot, float phase) {
+                    Vector3 pos, Quaternion rot, float phase, float scale) {
     Vector4 hits[12];
     int n = 0;
     if (id >= 0 && ns)
         for (const HullHit& h : hullHits[id]) {
-            Vector3 w = HullToWorld(pos, rot, h.local);
-            hits[n++] = {w.x, w.y, w.z, h.radius};
+            Vector3 w = HullToWorld(pos, rot, h.local, scale);
+            hits[n++] = {w.x, w.y, w.z, h.radius * scale};
         }
     renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
     if (shadowPass) {
-        shipModel.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos), phase);
+        shipModel.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase);
         renderer.SetDamage(0.0f, nullptr, 0);
         return;
     }
@@ -1804,7 +1873,7 @@ void Game::DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Colo
         float k = lanternBoost;
         float t = (float)GetTime();
         for (int i = 0; i < 4; ++i) {
-            Vector3 w = HullToWorld(pos, rot, spots[i]);
+            Vector3 w = HullToWorld(pos, rot, spots[i], scale);
             float flick = 0.9f + 0.1f * sinf(t * 11.0f + i * 2.3f + phase * 3.1f) * sinf(t * 4.7f + i + phase);
             lights[nl++] = {w.x, w.y, w.z, (i == 3 ? 0.6f : 1.6f) * k * flick};
             // warm halo plus a small near-white core; a little bigger far off so it stays a few pixels wide
@@ -1817,7 +1886,7 @@ void Game::DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Colo
         }
     }
     renderer.SetLights(lights, nl);
-    shipModel.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD, phase);
+    shipModel.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD / scale, phase);
     if (camD < 260.0f) shipModel.DrawLanterns(renderer, m, spots, 4, alive ? lanternBoost : 0.0f);
     renderer.SetDamage(0.0f, nullptr, 0);
     renderer.SetLights(nullptr, 0);
@@ -1827,7 +1896,7 @@ void Game::ShipDamageFx(int id, const NetShip& s, float dt) {
     bool alive = s.flags & SF_ALIVE;
     float dmg = alive ? 1.0f - s.hp / s.maxHp : 1.0f;
     std::vector<Vector3> pts = HitPointsWorld(id, s);
-    if (pts.empty() && dmg > 0.3f) pts.push_back(HullToWorld(s.pos, s.rot, {0.0f, hull::DeckHeight(0) + 0.5f, -4.0f}));
+    if (pts.empty() && dmg > 0.3f) pts.push_back(HullToWorld(s.pos, s.rot, {0.0f, hull::DeckHeight(0) + 0.5f, -4.0f}, ClassOf(s.cls).scale));
     auto above = [&](Vector3 p) { return p.y > Ocean().Height(p.x, p.z) + 0.3f; };
     // smouldering from each impact once she's taken a beating
     if (dmg > 0.3f)
@@ -1839,7 +1908,7 @@ void Game::ShipDamageFx(int id, const NetShip& s, float dt) {
         int lit = 0;
         for (int i = (int)pts.size() - 1; i >= 0 && lit < 3; --i, ++lit)
             if (above(pts[i])) fx.ShipFire(pts[i], k, dt, s.vel);
-        Vector3 deck = HullToWorld(s.pos, s.rot, {0.0f, hull::DeckHeight(0) + 0.3f, 2.0f});
+        Vector3 deck = HullToWorld(s.pos, s.rot, {0.0f, hull::DeckHeight(0) + 0.3f, 2.0f}, ClassOf(s.cls).scale);
         if (above(deck)) fx.ShipFire(deck, k * 0.8f, dt, s.vel);
     }
 }
@@ -1965,7 +2034,7 @@ void Game::DrawWakeMap(bool menu) {
         rlTexCoord2f(1, 1); V({c.x + r, c.y + r});
         rlTexCoord2f(0, 1); V({c.x - r, c.y + r});
     };
-    const float kBow = hull::halfLength + 1.0f, kTan = 0.354f;  // tan(19.47 deg)
+    const float kTan = 0.354f;  // tan(19.47 deg)
     std::vector<RP> armL, armR, trail;
     for (int id = 0; id < MAX_SHIPS; ++id) {
         const std::deque<WakePt>& h = wakeHist[id];
@@ -1974,14 +2043,15 @@ void Game::DrawWakeMap(bool menu) {
         if (!present) continue;
         Vector3 pos, vel;
         Quaternion rot;
-        float air, depth;
+        float air, depth, S;
         if (menu) {
             const Ship& s = menuWorld.ships[id];
-            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = 0.0f;
+            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = 0.0f; S = ClassOf(s.cls).scale;
         } else {
             const NetShip& s = view[id].s;
-            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = s.depthBelow;
+            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = s.depthBelow; S = ClassOf(s.cls).scale;
         }
+        const float kBow = (hull::halfLength + 1.0f) * S;
         // track points, newest first, with their distance back along the track from the ship's centre
         struct TP { Vector2 p, d; float s, age, spd; bool water; };
         std::vector<TP> tp;
@@ -2008,8 +2078,8 @@ void Game::DrawWakeMap(bool menu) {
             float sp = Clamp((q.spd - 3.0f) / 20.0f, 0.0f, 1.0f);
             float w = q.water ? 1.0f : 0.0f;
             // Kelvin arms
-            float off = 0.8f + kTan * sb;
-            float hwA = 1.8f + 0.07f * sb;
+            float off = 0.8f * S + kTan * sb;
+            float hwA = 1.8f * S + 0.07f * sb;
             float fA = w * sp * expf(-q.age / 3.2f) * (0.6f + 1.2f * expf(-sb / 25.0f)) * Clamp(sb / 4.0f, 0.3f, 1.0f);
             float bA = w * sp * expf(-q.age / 6.5f) * 0.8f;
             if (off < 120.0f) {
@@ -2017,9 +2087,9 @@ void Game::DrawWakeMap(bool menu) {
                 armR.push_back({Vector2Subtract(q.p, Vector2Scale(n, off)), n, hwA, fA, fA * 0.3f, bA});
             }
             // churned water behind the stern
-            float st = q.s - hull::halfLength * 0.6f;
+            float st = q.s - hull::halfLength * 0.6f * S;
             if (st > -4.0f) {
-                float hwT = Clamp(5.0f + 0.09f * fmaxf(st, 0.0f), 5.0f, 18.0f);
+                float hwT = Clamp(5.0f * S + 0.09f * fmaxf(st, 0.0f), 5.0f * S, 18.0f * S);
                 float fT = w * Clamp((q.spd - 2.0f) / 12.0f, 0.0f, 1.0f) * expf(-q.age / 2.6f) * 1.5f;  // froth breaks up within a few lengths
                 float gT = w * Clamp(q.spd / 10.0f, 0.0f, 1.0f) * expf(-q.age / 9.0f);
                 trail.push_back({q.p, n, hwT, fT, gT, 0.0f});
@@ -2032,19 +2102,19 @@ void Game::DrawWakeMap(bool menu) {
         if (air <= 0.0f && depth < 3.0f) {
             for (float z = -hull::halfLength + 1.0f; z <= hull::halfLength + 0.5f; z += 2.0f) {
                 float hwz = hull::HalfWidth(fminf(z, hull::halfLength - 0.5f));
-                Vector3 top = HullToWorld(pos, rot, {0, hull::DeckHeight(z), z});
-                Vector3 bot = HullToWorld(pos, rot, {0, -hull::KeelDepth(z), z});
+                Vector3 top = HullToWorld(pos, rot, {0, hull::DeckHeight(z), z}, S);
+                Vector3 bot = HullToWorld(pos, rot, {0, -hull::KeelDepth(z), z}, S);
                 float sea = Ocean().Height(top.x, top.z);
                 if (sea < bot.y || sea > top.y) continue;  // this section is clear of the water (or under it)
                 float bow = Clamp((z - 4.0f) / 10.0f, 0.0f, 1.0f);
                 float amt = (0.7f + 1.0f * Clamp(spdNow / 16.0f, 0.0f, 1.0f)) * (0.7f + 0.6f * bow);
                 for (int sd = -1; sd <= 1; sd += 2) {
-                    Vector3 wpt = HullToWorld(pos, rot, {sd * (hwz + 0.8f + bow * 1.2f), 0.0f, z});
-                    splat({wpt.x, wpt.z}, 2.4f + bow * 1.8f + spdNow * 0.05f, amt, amt * 0.6f, 0.0f);
+                    Vector3 wpt = HullToWorld(pos, rot, {sd * (hwz + 0.8f + bow * 1.2f), 0.0f, z}, S);
+                    splat({wpt.x, wpt.z}, (2.4f + bow * 1.8f) * S + spdNow * 0.05f, amt, amt * 0.6f, 0.0f);
                 }
             }
             if (spdNow > 4.0f) {  // the bow wave piling up ahead of the stem
-                Vector3 b = HullToWorld(pos, rot, {0, 0, hull::halfLength + 1.5f});
+                Vector3 b = HullToWorld(pos, rot, {0, 0, hull::halfLength + 1.5f}, S);
                 float k = Clamp((spdNow - 4.0f) / 16.0f, 0.0f, 1.0f);
                 splat({b.x, b.z}, 4.5f + 2.5f * k, 1.8f * k, 0.6f * k, 0.6f * k);
             }
@@ -2071,8 +2141,8 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
     if (menu) {
         for (const Ship& s : menuWorld.ships)
             if (s.active && (!shadow || inShadowBox(s.pos)))
-                DrawShip(-1, ShipModelMatrix(s.pos, s.rot), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp, s.alive, s.pos,
-                         s.rot, s.id * 1.7f);
+                DrawShip(-1, ShipModelMatrix(s.pos, s.rot, ClassOf(s.cls).scale), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp,
+                         s.alive, s.pos, s.rot, s.id * 1.7f, ClassOf(s.cls).scale);
         if (!shadow)
             for (const Ball& b : menuWorld.balls) shipModel.DrawBall(renderer, b.pos);
     } else {
@@ -2081,8 +2151,8 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (!view[id].present) continue;
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
-            DrawShip(id, ShipModelMatrix(s.pos, s.rot), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
-                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f);
+            DrawShip(id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
+                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
         if (!shadow)
             for (const NetBall& b : viewBalls) shipModel.DrawBall(renderer, b.pos);
@@ -2166,6 +2236,7 @@ void Game::RenderWorld(float dt, bool menu) {
     }
     DrawLanternReflections();
     DrawLighthouseBeams(cam);
+    if (!menu) DrawTracers(cam);
     // light pillars over the crates so you can find them across the bay
     if (!crateBeams.empty()) {
         rlDrawRenderBatchActive();
@@ -2189,6 +2260,59 @@ void Game::RenderWorld(float dt, bool menu) {
     renderer.End();
     renderer.Post(flash);
     flash = fmaxf(0.0f, flash - dt * 1.5f);
+}
+
+// Tracers: every ball in flight glows like red-hot shot and drags a short fading streak along its path,
+// so a broadside is readable at night and in fog. Faint at noon, bright when the lanterns are lit.
+void Game::DrawTracers(const Camera3D& cam) {
+    if (viewBalls.empty()) return;
+    float k = 0.35f + 0.65f * Clamp(lanternBoost, 0.0f, 1.0f);  // 0.35 at noon .. 1 at night
+    Vector3 camF = Vector3Normalize(Vector3Subtract(cam.target, cam.position));
+    rlDrawRenderBatchActive();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlDisableBackfaceCulling();
+    // streaks: a camera-facing ribbon from the ball back along its velocity, fading to nothing
+    rlSetTexture(rlGetTextureIdDefault());
+    rlBegin(RL_QUADS);
+    for (const NetBall& b : viewBalls) {
+        if (b.inWater) continue;
+        float d = Vector3Distance(rv.pos, b.pos);
+        if (d > 1600.0f || Vector3DotProduct(Vector3Subtract(b.pos, rv.pos), camF) < 0.0f) continue;
+        float sp = Vector3Length(b.vel);
+        if (sp < 5.0f) continue;
+        Vector3 dir = Vector3Scale(b.vel, 1.0f / sp);
+        float len = Clamp(sp * 0.12f, 4.0f, 14.0f);        // ~0.12 s of flight
+        Vector3 tail = Vector3Subtract(b.pos, Vector3Scale(dir, len));
+        Vector3 toCam = Vector3Normalize(Vector3Subtract(rv.pos, b.pos));
+        Vector3 side = Vector3CrossProduct(dir, toCam);
+        float sl = Vector3Length(side);
+        if (sl < 1e-3f) continue;
+        float w = (0.22f + d * 0.0016f);                       // stays a pixel or two wide far away
+        side = Vector3Scale(side, w / sl);
+        unsigned char a0 = (unsigned char)(200 * k), a1 = 0;
+        rlColor4ub(255, 150, 60, a0); rlVertex3f(b.pos.x + side.x, b.pos.y + side.y, b.pos.z + side.z);
+        rlColor4ub(255, 150, 60, a0); rlVertex3f(b.pos.x - side.x, b.pos.y - side.y, b.pos.z - side.z);
+        rlColor4ub(255, 90, 30, a1); rlVertex3f(tail.x - side.x * 0.4f, tail.y - side.y * 0.4f, tail.z - side.z * 0.4f);
+        rlColor4ub(255, 90, 30, a1); rlVertex3f(tail.x + side.x * 0.4f, tail.y + side.y * 0.4f, tail.z + side.z * 0.4f);
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    // the hot ball itself: a warm halo and a bright core
+    Rectangle src = {0, 0, (float)fx.glowTex.width, (float)fx.glowTex.height};
+    for (const NetBall& b : viewBalls) {
+        if (b.inWater) continue;
+        float d = Vector3Distance(rv.pos, b.pos);
+        if (d > 1600.0f || Vector3DotProduct(Vector3Subtract(b.pos, rv.pos), camF) < 0.0f) continue;
+        float size = 1.1f + d * 0.004f;
+        // just in front of the ball, so the dark iron doesn't hide its own glow
+        Vector3 p = Vector3Add(b.pos, Vector3Scale(Vector3Normalize(Vector3Subtract(rv.pos, b.pos)), 1.2f));
+        DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.6f, size * 2.6f}, Fade({255, 120, 40, 255}, 0.6f * k));
+        DrawBillboardRec(cam, fx.glowTex, src, p, {size * 1.0f, size * 1.0f}, Fade({255, 225, 170, 255}, 1.0f * k));
+    }
+    rlDrawRenderBatchActive();
+    rlSetTexture(0);
+    rlEnableBackfaceCulling();
+    EndBlendMode();
 }
 
 // Each lantern lays a shimmering streak on the water towards the viewer (night and fog only).
@@ -2320,7 +2444,7 @@ void Game::DrawLanternHalos(bool menu) {
 // ----------------------------------------------------------------------------
 // HUD
 // ----------------------------------------------------------------------------
-static const char* SideName(int s) { return s == 0 ? "PORT" : "STARBOARD"; }
+static const char* SideName(int s) { return s == 0 ? "PORT" : (s == 1 ? "STARBOARD" : "BOW CHASER"); }
 
 void Game::DrawHUD() {
     using namespace ui;
@@ -2361,7 +2485,7 @@ void Game::DrawHUD() {
             const Vector3 pts[4] = {{0, 0, 17}, {0, 0, -16}, {0, -3, 0}, {0, 34, 0}};
             for (const Vector3& p : pts) {
                 Vector2 q;
-                if (!rv.Project(HullToWorld(s.pos, s.rot, p), q)) continue;
+                if (!rv.Project(HullToWorld(s.pos, s.rot, p, ClassOf(s.cls).scale), q)) continue;
                 x0 = fminf(x0, q.x); y0 = fminf(y0, q.y); x1 = fmaxf(x1, q.x); y1 = fmaxf(y1, q.y);
                 ++seen;
             }
@@ -2371,7 +2495,7 @@ void Game::DrawHUD() {
         tagFade[id] = Clamp(tagFade[id] + (under ? 8.0f : -3.0f) * GetFrameTime(), 0.0f, 1.0f);
         if (tagFade[id] <= 0.0f) continue;
         Vector2 sp;
-        if (!rv.Project(Vector3Add(s.pos, {0, 30, 0}), sp)) continue;
+        if (!rv.Project(Vector3Add(s.pos, {0, 30.0f * ClassOf(s.cls).scale, 0}), sp)) continue;
         float d = Vector3Distance(rv.pos, s.pos);
         float a = tagFade[id];
         bool on = s.flags & SF_ALIVE;
@@ -2382,7 +2506,7 @@ void Game::DrawHUD() {
         Bar({sp.x - 38, sp.y - 2, 76, 5}, s.hp / s.maxHp, A(on ? TeamOf(id) : kDim, a), A(Color{0, 0, 0, 120}, a));
         for (int p = 0, k = 0; p < PU_COUNT; ++p)  // their active power-ups
             if (s.power[p] > 0.0f) DrawCircleV({sp.x + 46 + 11.0f * k++, sp.y + 0.5f}, 4.0f, A(Scenery::PowerColor(p), a));
-        Text(TextFormat("%d m", (int)d), sp.x, sp.y + 7, 13, A(kDim, a), false, Center);
+        Text(TextFormat("%s  \xC2\xB7  %d m", TextToUpper(ClassOf(s.cls).name), (int)d), sp.x, sp.y + 7, 13, A(kDim, a), false, Center);
     }
     for (const FloatText& f : floats) {
         Vector2 sp;
@@ -2537,10 +2661,12 @@ void Game::DrawHUD() {
     // ---- reticle: reload ring for the side you're aiming at ----
     Vector2 c = {W * 0.5f, H * 0.5f};
     if (alive && matchState == 0) {
-        int side = AimSide(me->rot, curInput.aim);
-        float rt = tune::reloadTime * (me->power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f);
+        int side = GunSide(me->cls, me->rot, curInput.aim);
+        float pw = me->power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f;
+        float rt = (side == 2 ? tune::chaserReload : ClassOf(me->cls).reload) * pw * ((me->flags & SF_PIRATE) && side != 2 ? tune::pirateReload : 1.0f);
         float r = Clamp(1.0f - me->reload[side] / rt, 0.0f, 1.0f);
-        float ro = Clamp(1.0f - me->reload[1 - side] / rt, 0.0f, 1.0f);
+        int other = side == 2 ? 0 : 1 - side;
+        float ro = Clamp(1.0f - me->reload[other] / (ClassOf(me->cls).reload * pw), 0.0f, 1.0f);
         bool ready = r >= 0.999f;
         Ring(c, 31, 3.5f, 135, 405, ro, A(kDim, 0.55f), {255, 255, 255, 18});
         Ring(c, 26, 3.5f, 135, 405, r, arcOut ? A(kDim, 0.7f) : (ready ? kGold : A(kText, 0.85f)), {0, 0, 0, 70});
@@ -2730,7 +2856,7 @@ void Game::DrawHUD() {
     if (showHelp) {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
-                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"TAB", nullptr, "Scores"},
+                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"TAB", nullptr, "Scores"},
                           {"F1", nullptr, "Hide"}};
         const int n = sizeof(keys) / sizeof(keys[0]);
         float rowH = 26, pw = 230, ph = n * rowH + 20;
@@ -2774,7 +2900,7 @@ void Game::DrawHUD() {
             if (id == myId) DrawRectangleRec({r.x + 12, y - 6, 3, 36}, kGold);
             DrawCircleV({r.x + 34, y + 12}, 6, TeamOf(id));
             Text(NameOf(id).c_str(), r.x + 50, y, 22, id == myId ? kGold : kText, true, Left, false);
-            if (info[id].bot) Label("BOT", r.x + 58 + Measure(NameOf(id).c_str(), 22, true).x, y + 6, 11, kDim);
+            Label(TextFormat("%s%s", info[id].bot ? "BOT  \xC2\xB7  " : "", TextToUpper(ClassOf(s.cls).name)), r.x + 58 + Measure(NameOf(id).c_str(), 22, true).x, y + 6, 11, kDim);
             Text(TextFormat("%d", s.kills), r.x + pw - 150, y, 22, kText, true, Center, false);
             Text(TextFormat("%d", s.deaths), r.x + pw - 60, y, 22, kDim, false, Center, false);
             ++row;
@@ -2782,6 +2908,12 @@ void Game::DrawHUD() {
     }
 
     if (matchState == 1) DrawResults(W, H);
+    if (me && (!(me->flags & SF_ALIVE) || matchState == 1)) {
+        float cw = fminf(860.0f, W - 80);
+        Rectangle area = {W * 0.5f - cw * 0.5f, H - (matchState == 1 ? 210.0f : 250.0f), cw, 84};
+        Label(matchState == 1 ? "NEXT ROUND YOU SAIL  (1 / 2 / 3)" : "CHOOSE YOUR NEXT SHIP  (1 / 2 / 3)", W * 0.5f, area.y - 22, 12, kGold, Center);
+        DrawClassCards(area, true, true);
+    }
 
     // ---- pause ----
     if (paused) {
@@ -2849,6 +2981,13 @@ void Game::DrawMenu() {
     Segmented({x + mw + 8, y + 218, 128, 42}, kFleets, 2, fleetSel);
     if (Button({x, y + 272, fw, 50}, "Quit")) quit = true;
 
+    {
+        float cx = x + fw + 36, cwid = fminf(360.0f, W * 0.55f - cx - 20);
+        if (cwid > 220) {
+            Label("YOUR SHIP", cx + 2, y0 + 168, 13, kGold);
+            DrawClassCards({cx, y0 + 192, cwid, 3 * 100.0f + 20}, false, false);
+        }
+    }
     Text("Hosting opens a UDP port; friends join with your IP address.", x, H - 66, 16, kDim, false);
     if (shipModel.HasExternal())
         Text("Ship model \"Age of sail Blender ship\" by NelloF (Fab)  \xC2\xB7  Ocean after Garrett Gunnell's Water (MIT)  \xC2\xB7  Barlow font (OFL)",
