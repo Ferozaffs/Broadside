@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 9;
+constexpr uint16_t PROTOCOL_VERSION = 10;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -131,7 +131,7 @@ struct Snapshot {
     std::vector<NetCrate> crates;
     std::vector<NetCrate> chests;  // pirate booty (type unused)
     uint16_t teamScore[2] = {0, 0};
-    uint8_t matchState = 0, round = 1;
+    uint8_t matchState = 0, round = 1, cove = 0;
     float matchClock = 0;
 };
 
@@ -143,6 +143,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put((uint16_t)world.teamScore[1]);
     w.Put(world.matchState);
     w.Put(world.round);
+    w.Put(world.cove);
     w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
     uint8_t n = 0;
     for (auto& s : world.ships) n += (s.active && !s.stowed) ? 1 : 0;
@@ -216,6 +217,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.teamScore[1] = r.Get<uint16_t>();
     s.matchState = r.Get<uint8_t>();
     s.round = r.Get<uint8_t>();
+    s.cove = r.Get<uint8_t>();
     s.matchClock = r.Get<uint16_t>() / 10.0f;
     uint8_t n = r.Get<uint8_t>();
     s.ships.resize(n);

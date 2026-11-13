@@ -61,8 +61,15 @@ constexpr float airYawControl = 1.4f;      // rad/s^2 of yaw the rudder still gi
 constexpr float airControlRate = 1.6f;     // rad/s: the rudder can't wind an air spin up past this
 constexpr float airSpinCap = 2.6f;         // rad/s: faster air spins bleed off (keeps 360s, stops 1080 blenders)
 constexpr float underwaterBrake = 1.6f;    // 1/s forward speed loss once the deck is well under
+constexpr float slideCarry = 0.7f;           // share of sideways slide the keel turns into forward speed
+constexpr float landKeep = 0.9f;           // landing: momentum swings onto the keel line, keeping this much (more when straight)
+constexpr float landSpinDamp = 0.5f;       // and this share of the leftover spin is gone, so landings stick
+constexpr float turnDrag = 0.12f;          // hard turns at speed bleed way: forward speed loss per (rad/s of yaw) per s
+constexpr float airPitchLevel = 3.0f;       // rad/s^2 per unit of pitch error: hulls level out in the air
+constexpr float airPitchDamp = 1.8f;        // 1/s pitch-rate damping in the air
+constexpr float airPitchTarget = 0.06f;     // fwd.y to aim for: a touch bow-up
 constexpr float dunkBuoyancy = 1.5f;       // extra buoyancy once the deck is under (pops ships back up)
-constexpr float planing = 1.2f;            // how hard rising water under a fast hull throws it up
+constexpr float planing = 1.35f;            // how hard rising water under a fast hull throws it up
 constexpr float planingMax = 13.0f;        // m/s cap on that throw (keeps launches big, not orbital)
 constexpr float muzzleSpeed = 95.0f;
 constexpr float reloadTime = 3.5f;
@@ -101,7 +108,11 @@ constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
 constexpr int chestSlots = 1;              // pirate mode: the one treasure everyone chases
 constexpr float chestRespawn = 6.0f;       // s after it is banked before a new one appears
-constexpr float pirateSpeed = 0.8f;        // the treasure is heavy: its carrier is slower than the hunters
+constexpr float pirateSpeed = 0.75f;       // the treasure is heavy: its carrier sails at this share of its class's speed...
+constexpr float pirateMaxSpeed = 21.0f;    // ...and never faster than this (m/s), so even a ship of the line can catch it
+constexpr float shoreCalm = 0.3f;          // wave height right at the coast (share of the open sea)
+constexpr float shoreCalmDist = 260.0f;    // m from land over which the sea builds back up to full
+constexpr float coveMinDist = 950.0f;      // the treasure always surfaces at least this far from the harbour it must reach
 constexpr float bankTime = 10.0f;          // s the carrier must hold position in the cove to unload
 constexpr float escortCatchUp = 0.8f;      // max extra speed (x top speed) for an escort far off station
 }  // namespace tune
@@ -150,6 +161,8 @@ struct Rock {
     bool stack;      // tall narrow sea stack
 };
 std::vector<Rock> MakeRocks(uint32_t seed);
+// Wave-height multipliers for OceanCPU::SetDamp: full sea in open water, calm in the lee of the land
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks);
 float RockCoast(const Rock& k, float ang);       // coastline radius at a bearing from the centre
 float RockHeight(const Rock& k, float x, float z);  // surface height (below 0 = seabed slope)
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z);  // max over all rocks (-1e9 if none near)
@@ -297,6 +310,7 @@ public:
     bool fleets = false;
     std::vector<Harbour> harbours;
     Crate chests[tune::chestSlots];  // pirate booty
+    uint8_t cove = 0;                // pirate: the harbour the treasure must be delivered to (changes with every treasure)
     int teamScore[2] = {0, 0};       // teams: ships sunk
     // rounds: play for matchLength or until someone reaches the score limit, then an intermission
     bool rounds = true;              // (simtest turns them off for its long bot matches)

@@ -19,6 +19,7 @@ public:
     void Draw(Renderer& r, const Matrix& model, float sail, Color team, float flash, float hpFrac, bool lanterns,
               float camDist = 0.0f, float phase = 0.0f);
     void DrawBall(Renderer& r, Vector3 pos);
+    float alpha = 1.0f;  // see-through (our own ship while aiming)
     // iron-framed lanterns at hull-space spots; glow 0..1 drives the glass emissive
     void DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow);
 

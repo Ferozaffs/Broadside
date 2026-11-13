@@ -202,6 +202,26 @@ void Renderer::BeginShadow(int c, Vector3 centre, float half, float depth) {
     SetShaderValue(litShader, GetShaderLocation(litShader, "uTime"), &t, SHADER_UNIFORM_FLOAT);
 }
 
+void Renderer::SetShoreDamp(const std::vector<unsigned char>& grid, int n, float extent) {
+    if (grid.size() != (size_t)n * n) return;
+    if (!shoreTex) {
+        GLuint_ t;
+        GenTextures(1, &t);
+        shoreTex = t;
+        BindTexture(TEXTURE_2D, shoreTex);
+        TexStorage2D(TEXTURE_2D, 1, R8_, n, n);
+        TexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, LINEAR);
+        TexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, LINEAR);
+        TexParameteri(TEXTURE_2D, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
+        TexParameteri(TEXTURE_2D, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
+    }
+    BindTexture(TEXTURE_2D, shoreTex);
+    PixelStorei(UNPACK_ALIGNMENT, 1);
+    TexSubImage2D(TEXTURE_2D, 0, 0, 0, n, n, RED_, UNSIGNED_BYTE_, grid.data());
+    BindTexture(TEXTURE_2D, 0);
+    shoreExtent = extent;
+}
+
 void Renderer::BeginWake() {
     rlDrawRenderBatchActive();
     BindFramebuffer(FRAMEBUFFER, wakeFbo);
@@ -376,6 +396,11 @@ void Renderer::SetCommonUniforms(unsigned int p) {
     Uniform1f(GetUniformLocation(p, "uCloud"), atm.cloud);
     Uniform1f(GetUniformLocation(p, "uNight"), atm.night);
     Uniform1f(GetUniformLocation(p, "uLightning"), atm.lightning);
+    Uniform1i(GetUniformLocation(p, "uShoreDamp"), 12);
+    Uniform1f(GetUniformLocation(p, "uShoreExtent"), shoreTex ? shoreExtent : 0.0f);
+    ActiveTexture(TEXTURE0 + 12);
+    BindTexture(TEXTURE_2D, shoreTex);
+    ActiveTexture(TEXTURE0);
 }
 
 void Renderer::BindOceanTextures(int dispUnit, int slopeUnit) {
@@ -465,6 +490,13 @@ void Renderer::Begin(const RenderView& v, const OceanGPU& oc, double t) {
         SetShaderValue(litShader, GetShaderLocation(litShader, "uShadowOn"), &on, SHADER_UNIFORM_FLOAT);
         SetShaderValue(litShader, locShadowPass, &zero, SHADER_UNIFORM_FLOAT);
         BindShadowTextures(7, 8);
+        int u12 = 12;
+        float ext = shoreTex ? shoreExtent : 0.0f;
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShoreDamp"), &u12, SHADER_UNIFORM_INT);
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShoreExtent"), &ext, SHADER_UNIFORM_FLOAT);
+        ActiveTexture(TEXTURE0 + 12);
+        BindTexture(TEXTURE_2D, shoreTex);
+        ActiveTexture(TEXTURE0);
         int u9 = 9;
         SetShaderValue(litShader, GetShaderLocation(litShader, "uNoise"), &u9, SHADER_UNIFORM_INT);
         ActiveTexture(TEXTURE0 + 9);

@@ -26,7 +26,7 @@ Everyone must run the same version.
 | A / D | Rudder |
 | Mouse | Aim (cannons follow the camera) |
 | Left mouse | Fire broadside |
-| Right mouse | Zoom |
+| Right mouse | Zoom (your own ship turns see-through) |
 | Mouse wheel | Camera distance; roll all the way in to stand on the quarterdeck |
 | V | Deck view on / off |
 | M | Sound on / off |
@@ -58,10 +58,11 @@ The host picks the game in the menu:
 
 - **Free-for-all**: everyone against everyone. First to 12 sinkings.
 - **Teams**: red against blue. No friendly fire; each side has a home harbour. First side to 20 sinkings.
-- **Pirate**: one treasure chest floats somewhere out on the bay and everyone races for it. Whoever hauls it
-  aboard turns pirate (black sails, a slightly tougher hull and a faster reload, but slower, no Fair Wind and no
-  repairs) and has to sail it to the pirate cove and hold the cove for 10 seconds to unload it, while everyone
-  else hunts them. Sink the carrier and the treasure goes over the side for anyone to grab. First to 5 banked.
+- **Pirate**: one treasure chest surfaces somewhere out on the bay and everyone races for it. Whoever hauls it
+  aboard turns pirate (black sails, a slightly tougher hull and a faster reload, but much slower, no Fair Wind and
+  no repairs) and has to sail it to the harbour flying the black flag - always far away, and a different one for
+  every treasure - and hold it for 10 seconds to unload, while everyone else hunts them. Sink the carrier and the
+  treasure goes over the side for anyone to grab. First to 5 banked.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and

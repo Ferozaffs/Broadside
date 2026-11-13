@@ -5,6 +5,7 @@
 #include "ocean_gpu.h"
 #include "raylib.h"
 #include "raymath.h"
+#include <vector>
 
 struct RenderView {
     Vector3 pos, target;
@@ -36,6 +37,9 @@ public:
     void EndShadow();
     bool shadowsReady[2] = {false, false};
     Texture2D noiseTex{};  // tiling fractal noise (4 channels) for procedural surfaces
+    unsigned int shoreTex = 0;  // calm-water map (R8), uploaded per match
+    float shoreExtent = 0.0f;
+    void SetShoreDamp(const std::vector<unsigned char>& grid, int n, float extent);
     // Wake map: the whole arena seen from above, redrawn every frame (r = foam, g = churned water,
     // b = wave ridge height). Draw into it with rlgl between BeginWake/EndWake, world x,z as 2D vertices.
     static constexpr float kWakeExtent = 1000.0f;  // covers -1000..1000 m

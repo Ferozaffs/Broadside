@@ -49,6 +49,7 @@ enum : unsigned int {
     RENDERBUFFER = 0x8D41,
     MULTISAMPLE = 0x809D,
     POLYGON_OFFSET_FILL = 0x8037, NONE_ = 0,
+    R8_ = 0x8229, RED_ = 0x1903, UNSIGNED_BYTE_ = 0x1401, UNPACK_ALIGNMENT = 0x0CF5,
     TEXTURE_COMPARE_MODE = 0x884C, TEXTURE_COMPARE_FUNC = 0x884D, COMPARE_REF_TO_TEXTURE = 0x884E,
     TRUE_ = 1, FALSE_ = 0,
 };
@@ -116,7 +117,9 @@ enum : unsigned int {
     X(void, GetIntegerv, (GLenum_ p, GLint_* v)) \
     X(void, DrawBuffer, (GLenum_ b)) \
     X(void, ReadBuffer, (GLenum_ b)) \
-    X(void, PolygonOffset, (GLfloat_ factor, GLfloat_ units))
+    X(void, PolygonOffset, (GLfloat_ factor, GLfloat_ units)) \
+    X(void, TexSubImage2D, (GLenum_ target, GLint_ level, GLint_ x, GLint_ y, GLsizei_ w, GLsizei_ h, GLenum_ fmt, GLenum_ type, const void* data)) \
+    X(void, PixelStorei, (GLenum_ pname, GLint_ v))
 
 #define GL43_DECLARE(ret, name, args) typedef ret (GLAPIENTRY_* PFN_##name) args; extern PFN_##name name;
 GL43_FUNCS(GL43_DECLARE)

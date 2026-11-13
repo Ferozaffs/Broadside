@@ -227,6 +227,7 @@ public:
     float camYaw = 0.6f, camPitch = 0.28f, camDist = 75.0f;
     float lastChaseDist = 75.0f;  // where V takes you back to from the deck
     Vector3 deckEye{1.5f, 3.0f, 3.5f};  // on deck: at the quarterdeck rail, a step to starboard (BS_EYE "y z x" to try others)
+    float OwnShipGhost() const { return DeckView() > 0.5f ? 1.0f : 1.0f - 0.72f * aimZoom; }  // RMB: see through your own ship
     float DeckView() const { float u = Clamp(camDist / 22.0f, 0.0f, 1.0f); return 1.0f - u * u * (3.0f - 2.0f * u); }  // 1 = on deck
     Vector3 camTarget{};
     bool camInit = false;
@@ -248,7 +249,7 @@ public:
     bool curFleets = false;
     uint16_t teamScore[2] = {0, 0};
     // rounds
-    uint8_t matchState = 0, matchRound = 1;
+    uint8_t matchState = 0, matchRound = 1, cove = 0;
     float matchClock = 0.0f;
     struct AwardLine { int ship, id; float value; };
     std::vector<AwardLine> awards;
@@ -389,7 +390,7 @@ private:
     bool IsCaptain(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].s.leader < 0; }
     Color HarbourColor(int i) const {  // flag on the harbour: who may use it
         int owner = HarbourOwner(curMode, i);
-        if (curMode == MODE_PIRATE && i == 0) return kPirate;  // the cove flies the black flag
+        if (curMode == MODE_PIRATE && i == cove) return kPirate;  // the delivery harbour flies the black flag
         if (owner < 0) return {232, 228, 216, 255};
         return kSide[owner];
     }
@@ -482,6 +483,7 @@ void Game::SetOcean(uint32_t seed, int weather) {
     pred.Init(seed, (uint8_t)weather);
     wind = {pred.oceanParams.windDir.x * 3.0f, 0.0f, pred.oceanParams.windDir.y * 3.0f};
     oceanGpu.Init(pred.oceanParams);
+    renderer.SetShoreDamp(pred.ocean.Damp(), OceanCPU::DAMP_N, OceanCPU::DAMP_EXTENT);
 }
 
 void Game::StartSession(bool host, int bots, bool open) {
@@ -682,6 +684,7 @@ void Game::Interpolate() {
     teamScore[0] = snaps.back().teamScore[0];
     teamScore[1] = snaps.back().teamScore[1];
     matchState = snaps.back().matchState;
+    cove = snaps.back().cove;
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
     float t = (b->time > a->time) ? (float)((renderTime - a->time) / (b->time - a->time)) : 0.0f;
@@ -757,7 +760,7 @@ void Game::UpdateInput(float dt) {
         in.rudder = (IsKeyDown(KEY_A) ? -1.0f : 0.0f) + (IsKeyDown(KEY_D) ? 1.0f : 0.0f);
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) fireSeq++;
     }
-    aimZoom += ((active && IsMouseButtonDown(MOUSE_BUTTON_RIGHT) ? 1.0f : 0.0f) - aimZoom) * fminf(1.0f, dt * 10.0f);
+    aimZoom += ((active && (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) || getenv("BS_AIMZOOM")) ? 1.0f : 0.0f) - aimZoom) * fminf(1.0f, dt * 10.0f);  // (BS_AIMZOOM: screenshots)
 
     // scripted inputs for automated test runs
     if (opt.demo) {
@@ -824,6 +827,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     float t = (float)(GetTime() - sessionStart);
     pred.mode = (uint8_t)curMode;
     pred.fleets = curFleets;
+    pred.cove = cove;
     for (int id = 0; id < MAX_SHIPS; ++id) {
         Ship& o = pred.ships[id];
         const ViewShip& v = view[id];
@@ -950,7 +954,7 @@ void Game::RecordFrame() {
 // The guns' reach on the water: two dashed lines either side of the beam where the carriages stop,
 // gold on the side you're aiming when it's loaded, faint on the other side.
 void Game::DrawFiringArcs() {
-    if (myId < 0 || !view[myId].present || matchState != 0) return;
+    if (myId < 0 || !view[myId].present || matchState != 0 || DeckView() > 0.5f) return;
     const NetShip& s = view[myId].s;
     if (!(s.flags & SF_ALIVE)) return;
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
@@ -1781,6 +1785,7 @@ void Game::DrawTrajectory() {
     int side = GunSide(s.cls, s.rot, aim);
     bool ready = s.reload[side] <= 0.01f;
     aimRange = -1.0f;
+    const bool show = DeckView() < 0.5f && arcOut == 0 && matchState == 0;  // (arcOut from the last frame)
     int guns = side == 2 ? 1 : ClassOf(s.cls).guns;
     for (int idx = 0; idx < guns; ++idx) {
         Vector3 muzzle, vel;
@@ -1818,19 +1823,19 @@ void Game::DrawTrajectory() {
         for (int step = 0; step < 400; ++step) {
             bool splashed = false, skipped = false;
             StepBall(b, Ocean(), 1.0f / 60.0f, &splashed, &skipped);
-            if (main && step % 4 == 0) DrawBillboard(cam, softTex, b.pos, 0.9f, Fade(c, 0.55f));
+            if (show && main && step % 4 == 0) DrawBillboard(cam, softTex, b.pos, 0.9f, Fade(c, 0.55f));
             if (b.pos.x * b.pos.x + b.pos.z * b.pos.z > 600.0f * 600.0f && b.pos.y < RocksHeight(pred.rocks, b.pos.x, b.pos.z)) {
                 if (idx == 1) aimRange = Vector2Length({b.pos.x - muzzle.x, b.pos.z - muzzle.z});
-                DrawSphere(b.pos, 1.2f, Fade(c, 0.9f));  // would hit the rocks
+                if (show) DrawSphere(b.pos, 1.2f, Fade(c, 0.9f));  // would hit the rocks
                 break;
             }
             if (splashed || b.inWater) {
                 if (idx == 1) aimRange = Vector2Length({b.pos.x - muzzle.x, b.pos.z - muzzle.z});
-                DrawCircle3D(b.pos, 4.0f, {1, 0, 0}, 90.0f, Fade(c, 0.9f));
-                DrawCircle3D(b.pos, 2.0f, {1, 0, 0}, 90.0f, Fade(c, 0.9f));
+                if (show) DrawCircle3D(b.pos, 4.0f, {1, 0, 0}, 90.0f, Fade(c, 0.9f));
+                if (show) DrawCircle3D(b.pos, 2.0f, {1, 0, 0}, 90.0f, Fade(c, 0.9f));
                 break;
             }
-            if (skipped) DrawCircle3D(b.pos, 2.5f, {1, 0, 0}, 90.0f, Fade(SKYBLUE, 0.9f));
+            if (show && skipped) DrawCircle3D(b.pos, 2.5f, {1, 0, 0}, 90.0f, Fade(SKYBLUE, 0.9f));
         }
     }
 }
@@ -2151,6 +2156,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (!view[id].present) continue;
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
+            if (!shadow && id == myId && OwnShipGhost() < 0.99f) continue;  // drawn see-through after the water
             DrawShip(id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
                      (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
@@ -2237,6 +2243,16 @@ void Game::RenderWorld(float dt, bool menu) {
     DrawLanternReflections();
     DrawLighthouseBeams(cam);
     if (!menu) DrawTracers(cam);
+    if (!menu && myId >= 0 && view[myId].present && OwnShipGhost() < 0.99f) {
+        const NetShip& s = view[myId].s;
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
+        shipModel.alpha = OwnShipGhost();
+        DrawShip(myId, ShipModelMatrix(s.pos, s.rot, ScaleOf(myId)), &s, fabsf(s.sail), ColorOf(myId), hitFlash[myId] * 0.6f, s.hp / s.maxHp,
+                 (s.flags & SF_ALIVE) != 0, s.pos, s.rot, myId * 1.7f, ScaleOf(myId));
+        rlDrawRenderBatchActive();
+        shipModel.alpha = 1.0f;
+    }
     // light pillars over the crates so you can find them across the bay
     if (!crateBeams.empty()) {
         rlDrawRenderBatchActive();
@@ -2526,7 +2542,7 @@ void Game::DrawHUD() {
         bool friendly = owner < 0 || owner == mySide;
         Color c = friendly ? (owner < 0 ? kText : kGreen) : kRed;
         const char* what = friendly ? "HARBOUR" : "ENEMY PORT";
-        if (curMode == MODE_PIRATE && i == 0) {
+        if (curMode == MODE_PIRATE && i == cove) {
             c = Scenery::PowerColor(PU_COUNT);
             what = me && (me->flags & SF_PIRATE) ? "BANK THE TREASURE HERE" : "PIRATE COVE";
         }
@@ -2592,7 +2608,7 @@ void Game::DrawHUD() {
     } else if (curMode == MODE_PIRATE) {
         int pid = Carrier();
         auto toCove = [&](Vector3 p) {
-            return pred.harbours.empty() ? 0 : (int)Vector2Distance({p.x, p.z}, {pred.harbours[0].x, pred.harbours[0].z});
+            return pred.harbours.empty() ? 0 : (int)Vector2Distance({p.x, p.z}, {pred.harbours[cove % pred.harbours.size()].x, pred.harbours[cove % pred.harbours.size()].z});
         };
         const char* t = "A NEW TREASURE SURFACES SOON";
         float unload = pid >= 0 ? view[pid].s.unload : 0.0f;

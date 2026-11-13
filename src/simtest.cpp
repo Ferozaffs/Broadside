@@ -12,6 +12,21 @@ static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateB
 
 int RunSimTest() {
     if (getenv("BS_ONLYDUELS")) goto duels;
+    if (getenv("BS_SHORETEST")) {  // wave height in open water vs at the harbours and close under the cliffs
+        World g;
+        g.rounds = false;
+        g.Init(1, 1);  // a storm sea
+        auto sd = [&](float x, float z) {
+            double s1 = 0, s2 = 0;
+            for (int i = 0; i < 600; ++i) { g.ocean.Update(i * 0.2); float h = g.ocean.Height(x, z); s1 += h; s2 += h * h; }
+            return sqrt(s2 / 600 - (s1 / 600) * (s1 / 600)) * 4.0;  // significant wave height ~ 4 sd
+        };
+        printf("shore: open sea Hs %.1f m", sd(0, 0));
+        for (const Harbour& h : g.harbours) printf(", harbour %.1f m", sd(h.x, h.z));
+        for (float r : {620.0f, 700.0f}) printf(", r=%.0f: %.1f m (calm %.2f)", r, sd(r, 0), g.ocean.DampAt(r, 0));
+        printf("\n");
+        return 0;
+    }
     {
     World w;
     w.rounds = false;
@@ -103,6 +118,10 @@ int RunSimTest() {
     float takeoffYaw = 0, maxTakeoffYaw = 0, spdSum = 0, maxDepth = 0;
     float dunkT = 0, dunkSum = 0, dunkMax = 0;
     int dunks = 0, rockHits = 0, maxSpin = 0;
+    // landings after >1 s of air: horizontal speed at touchdown, the lowest it falls to and where it is 2 s later
+    struct Land { float v0, vmin, v2, pitch, depth, t0, yawOff; bool open; } land{};
+    int landN = 0;
+    float landV0 = 0, landMin = 0, landV2 = 0, landPitch = 0, landDepth = 0;
     for (int i = 0; i < 180 * 60; ++i) {
         float t = i * SIM_DT;
         // carve hard for 4 s, run straight for 4 s, carve the other way (no input matters in the air)
@@ -115,7 +134,27 @@ int RunSimTest() {
             s.input.rudder = Clamp(-err * 2.0f, -1.0f, 1.0f);
         }
         float wasAir = s.airTime;
+        float vhBefore = Vector2Length({s.vel.x, s.vel.z});
+        float pitchBefore = Vector3RotateByQuaternion({0, 0, 1}, s.rot).y;
         w.Step();
+        float vh = Vector2Length({s.vel.x, s.vel.z});
+        if (wasAir > 1.0f && s.airTime <= 0) {
+            Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+            float yo = fabsf(atan2f(f.x * s.vel.z - f.z * s.vel.x, f.x * s.vel.x + f.z * s.vel.z)) * RAD2DEG;
+            land = {vhBefore, vh, vh, pitchBefore, 0, t, yo, true};
+        }
+        if (land.open) {
+            land.vmin = fminf(land.vmin, vh);
+            land.depth = fmaxf(land.depth, s.depthBelow);
+            if (t - land.t0 >= 2.0f) {
+                land.v2 = vh;
+                land.open = false;
+                landN++; landV0 += land.v0; landMin += land.vmin; landV2 += land.v2; landPitch += land.pitch; landDepth += land.depth;
+                if (getenv("BS_LANDLOG"))
+                    printf("  landing: %.1f m/s -> min %.1f -> %.1f after 2 s, nose %+.2f (fwd.y), deck down to %.1f m, heading %.0f deg off the track\n", land.v0, land.vmin, land.v2,
+                           land.pitch, land.depth, land.yawOff);
+            }
+        }
         if (wasAir == 0 && s.airTime > 0) {
             Vector3 up = Vector3RotateByQuaternion({0, 1, 0}, s.rot);
             takeoffYaw = fabsf(Vector3DotProduct(s.angVel, up));
@@ -146,6 +185,9 @@ int RunSimTest() {
         maxAir = fmaxf(maxAir, s.airTime);
         minUp = fminf(minUp, Vector3RotateByQuaternion({0, 1, 0}, s.rot).y);
     }
+    if (landN)
+        printf("landings: %d, speed %.1f m/s at touchdown -> lowest %.1f (%.0f%% kept) -> %.1f 2 s later, nose at touchdown %+.2f, deck down to %.1f m\n",
+               landN, landV0 / landN, landMin / landN, 100.0f * landMin / landV0, landV2 / landN, landPitch / landN, landDepth / landN);
     printf("dunks (deck >1 m under): %d, avg %.2f s, max %.2f s, rock hits %d, biggest spin %d deg\n", dunks, dunks ? dunkSum / dunks : 0.0f, dunkMax, rockHits, maxSpin);
     printf("air: %.0f%% airborne, jumps>1s %d (%d over 2 s, %d with 360+, %d clean spins) in 3 min, max %.2f s, max height %.1f m, min up.y %.2f, hp %.0f, max takeoff yaw %.2f, avg speed %.1f, max dunk %.1f m\n",
            100 * total / 180, jumps, big, spins, clean, maxAir, maxH, minUp, s.hp, maxTakeoffYaw, spdSum / (180 * 60), maxDepth);
@@ -428,7 +470,7 @@ duels:
                 if (e.type == EventType::Booty) {
                     booty++;
                     carryStart = g.time; carrier = e.a; carryHits = 0; carryDmg = 0; minDist = 1e9f;
-                    startDist = Vector2Distance({g.ships[e.a].pos.x, g.ships[e.a].pos.z}, {g.harbours[0].x, g.harbours[0].z});
+                    startDist = Vector2Distance({g.ships[e.a].pos.x, g.ships[e.a].pos.z}, {g.harbours[g.cove].x, g.harbours[g.cove].z});
                 }
                 if (e.type == EventType::Hit && carrier >= 0 && e.b == carrier) { carryHits++; carryDmg += e.value; }
                 if (getenv("BS_PIRATELOG") && (e.type == EventType::Bank || (e.type == EventType::Kill && e.b == carrier && carrier >= 0))) {

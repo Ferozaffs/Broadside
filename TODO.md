@@ -145,6 +145,29 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Tracers: balls in flight glow like red-hot shot with a fading streak; bright at night/fog, faint at noon.
 - Real models for the cutter and ship of the line still to come (scaled frigate for now).
 
+## Playtest feedback (2026-11-13 evening)
+- [x] Speed lost on landing (kept 41% on average, several to ~0): heave drag now acts in world up/down (a nose-down
+      hull no longer meets its own deck area as a wall), hulls level their pitch gently in the air (airPitchLevel,
+      spins untouched), the keel turns 70% of a slide into forward speed (was 50%), the underwater brake only works
+      on a nose driving down. Rudder drag (turnDrag) so hard turns still bleed some way. Landings now keep ~65%;
+      air time unchanged (23%, planing 1.2 -> 1.35). simtest prints "landings:"; BS_LANDLOG, BS_SLIDE, BS_AIRLEVEL,
+      BS_OLDDRAG for experiments.
+- [x] Calm water near land: MakeShoreDamp(rocks) -> a 256^2 wave-height map (distance to land, 30% at the coast,
+      full sea 260 m out) used by OceanCPU (physics) and every shader through common.glsl (same texels, bilinear).
+      Storm Hs: open 15.6 m, harbours 6-10 m. BS_SHORETEST=1 --simtest measures it.
+- [x] Fog 0.0032 -> 0.0068 (ships fade at ~200-300 m); night darker (moon x0.65, exposure 2.6 -> 1.8, darker sky).
+- [x] Pirate: every captain hunts the carrier (lead pursuit, ignores crates and others unless < 120 m; those ahead
+      cut it off at the delivery harbour). Carrier speed 0.75x its class, capped at 21 m/s. Each treasure surfaces
+      at a random spot >= 950 m from a randomly chosen delivery harbour (World::cove, in the snapshot); a treasure
+      dropped near it moves the delivery to the furthest harbour. 2 seeds: 8 grabs, 5 carriers sunk, 3 banked.
+- [x] Landing carry (user: "68% still feels low"): at touchdown the horizontal way swings onto the keel line
+      (forwards, or tail-first for a backwards landing) keeping 90-100%, and half the leftover spin is damped so it
+      sticks. A hull that comes down tail-first while still spinning keeps swinging round with the drive braking
+      gently (astern -> ahead in normal sailing is unchanged). Landings keep 84% overall, 90-100% unless backwards.
+- [x] The aiming trajectory hides on deck and when the guns can't bear; the firing arcs hide on deck. RMB fades
+      your own ship to a ghost (drawn after the water, blended; BS_AIMZOOM=1 for screenshots).
+- Protocol v10.
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).

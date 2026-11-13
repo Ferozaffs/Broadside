@@ -2,6 +2,8 @@
 const float PI = 3.14159265358979;
 
 uniform sampler2DArray uDisp;   // xyz displacement, a = foam
+uniform sampler2D uShoreDamp;   // wave-height multiplier near land (same grid the physics uses)
+uniform float uShoreExtent;     // the map covers [-extent, extent]^2 (0: no map)
 uniform sampler2DArray uSlope;  // xy slopes
 uniform vec4 uOceanLen;         // cascade length scales
 uniform float uOceanN;          // FFT resolution
@@ -21,7 +23,11 @@ uniform float uLightning;
 
 // Texel n of each cascade holds the field at world x = n * L / N, hence the half-texel shift.
 vec2 OceanUV(vec2 xz, int c) { return xz / uOceanLen[c] + 0.5 / uOceanN; }
-vec4 OceanDispFoam(vec2 xz, int c, float lod) { return textureLod(uDisp, vec3(OceanUV(xz, c), float(c)), lod); }
+float ShoreDamp(vec2 xz) { return uShoreExtent > 0.0 ? texture(uShoreDamp, xz / (2.0 * uShoreExtent) + 0.5).r : 1.0; }
+vec4 OceanDispFoam(vec2 xz, int c, float lod) {
+    vec4 d = textureLod(uDisp, vec3(OceanUV(xz, c), float(c)), lod);
+    return vec4(d.xyz * ShoreDamp(xz), d.a);
+}
 
 // Height of the (horizontally displaced) surface at world xz. Matches OceanCPU for cascade 0.
 float OceanHeight(vec2 xz) {

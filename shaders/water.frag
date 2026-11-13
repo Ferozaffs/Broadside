@@ -60,7 +60,7 @@ void main() {
         vec4 s = texture(uDisp, uvw);
         s.a += kFoamSubtract[c];
         df += s;
-        slopes += texture(uSlope, uvw).xy;
+        slopes += texture(uSlope, uvw).xy * ShoreDamp(vXZ);
     }
     float atten = exp(-vDist * 0.0007);
     float foam = clamp(df.a, 0.0, 1.0) * atten;

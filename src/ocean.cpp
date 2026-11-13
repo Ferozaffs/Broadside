@@ -273,6 +273,19 @@ void OceanCPU::Update(double time) {
         }
 }
 
+float OceanCPU::DampAt(float x, float z) const {
+    if (damp.empty()) return 1.0f;
+    const int N = DAMP_N;
+    float u = (x / (2.0f * DAMP_EXTENT) + 0.5f) * N - 0.5f, v = (z / (2.0f * DAMP_EXTENT) + 0.5f) * N - 0.5f;
+    u = fminf(fmaxf(u, 0.0f), N - 1.001f);
+    v = fminf(fmaxf(v, 0.0f), N - 1.001f);
+    int i = (int)u, j = (int)v;
+    float tu = u - i, tv = v - j;
+    auto at = [&](int a, int b) { return damp[b * N + a] / 255.0f; };
+    float top = at(i, j) + (at(i + 1, j) - at(i, j)) * tu, bot = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * tu;
+    return top + (bot - top) * tv;
+}
+
 void OceanCPU::SampleRaw(float x, float z, float out[6]) const {
     const int N = OCEAN_CPU_N;
     float cell = L / N;
@@ -290,6 +303,8 @@ void OceanCPU::SampleRaw(float x, float z, float out[6]) const {
         float bot = c[i] + (d[i] - c[i]) * tx;
         out[i] = top + (bot - top) * tz;
     }
+    float k = DampAt(x, z);
+    for (int i = 0; i < 6; ++i) out[i] *= k;
 }
 
 WaterSample OceanCPU::Sample(float x, float z) const {

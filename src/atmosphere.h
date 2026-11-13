@@ -50,16 +50,16 @@ inline Atmos MakeAtmos(int tod, int weather, Vector2 windDir) {
             break;
         case TOD_NIGHT:
             a.sunDir = dirAt(0.6f);           // the moon
-            a.sunColor = {0.16f, 0.22f, 0.34f};
-            a.zenith = {0.004f, 0.008f, 0.022f};
-            a.horizon = {0.018f, 0.028f, 0.05f};
-            a.fogColor = {0.025f, 0.035f, 0.05f};
+            a.sunColor = {0.10f, 0.14f, 0.23f};  // a thinner moon: night is for lanterns and tracers
+            a.zenith = {0.002f, 0.004f, 0.012f};
+            a.horizon = {0.010f, 0.016f, 0.03f};
+            a.fogColor = {0.014f, 0.02f, 0.03f};
             a.night = 1.0f;
-            a.exposure = 2.6f;
+            a.exposure = 1.8f;
             a.lanterns = 1.0f;
-            a.ambient = {0.07f, 0.09f, 0.14f};
-            a.smokeSun = {0.12f, 0.15f, 0.22f};
-            bright = 0.06f;
+            a.ambient = {0.045f, 0.06f, 0.10f};
+            a.smokeSun = {0.08f, 0.10f, 0.15f};
+            bright = 0.04f;
             break;
         default:  // noon
             a.sunDir = dirAt(0.95f);
@@ -92,7 +92,7 @@ inline Atmos MakeAtmos(int tod, int weather, Vector2 windDir) {
             a.fogColor = V3Lerp(a.horizon, Vector3Scale({0.62f, 0.65f, 0.68f}, bright), 0.6f);
             a.horizon = a.fogColor;
             a.zenith = V3Lerp(a.zenith, a.fogColor, 0.6f);
-            a.fogDensity = 0.0032f;  // ships fade out around 400-600 m, their lanterns a lot further
+            a.fogDensity = 0.0068f;  // ships fade out around 200-300 m, their lanterns a lot further
             a.haze = 1.0f;
             a.lanterns = fmaxf(a.lanterns, 0.85f);
             a.smokeSun = Vector3Scale(a.smokeSun, 0.5f);

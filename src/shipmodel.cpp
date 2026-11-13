@@ -482,6 +482,7 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
 }
 
 void ShipModel::Part(const Mesh& mesh, Matrix local, const Matrix& model, Color c) {
+    c.a = (unsigned char)(c.a * alpha);
     mat.maps[MATERIAL_MAP_DIFFUSE].color = c;
     DrawMesh(mesh, mat, MatrixMultiply(local, model));
 }
@@ -508,6 +509,7 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
             Material& em = ext.materials[ext.meshMaterial[i]];
             Color keep = em.maps[MATERIAL_MAP_DIFFUSE].color;
             Color c = extIsSail[i] ? ColorTint(keep, ColorLerp(WHITE, team, 0.55f)) : ColorTint(keep, tint);
+            c.a = (unsigned char)(c.a * alpha);
             em.maps[MATERIAL_MAP_DIFFUSE].color = c;
             if (extIsSail[i]) r.SetSail(flutter, phase);
             DrawMesh(ext.meshes[i], em, m);

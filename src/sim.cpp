@@ -1,6 +1,7 @@
 #include "sim.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 // ============================================================================
 // Hull shape
@@ -62,6 +63,47 @@ std::vector<Harbour> MakeHarbours(uint32_t seed) {
 int HarbourOwner(int mode, int i) {
     if (mode == MODE_TEAMS) return i == 0 ? 0 : i == 2 ? 1 : -1;
     return -1;
+}
+
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks) {
+    const int N = OceanCPU::DAMP_N;
+    const float E = OceanCPU::DAMP_EXTENT, cell = 2.0f * E / N;
+    // distance to land on the grid (two-pass chamfer), land = anything near or above the waterline
+    std::vector<float> d(N * N, 1e9f);
+    for (int j = 0; j < N; ++j)
+        for (int i = 0; i < N; ++i) {
+            float x = (i + 0.5f) * cell - E, z = (j + 0.5f) * cell - E;
+            if (RocksHeight(rocks, x, z) > -1.5f) d[j * N + i] = 0.0f;
+        }
+    const float a = cell, b = cell * 1.41421f;
+    for (int j = 0; j < N; ++j)
+        for (int i = 0; i < N; ++i) {
+            float& v = d[j * N + i];
+            if (i > 0) v = fminf(v, d[j * N + i - 1] + a);
+            if (j > 0) {
+                v = fminf(v, d[(j - 1) * N + i] + a);
+                if (i > 0) v = fminf(v, d[(j - 1) * N + i - 1] + b);
+                if (i + 1 < N) v = fminf(v, d[(j - 1) * N + i + 1] + b);
+            }
+        }
+    for (int j = N - 1; j >= 0; --j)
+        for (int i = N - 1; i >= 0; --i) {
+            float& v = d[j * N + i];
+            if (i + 1 < N) v = fminf(v, d[j * N + i + 1] + a);
+            if (j + 1 < N) {
+                v = fminf(v, d[(j + 1) * N + i] + a);
+                if (i + 1 < N) v = fminf(v, d[(j + 1) * N + i + 1] + b);
+                if (i > 0) v = fminf(v, d[(j + 1) * N + i - 1] + b);
+            }
+        }
+    std::vector<unsigned char> out(N * N);
+    for (int k = 0; k < N * N; ++k) {
+        float t = Clamp(d[k] / tune::shoreCalmDist, 0.0f, 1.0f);
+        t = t * t * (3.0f - 2.0f * t);
+        float m = tune::shoreCalm + (1.0f - tune::shoreCalm) * t;
+        out[k] = (unsigned char)(m * 255.0f + 0.5f);
+    }
+    return out;
 }
 
 std::vector<Rock> MakeRocks(uint32_t seed) {
@@ -370,6 +412,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     balls.clear();
     events.clear();
     rocks = MakeRocks(seed);
+    ocean.SetDamp(MakeShoreDamp(rocks));
     harbours = MakeHarbours(seed);
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
@@ -560,6 +603,11 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     events.push_back(e);
 }
 
+// test overrides for the momentum tuning (BS_SLIDE, BS_AIRLEVEL, BS_OLDDRAG=1)
+static float EnvF(const char* n, float def) { const char* e = getenv(n); return e ? (float)atof(e) : def; }
+static const float kSlide = EnvF("BS_SLIDE", tune::slideCarry), kAirLevel = EnvF("BS_AIRLEVEL", tune::airPitchLevel);
+static const bool kOldDrag = getenv("BS_OLDDRAG") != nullptr;
+
 void World::StepShip(Ship& s, float dt) {
     const ShipPhys& P = Phys(s.cls);
     const ShipClass& C = ClassOf(s.cls);
@@ -612,12 +660,23 @@ void World::StepShip(Ship& s, float dt) {
             float plan = (s.leader >= 0 ? 0.5f : 1.0f) * C.planing;  // escorts skim, captains fly; small hulls fly more
             wv.y += fminf(fmaxf(0.0f, slope * sp) * tune::planing * plan, tune::planingMax);
         }
-        Vector3 vb = ToBody(s.rot, Vector3Subtract(pv, wv));
+        Vector3 rv = Vector3Subtract(pv, wv);
         float q = 0.5f * tune::rhoWater * frac;
-        Vector3 Fdb = {-(q * P.cdA.x * fabsf(vb.x) + P.linDrag.x * frac) * vb.x,
-                       -(q * P.cdA.y * fabsf(vb.y) + P.linDrag.y * frac) * vb.y,
+        // heave: world vertical, so a hull landing nose-down isn't braked by its own deck area
+        float vy = rv.y;
+        Vector3 Fd = {0.0f, -(q * P.cdA.y * fabsf(vy) + P.linDrag.y * frac) * vy, 0.0f};
+        if (kOldDrag) {  // (test) the old all-body-axes drag
+            Vector3 b = ToBody(s.rot, rv);
+            Fd = ToWorld(s.rot, {-(q * P.cdA.x * fabsf(b.x) + P.linDrag.x * frac) * b.x, -(q * P.cdA.y * fabsf(b.y) + P.linDrag.y * frac) * b.y,
+                                 -(q * P.cdA.z * fabsf(b.z) + P.linDrag.z * frac) * b.z});
+            rv = {0, 0, 0};  // skip the split drag below
+        }
+        // the rest along and across the keel (horizontal plane)
+        Vector3 vb = ToBody(s.rot, {rv.x, 0.0f, rv.z});
+        Vector3 Fdb = {-(q * P.cdA.x * fabsf(vb.x) + P.linDrag.x * frac) * vb.x, 0.0f,
                        -(q * P.cdA.z * fabsf(vb.z) + P.linDrag.z * frac) * vb.z};
-        Vector3 Fd = ToWorld(s.rot, Fdb);
+        Vector3 Fh = ToWorld(s.rot, Fdb);
+        Fd = Vector3Add(Fd, {Fh.x, 0.0f, Fh.z});
         Vector3 Fc = Vector3Add(Fb, Fd);
         F = Vector3Add(F, Fc);
         T = Vector3Add(T, Vector3CrossProduct(r, Fc));
@@ -655,6 +714,8 @@ void World::StepShip(Ship& s, float dt) {
     float yawRate = Vector3DotProduct(s.angVel, up);
     // drive along the horizontal heading, so a nose-down landing doesn't motor the ship to the bottom
     Vector3 fwdH = Vector3Normalize({fwd.x, 0.0f, fwd.z});
+    // came down tail-first while still spinning, with the sails drawing: the hull keeps swinging round
+    bool swinging = s.alive && vf < -4.0f && s.sail > 0.2f && fabsf(yawRate) > 0.6f && inWater > 0.3f;
     if (s.alive) {
         // speed controller along the keel; still pushes a little in the air (it's that kind of game)
         Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
@@ -662,21 +723,23 @@ void World::StepShip(Ship& s, float dt) {
         float top = C.topSpeed;
         if (s.leader >= 0 && ships[s.leader].active)  // escorts pace their captain, whatever he sails
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
-        float boost = (s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f) * (s.pirate ? tune::pirateSpeed : 1.0f);
+        if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
+        float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
         float vmax = (s.sail >= 0.0f ? top * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : C.reverseSpeed) * boost;
         if (fabsf(s.sail) > 0.02f) {
             float acc = tune::driveAccel * boost;
+            if (swinging) acc *= 0.25f;  // let the swing carry the way round instead of braking it dead
             float a = Clamp((s.sail * vmax - vf) * tune::driveGain, -acc, acc);
             F = Vector3Add(F, Vector3Scale(fwdH, a * P.mass * inWater * sailsUp));
         }
         // a hull driven right under sheds its way fast (otherwise the momentum of a nose-down hull
         // planes it deeper, the faster the worse)
-        float under = Clamp((s.depthBelow - 0.5f) / 2.5f, 0.0f, 1.0f);
+        float under = Clamp((s.depthBelow - 0.5f) / 2.5f, 0.0f, 1.0f) * Clamp(-fwd.y / 0.3f, 0.0f, 1.0f);  // only a nose driving down
         if (under > 0.0f) F = Vector3Add(F, Vector3Scale(fwd, -Vector3DotProduct(rel, fwd) * tune::underwaterBrake * under * P.mass));
         // keel grip: kill sideways slip and hand most of it back as forward speed, so turns carve
         float grip = vl * tune::keelGrip * P.mass * inWater;
         F = Vector3Add(F, Vector3Scale(right, -grip));
-        F = Vector3Add(F, Vector3Scale(fwdH, fabsf(grip) * 0.5f * (vf >= 0.0f ? 1.0f : -1.0f)));
+        F = Vector3Add(F, Vector3Scale(fwdH, fabsf(grip) * kSlide * (vf >= 0.0f ? 1.0f : -1.0f)));
         // Rudder: a torque at the stern, fighting yaw resistance from however much hull is wet.
         // Floating level the two balance at tune::turnRate. When the bow lifts off a crest mid-carve
         // the rudder still bites but the resistance is gone, so the yaw rate whips up right at
@@ -689,12 +752,20 @@ void World::StepShip(Ship& s, float dt) {
         float sternWet = Clamp(sternVol / P.sternRestVol, 0.0f, 1.0f);
         float resist = 0.2f * wet + 0.8f * bowWet;
         alpha = Vector3Add(alpha, Vector3Scale(up, tune::yawGrip * (-s.rudder * steerSign * authority * sternWet * (1.0f + tune::sternKick * Clamp((0.3f - bowWet) / 0.3f, 0.0f, 1.0f)) - yawRate * resist)));
+        // a hard turn bleeds way (the rudder and the hull broadside-on to the water)
+        if (vf > 0.0f) F = Vector3Add(F, Vector3Scale(fwdH, -vf * tune::turnDrag * fminf(fabsf(yawRate), authority) * fabsf(s.rudder) * inWater * P.mass));  // (a landing's leftover spin doesn't count)
+        if (swinging) alpha = Vector3Add(alpha, Vector3Scale(up, (yawRate > 0.0f ? 1.0f : -1.0f) * 4.0f));
         // lean out of the turn
         alpha = Vector3Add(alpha, Vector3Scale(fwd, tune::heel * yawRate * vf * inWater));
         // a little air control: the rudder still nudges the yaw once the hull is clear of the water,
         // and very fast spins bleed off so a jump gives a 360 or two rather than a blender
         float airborne = 1.0f - Clamp(s.submerged * 25.0f, 0.0f, 1.0f);
         if (airborne > 0.0f) {
+            // land flat, not on the nose: ease the pitch towards a touch bow-up and damp pitching
+            Vector3 X = ToWorld(s.rot, {1, 0, 0});
+            float pitchErr = fwd.y - tune::airPitchTarget;  // > 0: nose too high
+            float pitchRate = Vector3DotProduct(s.angVel, X);
+            alpha = Vector3Add(alpha, Vector3Scale(X, airborne * (kAirLevel * pitchErr - tune::airPitchDamp * pitchRate)));
             // the rudder can start a lazy spin or check one, but never wind it up past airControlRate
             float push = -s.rudder * tune::airYawControl;
             if (push * yawRate > 0.0f && fabsf(yawRate) > tune::airControlRate) push = 0.0f;
@@ -1038,7 +1109,7 @@ void World::BotThink(Ship& s, float dt) {
         }
     } else if (s.pirate) {  // carrying the treasure: run for the cove, shooting on the way
         if (!harbours.empty()) {
-            goal = {harbours[0].x, 0, harbours[0].z};
+            goal = {harbours[cove].x, 0, harbours[cove].z};
             haveGoal = true;
             if (flat(goal, s.pos) < tune::harbourRadius * 0.6f) in.sail = 0.0f;  // heave to and unload
         }
@@ -1047,18 +1118,27 @@ void World::BotThink(Ship& s, float dt) {
                    for (const Ship& o : ships) if (o.active && o.pirate && o.alive) return true;
                    return false;
                }()) {
-        // someone has the treasure: whoever is nearer the cove than the carrier cuts it off there
-        const Ship* car = nullptr;
-        for (const Ship& o : ships) if (o.active && o.pirate && o.alive) car = &o;
-        Vector3 cove = {harbours[0].x, 0, harbours[0].z};
-        float dMe = flat(cove, s.pos), dCar = flat(cove, car->pos), dTo = flat(car->pos, s.pos);
+        // someone has the treasure: every captain hunts the carrier. Those already between it and the delivery
+        // harbour wait for it there; the rest run it down, steering for where it will be, and only turn to fight
+        // once they're alongside. Nothing else (crates, other ships) matters unless it's right on top of them.
+        Ship* car = nullptr;
+        for (Ship& o : ships) if (o.active && o.pirate && o.alive) car = &o;
+        Vector3 cv = {harbours[cove].x, 0, harbours[cove].z};
+        float dMe = flat(cv, s.pos), dCar = flat(cv, car->pos), dTo = flat(car->pos, s.pos);
+        if (!(target && target != car && best < 120.0f)) { target = car; best = Vector3Distance(car->pos, s.pos); }
         if (dMe < dCar - 60.0f && dTo > 220.0f) {
-            Vector3 toCar = Vector3Normalize(Vector3Subtract(car->pos, cove));
-            goal = Vector3Add(cove, Vector3Scale({toCar.x, 0, toCar.z}, fminf(160.0f, dCar * 0.4f)));
+            Vector3 toCar = Vector3Normalize(Vector3Subtract(car->pos, cv));
+            goal = Vector3Add(cv, Vector3Scale({toCar.x, 0, toCar.z}, fminf(160.0f, dCar * 0.4f)));
             haveGoal = true;
             fight = false;
             if (flat(goal, s.pos) < 60.0f) in.sail = 0.3f;
+        } else if (dTo > 230.0f && target == car) {
+            float lead = Clamp(dTo / fmaxf(ClassOf(s.cls).topSpeed - 15.0f, 5.0f), 0.0f, 10.0f);  // closing speed ~ our speed minus its
+            goal = Vector3Add(car->pos, Vector3Scale({car->vel.x, 0, car->vel.z}, lead));
+            haveGoal = true;
+            fight = false;
         }
+        // alongside: the ordinary fight logic below presents a broadside to it
     } else if (mode == MODE_PIRATE && s.leader < 0) {  // the treasure is adrift: race for it
         const Crate& c = chests[0];
         if (c.active && !(target && best < 110.0f)) {
@@ -1376,7 +1456,7 @@ void World::UpdateHarbours(float dt) {
                 ev.pos = {hb.x, 0, hb.z};
                 events.push_back(ev);
             }
-            if (s.pirate && h == 0 && matchState == 0) {  // the cove: unload the treasure (it takes a while: a last stand)
+            if (s.pirate && h == cove && matchState == 0) {  // the cove: unload the treasure (it takes a while: a last stand)
                 atCove = true;
                 s.bankTimer += dt;
                 if (s.bankTimer < tune::bankTime) continue;
@@ -1397,15 +1477,31 @@ void World::UpdateHarbours(float dt) {
 }
 
 void World::PlaceChest(Crate& c, bool random, float x, float z) {
-    if (random) {
-        for (int tries = 0; tries < 40; ++tries) {
-            // across the bay from the cove, so the run home is a long one
-            float ang = (harbours.empty() ? 0.0f : harbours[0].ang + PI) + (RandF() - 0.5f) * 2.0f;
-            float r = 100.0f + RandF() * 350.0f;
+    auto toCove = [&](float px, float pz) { return harbours.empty() ? 1e9f : Vector2Distance({px, pz}, {harbours[cove].x, harbours[cove].z}); };
+    if (random && !harbours.empty()) {
+        // a fresh treasure: a new harbour to deliver it to, and the treasure surfaces somewhere far from it
+        int prev = cove;
+        cove = (uint8_t)((prev + 1 + (int)(RandF() * (harbours.size() - 1))) % harbours.size());
+        bool found = false;
+        for (int tries = 0; tries < 120 && !found; ++tries) {
+            float ang = RandF() * 2.0f * PI, r = 60.0f + RandF() * 520.0f;
             x = cosf(ang) * r;
             z = sinf(ang) * r;
-            if (RocksHeight(rocks, x, z) < -8.0f) break;
+            found = RocksHeight(rocks, x, z) < -8.0f && toCove(x, z) >= tune::coveMinDist;
         }
+        if (!found) {  // (can't happen with harbours on the rim, but just in case) straight across the bay
+            x = -harbours[cove].x * 0.6f;
+            z = -harbours[cove].z * 0.6f;
+        }
+    } else if (!harbours.empty() && toCove(x, z) < tune::coveMinDist) {
+        // dropped near the delivery harbour: the delivery moves to whichever harbour is furthest away
+        int far = 0;
+        float best = -1.0f;
+        for (int h = 0; h < (int)harbours.size(); ++h) {
+            float d = Vector2Distance({x, z}, {harbours[h].x, harbours[h].z});
+            if (d > best) { best = d; far = h; }
+        }
+        cove = (uint8_t)far;
     }
     c.x = x;
     c.z = z;
@@ -1473,6 +1569,26 @@ void World::UpdateAirTime(Ship& s, float dt, bool authoritative) {
             s.statAir = fmaxf(s.statAir, s.airTime);
             s.statSpin = std::max(s.statSpin, halfTurns * 180);
         }
+    }
+    if (s.alive && s.airTime > 0.5f) {
+        // touchdown: the hull bites and the way it was carrying swings onto the keel line (forwards, or
+        // tail-first if it came down backwards), so a spin landing carves on instead of stopping dead
+        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+        Vector2 fh = Vector2Normalize({f.x, f.z}), vh = {s.vel.x, s.vel.z};
+        float sp = Vector2Length(vh);
+        if (sp > 3.0f && Vector2Length({f.x, f.z}) > 0.3f) {
+            float c = Clamp(Vector2DotProduct(fh, Vector2Scale(vh, 1.0f / sp)), -1.0f, 1.0f);
+            float off = acosf(c);
+            bool back = off > 1.75f;  // more than ~100 deg: it's sliding tail-first
+            float offAxis = back ? PI - off : off;
+            float keep = 1.0f - (1.0f - tune::landKeep) * Clamp(offAxis / (PI * 0.5f), 0.0f, 1.0f);
+            Vector2 dir = back ? Vector2Negate(fh) : fh;
+            s.vel.x = dir.x * sp * keep;
+            s.vel.z = dir.y * sp * keep;
+        }
+        Vector3 upv = Vector3RotateByQuaternion({0, 1, 0}, s.rot);
+        float yaw = Vector3DotProduct(s.angVel, upv);
+        s.angVel = Vector3Subtract(s.angVel, Vector3Scale(upv, yaw * tune::landSpinDamp));
     }
     s.airSpin = 0.0f;
     if (s.airTime > 0.25f) s.lastAirTime = s.airTime;

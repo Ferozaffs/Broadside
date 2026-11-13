@@ -59,6 +59,13 @@ public:
     float Height(float x, float z) const;
     WaterSample Sample(float x, float z) const;
     const OceanParams& Params() const { return params; }
+    // Calm water near land: a grid of wave-height multipliers (0..255 = 0..1) over [-extent, extent]^2,
+    // sampled bilinearly at texel centres exactly like the GPU does with the same texture.
+    static constexpr int DAMP_N = 256;
+    static constexpr float DAMP_EXTENT = 1300.0f;
+    void SetDamp(const std::vector<unsigned char>& grid) { damp = grid; }
+    const std::vector<unsigned char>& Damp() const { return damp; }
+    float DampAt(float x, float z) const;
     bool Ready() const { return ready; }
 
 private:
@@ -72,4 +79,5 @@ private:
     std::vector<float> omega;
     // spatial fields: dx, dz, h, ht, dxt, dzt (6 floats per cell)
     std::vector<float> field;
+    std::vector<unsigned char> damp;
 };
