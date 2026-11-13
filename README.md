@@ -36,9 +36,10 @@ The host picks the game in the menu:
 
 - **Free-for-all**: everyone against everyone.
 - **Teams**: red against blue. No friendly fire; each side has a home harbour.
-- **Pirate**: one pirate (tougher, faster reload, black sails) against everyone else. Only the pirate can haul
-  the floating treasure chests aboard, and has to sail them home to the pirate cove to bank them. Whoever sinks
-  the pirate becomes the pirate.
+- **Pirate**: one treasure chest floats somewhere out on the bay and everyone races for it. Whoever hauls it
+  aboard turns pirate (black sails, a tougher hull and a faster reload, but a little slower) and has to sail it to
+  the pirate cove while everyone else hunts them. Sink the carrier and the treasure goes over the side for anyone
+  to grab. Most treasure banked wins.
 
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you

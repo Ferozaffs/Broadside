@@ -548,6 +548,27 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
     r.SetLitParams(0.0f, 0.0f);
 }
 
+void ShipModel::DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow) {
+    const Matrix I = MatrixIdentity();
+    const Color iron = {30, 27, 25, 255}, brass = {150, 112, 58, 255};
+    for (int i = 0; i < n; ++i) {
+        Vector3 p = spots[i];
+        float s = i == 3 ? 1.25f : 1.0f;
+        Part(cube, TRS({p.x, p.y + 0.42f * s, p.z}, I, {0.58f * s, 0.09f * s, 0.58f * s}), model, iron);  // roof
+        Part(cube, TRS({p.x, p.y + 0.52f * s, p.z}, I, {0.34f * s, 0.12f * s, 0.34f * s}), model, iron);
+        Part(cube, TRS({p.x, p.y + 0.65f * s, p.z}, I, {0.07f, 0.18f * s, 0.07f}), model, brass);          // ring
+        Part(cube, TRS({p.x, p.y - 0.40f * s, p.z}, I, {0.50f * s, 0.09f * s, 0.50f * s}), model, iron);  // base
+        Part(cube, TRS({p.x, p.y - 0.50f * s, p.z}, I, {0.16f * s, 0.12f * s, 0.16f * s}), model, brass);
+        for (int k = 0; k < 4; ++k) {  // corner posts
+            float dx = (k & 1 ? 0.22f : -0.22f) * s, dz = (k & 2 ? 0.22f : -0.22f) * s;
+            Part(cube, TRS({p.x + dx, p.y, p.z + dz}, I, {0.05f, 0.80f * s, 0.05f}), model, iron);
+        }
+        r.SetLitParams(0.0f, 0.7f + 1.9f * glow);  // the glass glows (warm, not blown out to white)
+        Part(cube, TRS(p, I, {0.40f * s, 0.70f * s, 0.40f * s}), model, {255, 150, 62, 255});
+        r.SetLitParams(0.0f, 0.0f);
+    }
+}
+
 void ShipModel::DrawBall(Renderer& r, Vector3 pos) {
     (void)r;
     mat.maps[MATERIAL_MAP_DIFFUSE].color = {40, 40, 44, 255};

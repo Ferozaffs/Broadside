@@ -48,11 +48,27 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] simtest: fleet station-keeping test (BS_FLEETSTRAIGHT, BS_FLEETLOG) and 6-minute bot matches per mode checking
       friendly fire, harbour refits, booty, pirate hand-over (BS_NOMODES=1 skips them).
 
+## Round 5 feedback (2026-11-13)
+- [x] Less floaty air: ships now fall at full g (shipGravityScale 0.5 -> 1.0). To keep the jumps, a hull that clears the
+      water while rising gets a breach boost (+70% of its vertical speed, max +8 m/s, plus 3 m/s forward). Captains only.
+      Jumps 2-4 s instead of up to 5+, 24% airborne instead of 33%. Spray burst on breach (client).
+- [x] Fleets keep up: escorts never go astern (that flipped their rudder and they floundered for ~10 s after every
+      captain U-turn), keep way on in big turns, stronger catch-up (+0.8x top speed from 15-75 m off), half planing
+      (they skim instead of flying), wait in the slot when the captain heaves to, only peel off to fight what threatens
+      the captain, and rejoin from astern after 4 s >380 m off. Straight-line slot error 135 -> ~60 m.
+- [x] Pirate mode reworked: a single treasure everyone chases. The carrier turns pirate (black sails, 200 hp with the
+      extra added on top, 0.8x reload, 0.9x speed) and must bank it at the cove (harbour 0); sunk -> it floats where
+      they sank. New treasure 6 s after a bank, across the bay from the cove. Everyone is FFA; all harbours repair.
+- [x] Lanterns: real iron lantern housings with warm glowing glass (near ships), new glow texture (hot core + soft
+      halo), slight flicker, warm reflections streaking across the water at night/fog, lighthouses sweep two beams,
+      the hard screen-space dots are gone (soft far halos only past ~220 m).
+- Protocol v7.
+
 ## Known issues / next
-- Escorts keep station loosely: ~60-130 m off their slot behind a straight-sailing captain, ~150 m+ behind a bot
-  that circles at full speed (big jumps throw them off). They do follow and fight near you.
+- Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
+  reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).
 - Bots still run aground near harbours now and then.
-- Not yet pushed to GitHub / released (v0.4.0 zip built locally in dist/). Two-PC network test still never done.
+- Two-PC network test still never done.
 
 ## Later / ideas
 - Base top speed is unchanged (58 kn); only Fair Wind makes it faster. Raise tune::topSpeed if wanted.

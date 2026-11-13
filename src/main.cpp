@@ -242,6 +242,11 @@ public:
     std::vector<NetCrate> crates;
     struct Beam { Vector3 pos; Color c; };
     std::vector<Beam> crateBeams;
+    struct LanternPt { Vector3 p; Color c; };
+    std::vector<LanternPt> lanternPts;  // this frame's lanterns, for their reflections on the water
+    Texture2D beamTex{};                // lighthouse beam: bright at the lamp, fading out
+    void DrawLanternReflections();
+    void DrawLighthouseBeams(const Camera3D& cam);
     void DrawCrates(bool menu);
     // aiming: the guns are laid onto the point under the reticle (plus a gentle assist onto enemies)
     float assist = 0.0f;
@@ -299,25 +304,31 @@ private:
     Color ColorOf(int id) const {
         if (id < 0 || id >= MAX_SHIPS) return ui::kDim;
         const NetShip& s = view[id].s;
-        if (curMode == MODE_PIRATE) return s.team == 1 ? kPirate : kNavy;
+        if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
         return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
     }
     Color TeamOf(int id) const {
-        if (id >= 0 && id < MAX_SHIPS && curMode == MODE_PIRATE && view[id].s.team == 1) return kPirateText;
+        if (id >= 0 && id < MAX_SHIPS && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
         return ColorOf(id);
+    }
+    bool IsCarrier(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].present && (view[id].s.flags & SF_PIRATE); }
+    int Carrier() const {
+        for (int id = 0; id < MAX_SHIPS; ++id)
+            if (IsCarrier(id)) return id;
+        return -1;
     }
     bool IsEnemy(int id) const {
         if (myId < 0 || id == myId || id < 0 || id >= MAX_SHIPS) return false;
         const NetShip &a = view[myId].s, &b = view[id].s;
-        if (curMode == MODE_FFA) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
+        if (curMode != MODE_TEAMS) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
     bool IsCaptain(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].s.leader < 0; }
     Color HarbourColor(int i) const {  // flag on the harbour: who may use it
         int owner = HarbourOwner(curMode, i);
+        if (curMode == MODE_PIRATE && i == 0) return kPirate;  // the cove flies the black flag
         if (owner < 0) return {232, 228, 216, 255};
-        if (curMode == MODE_PIRATE) return owner == 1 ? kPirate : kNavy;
         return kSide[owner];
     }
     float hitMarker = 0.0f;
@@ -352,6 +363,21 @@ void Game::Init() {
     softTex = LoadTextureFromImage(img);
     UnloadImage(img);
     SetTextureFilter(softTex, TEXTURE_FILTER_BILINEAR);
+    {
+        const int BW = 128, BH = 32;
+        Image b = GenImageColor(BW, BH, BLANK);
+        Color* px = (Color*)b.data;
+        for (int y = 0; y < BH; ++y)
+            for (int x = 0; x < BW; ++x) {
+                float u = (x + 0.5f) / BW, v = ((y + 0.5f) / BH - 0.5f) * 2.0f;
+                float along = powf(1.0f - u, 1.7f) * Clamp(u / 0.02f, 0.0f, 1.0f);
+                float across = expf(-v * v / (0.38f * 0.38f));
+                px[y * BW + x] = {255, 255, 255, (unsigned char)(255 * along * across)};
+            }
+        beamTex = LoadTextureFromImage(b);
+        UnloadImage(b);
+        SetTextureFilter(beamTex, TEXTURE_FILTER_BILINEAR);
+    }
     fx.Init();
     scenery.Init(renderer.litShader);
 
@@ -505,7 +531,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             sessionStart = GetTime();
             DisableCursor();
             Feed(curMode == MODE_TEAMS ? "Welcome aboard. Sink the other side!"
-                 : curMode == MODE_PIRATE ? "Welcome aboard. Hunt the pirate, or be him!"
+                 : curMode == MODE_PIRATE ? "Welcome aboard. Grab the treasure and sail it to the pirate cove!"
                                           : "Welcome aboard. Sink them all!",
                  ui::kText);
             if (curFleets) Feed("Your fleet follows you. Lost ships come back at a friendly harbour.", ui::kDim);
@@ -1106,9 +1132,12 @@ void Game::PlayEvent(const GameEvent& e) {
                 q.drag = 0.5f;
             }
             for (int i = 0; i < 16; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(5, 12), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
-            Feed3(NameOf(e.a), TextFormat("  hauled aboard booty (%d)", e.b), "", TeamOf(e.a), gold);
-            if (e.a == myId || (myId >= 0 && view[myId].s.team == 1 && curMode == MODE_PIRATE))
-                floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("BOOTY  %d ABOARD", e.b), gold, 2.4f});
+            Feed3(NameOf(e.a), "  seized the treasure!", "", TeamOf(e.a), gold);
+            if (e.a == myId) {
+                banner = "YOU HAVE THE TREASURE";
+                bannerTime = GetTime();
+                floats.push_back({Vector3Add(e.pos, {0, 10, 0}), "SAIL FOR THE COVE", gold, 3.0f});
+            }
             break;
         }
         case EventType::Bank: {
@@ -1117,8 +1146,8 @@ void Game::PlayEvent(const GameEvent& e) {
                 fx::Particle& q = fx.Add(fx::Spark, Vector3Add(e.pos, {0, 6, 0}), Vector3Add(RandDir(Rnd(8, 24)), {0, Rnd(10, 24), 0}), Rnd(1.0f, 2.2f), 0.35f, 0, gold);
                 q.drag = 0.4f;
             }
-            Feed3(NameOf(e.a), TextFormat("  banked %d booty at the cove!", e.b), "", TeamOf(e.a), gold);
-            if (e.a == myId) { banner = TextFormat("BANKED %d!", e.b); bannerTime = GetTime(); }
+            Feed3(NameOf(e.a), TextFormat("  banked the treasure! (%d)", e.b), "", TeamOf(e.a), gold);
+            if (e.a == myId) { banner = "TREASURE BANKED!"; bannerTime = GetTime(); }
             break;
         }
         case EventType::NewPirate:
@@ -1129,6 +1158,7 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::ChestSpawn:
+            if (curMode == MODE_PIRATE) Feed(e.b == 1 ? "The treasure is adrift!" : "A new treasure has surfaced.", Scenery::PowerColor(PU_COUNT));
             for (int i = 0; i < 24; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(4, 10), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
             break;
         case EventType::CrateSpawn:
@@ -1163,6 +1193,15 @@ void Game::SpawnShipFx(float dt) {
                 Emit(p, v, Rnd(1.0f, 2.2f), Rnd(0.6f, 1.4f), 0.8f, {235, 245, 250, 220}, 0);
             }
             if (id == myId) shake = fmaxf(shake, fminf(2.0f, prevAir[id] * 0.6f));
+        }
+        // breach: the hull just tore clear of a crest going up fast (that's when the sim kicks it on up)
+        if (prevAir[id] <= 0.0f && s.airTime > 0.0f && s.vel.y > tune::breachMinVy && s.leader < 0) {
+            int n = (int)Clamp(s.vel.y * 10.0f, 40.0f, 160.0f);
+            for (int i = 0; i < n; ++i) {
+                Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4.5f, 4.5f), -2.5f, Rnd(-16, 6)});
+                Vector3 v = Vector3Add(Vector3Scale(s.vel, 0.35f), {Rnd(-7, 7), Rnd(2, 9), Rnd(-7, 7)});
+                Emit(p, v, Rnd(0.8f, 1.8f), Rnd(0.7f, 1.6f), 0.9f, {235, 245, 250, 220}, 0);
+            }
         }
         prevAir[id] = s.airTime;
         bool alive = s.flags & SF_ALIVE;
@@ -1270,7 +1309,7 @@ static void LanternSpots(float mastTop, Vector3 out[4]) {
     out[0] = {1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[1] = {-1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[2] = {0.0f, hull::DeckHeight(15.0f) + 1.8f, 16.4f};
-    out[3] = {0.0f, mastTop - 1.5f, 0.0f};
+    out[3] = {0.0f, mastTop - 1.5f, 0.75f};  // hung on the fore side of the mast
 }
 
 std::vector<Vector3> Game::HitPointsWorld(int id, const NetShip& s) const {
@@ -1291,22 +1330,28 @@ void Game::DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Colo
     renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
     Vector4 lights[4];
     int nl = 0;
+    Vector3 spots[4];
+    LanternSpots(shipModel.MastTop(), spots);
+    float camD = Vector3Distance(rv.pos, pos);
     if (alive) {
-        Vector3 spots[4];
-        LanternSpots(shipModel.MastTop(), spots);
         float k = lanternBoost;
+        float t = (float)GetTime();
         for (int i = 0; i < 4; ++i) {
             Vector3 w = HullToWorld(pos, rot, spots[i]);
-            lights[nl++] = {w.x, w.y, w.z, (i == 3 ? 0.6f : 1.6f) * k};
-            // the glow sprite itself: grows with distance so a lantern stays a few pixels wide far away
+            float flick = 0.9f + 0.1f * sinf(t * 11.0f + i * 2.3f + phase * 3.1f) * sinf(t * 4.7f + i + phase);
+            lights[nl++] = {w.x, w.y, w.z, (i == 3 ? 0.6f : 1.6f) * k * flick};
+            // warm halo plus a small near-white core; a little bigger far off so it stays a few pixels wide
             float d = Vector3Distance(rv.pos, w);
-            Color c = i == 3 ? ColorLerp(team, WHITE, 0.35f) : Color{255, 196, 110, 255};
-            c.a = (unsigned char)(255 * Clamp(0.35f + 0.65f * k, 0.0f, 1.0f));
-            fx.Lantern(w, 1.4f + d * 0.006f * (0.6f + k), c);
+            float a = Clamp(0.2f + 0.8f * k, 0.0f, 1.0f) * flick;
+            float size = (1.3f + d * 0.0035f) * (0.75f + 0.5f * k);
+            fx.Lantern(w, size * 2.4f, Fade({255, 140, 52, 255}, a * 0.85f));
+            fx.Lantern(w, size * 0.6f, Fade({255, 206, 140, 255}, a * 0.9f));
+            if (k > 0.3f && d < 700.0f) lanternPts.push_back({w, Fade({255, 170, 84, 255}, a * Clamp((k - 0.3f) * 2.0f, 0.0f, 1.0f))});
         }
     }
     renderer.SetLights(lights, nl);
-    shipModel.Draw(renderer, m, sail, team, flash, hpFrac, alive, Vector3Distance(rv.pos, pos), phase);
+    shipModel.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD, phase);
+    if (camD < 260.0f) shipModel.DrawLanterns(renderer, m, spots, 4, alive ? lanternBoost : 0.0f);
     renderer.SetDamage(0.0f, nullptr, 0);
     renderer.SetLights(nullptr, 0);
 }
@@ -1427,12 +1472,15 @@ void Game::RenderWorld(float dt, bool menu) {
         scenery.DrawHarbours(renderer, rv, Ocean(), flags, (float)GetTime());
         for (int i = 0; i < 4; ++i) {  // lighthouse lamps
             Vector3 L = scenery.Lamp(i);
-            fx.Lantern(L, 5.0f + Vector3Distance(rv.pos, L) * 0.006f, Color{255, 214, 140, (unsigned char)(150 + 100 * lanternBoost)});
+            float d = Vector3Distance(rv.pos, L);
+            fx.Lantern(L, (9.0f + d * 0.008f) * (0.6f + 0.6f * lanternBoost), Fade({255, 196, 120, 255}, 0.45f + 0.5f * lanternBoost));
+            fx.Lantern(L, 2.5f + d * 0.003f, Fade({255, 240, 210, 255}, 0.7f + 0.3f * lanternBoost));
         }
     }
     DrawCrates(menu);
 
     // ships
+    lanternPts.clear();
     if (menu) {
         for (const Ship& s : menuWorld.ships)
             if (s.active)
@@ -1464,6 +1512,8 @@ void Game::RenderWorld(float dt, bool menu) {
         L.sun = renderer.atm.smokeSun;
         fx.Draw(cam, L);
     }
+    DrawLanternReflections();
+    DrawLighthouseBeams(cam);
     // light pillars over the crates so you can find them across the bay
     if (!crateBeams.empty()) {
         rlDrawRenderBatchActive();
@@ -1488,6 +1538,96 @@ void Game::RenderWorld(float dt, bool menu) {
     flash = fmaxf(0.0f, flash - dt * 1.5f);
 }
 
+// Each lantern lays a shimmering streak on the water towards the viewer (night and fog only).
+// A strip of quads that follows the swell, textured with the glow so it fades at the ends.
+void Game::DrawLanternReflections() {
+    if (lanternPts.empty()) return;
+    rlDrawRenderBatchActive();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlDisableBackfaceCulling();
+    rlSetTexture(fx.glowTex.id);
+    rlBegin(RL_QUADS);
+    const float t = (float)GetTime();
+    const int N = 6;
+    for (size_t li = 0; li < lanternPts.size(); ++li) {
+        const LanternPt& L = lanternPts[li];
+        float sea = Ocean().Height(L.p.x, L.p.z);
+        float hgt = L.p.y - sea;
+        if (hgt < 0.5f) continue;
+        Vector2 to = {rv.pos.x - L.p.x, rv.pos.z - L.p.z};
+        float dist = Vector2Length(to);
+        if (dist < 2.0f) continue;
+        to = Vector2Scale(to, 1.0f / dist);
+        Vector2 side = {-to.y, to.x};
+        float len = Clamp(hgt * 2.0f, 5.0f, 32.0f) * (1.0f + dist * 0.0012f);
+        float wid = (1.4f + dist * 0.0025f) * (0.85f + 0.15f * sinf(t * 3.0f + li));
+        Vector3 row[N + 1][2];
+        for (int k = 0; k <= N; ++k) {
+            float s = (-0.2f + 1.2f * k / N) * len;
+            for (int j = 0; j < 2; ++j) {
+                float sd = (j ? 0.5f : -0.5f) * wid;
+                float x = L.p.x + to.x * s + side.x * sd, z = L.p.z + to.y * s + side.y * sd;
+                row[k][j] = {x, Ocean().Height(x, z) + 0.2f, z};
+            }
+        }
+        Color c = L.c;
+        c.a = (unsigned char)(c.a * 0.55f);
+        rlColor4ub(c.r, c.g, c.b, c.a);
+        for (int k = 0; k < N; ++k) {
+            float v0 = (float)k / N, v1 = (float)(k + 1) / N;
+            rlTexCoord2f(0.0f, v0); rlVertex3f(row[k][0].x, row[k][0].y, row[k][0].z);
+            rlTexCoord2f(0.0f, v1); rlVertex3f(row[k + 1][0].x, row[k + 1][0].y, row[k + 1][0].z);
+            rlTexCoord2f(1.0f, v1); rlVertex3f(row[k + 1][1].x, row[k + 1][1].y, row[k + 1][1].z);
+            rlTexCoord2f(1.0f, v0); rlVertex3f(row[k][1].x, row[k][1].y, row[k][1].z);
+        }
+    }
+    rlEnd();
+    rlSetTexture(0);
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+    EndBlendMode();
+}
+
+// Lighthouses sweep two beams round at night and in fog; camera-facing ribbons from the lamp.
+void Game::DrawLighthouseBeams(const Camera3D& cam) {
+    if (lanternBoost < 0.3f) return;
+    float k = Clamp((lanternBoost - 0.3f) / 0.5f, 0.0f, 1.0f);
+    float fogLift = 1.0f + Clamp(renderer.atm.fogDensity * 250.0f, 0.0f, 1.5f);  // beams show best in haze
+    rlDrawRenderBatchActive();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlDisableBackfaceCulling();
+    rlSetTexture(beamTex.id);
+    rlBegin(RL_QUADS);
+    const float t = (float)GetTime();
+    for (int i = 0; i < 4; ++i) {
+        Vector3 L = scenery.Lamp(i);
+        for (int b = 0; b < 2; ++b) {
+            float ang = t * 0.45f + i * 1.7f + b * PI;
+            Vector3 dir = Vector3Normalize({cosf(ang), -0.035f, sinf(ang)});
+            const float len = 420.0f, w0 = 3.0f, w1 = 75.0f;
+            Vector3 E = Vector3Add(L, Vector3Scale(dir, len));
+            auto sideAt = [&](Vector3 p) {
+                Vector3 s = Vector3CrossProduct(dir, Vector3Normalize(Vector3Subtract(cam.position, p)));
+                return Vector3Length(s) < 1e-3f ? Vector3{0, 1, 0} : Vector3Normalize(s);
+            };
+            Vector3 s0 = Vector3Scale(sideAt(L), w0 * 0.5f), s1 = Vector3Scale(sideAt(E), w1 * 0.5f);
+            // looking straight down a beam it would cover the screen: fade it as it points at us
+            float facing = fabsf(Vector3DotProduct(dir, Vector3Normalize(Vector3Subtract(cam.position, L))));
+            float a = 0.2f * k * fogLift * (1.0f - 0.85f * facing * facing);
+            rlColor4ub(255, 230, 180, (unsigned char)Clamp(255.0f * a, 0.0f, 255.0f));
+            rlTexCoord2f(0.0f, 0.0f); rlVertex3f(L.x - s0.x, L.y - s0.y, L.z - s0.z);
+            rlTexCoord2f(1.0f, 0.0f); rlVertex3f(E.x - s1.x, E.y - s1.y, E.z - s1.z);
+            rlTexCoord2f(1.0f, 1.0f); rlVertex3f(E.x + s1.x, E.y + s1.y, E.z + s1.z);
+            rlTexCoord2f(0.0f, 1.0f); rlVertex3f(L.x + s0.x, L.y + s0.y, L.z + s0.z);
+        }
+    }
+    rlEnd();
+    rlSetTexture(0);
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+    EndBlendMode();
+}
+
 // Lanterns as screen-space halos too, so they cut through fog and darkness much further than
 // the ships themselves (the 3D glow sprite gets fogged like everything else)
 void Game::DrawLanternHalos(bool menu) {
@@ -1504,12 +1644,14 @@ void Game::DrawLanternHalos(bool menu) {
             Vector2 sp;
             if (!rv.Project(w, sp)) continue;
             float d = Vector3Distance(rv.pos, w);
-            float vis = expf(-d * a.fogDensity * 0.18f) * a.lanterns;
+            // only far off, where the 3D sprite has faded into the fog or shrunk to nothing
+            float vis = expf(-d * a.fogDensity * 0.18f) * a.lanterns * Clamp((d - 220.0f) / 300.0f, 0.0f, 1.0f);
             if (vis < 0.03f) continue;
-            float r = Clamp(1600.0f / fmaxf(d, 1.0f), 3.0f, 16.0f);
-            Color c = i == 3 ? ColorLerp(team, WHITE, 0.4f) : Color{255, 186, 100, 255};
-            DrawCircleGradient((int)sp.x, (int)sp.y, r * 2.4f, Fade(c, 0.3f * vis), Fade(c, 0.0f));
-            DrawCircleV(sp, fmaxf(1.2f, r * 0.22f), Fade(ColorLerp(c, WHITE, 0.6f), 0.85f * vis));
+            float r = Clamp(2400.0f / fmaxf(d, 1.0f), 2.0f, 6.0f);
+            Color c = {255, 176, 92, 255};
+            DrawCircleGradient((int)sp.x, (int)sp.y, r * 2.2f, Fade(c, 0.22f * vis), Fade(c, 0.0f));
+            DrawCircleGradient((int)sp.x, (int)sp.y, r * 0.7f, Fade({255, 236, 200, 255}, 0.7f * vis), Fade(c, 0.0f));
+            (void)team;
         }
     };
     if (menu) {
@@ -1606,7 +1748,11 @@ void Game::DrawHUD() {
         int mySide = me ? me->team : -1;
         bool friendly = owner < 0 || owner == mySide;
         Color c = friendly ? (owner < 0 ? kText : kGreen) : kRed;
-        const char* what = curMode == MODE_PIRATE && owner == 1 ? "PIRATE COVE" : friendly ? "HARBOUR" : "ENEMY PORT";
+        const char* what = friendly ? "HARBOUR" : "ENEMY PORT";
+        if (curMode == MODE_PIRATE && i == 0) {
+            c = Scenery::PowerColor(PU_COUNT);
+            what = me && (me->flags & SF_PIRATE) ? "BANK THE TREASURE HERE" : "PIRATE COVE";
+        }
         float a = Clamp(1.4f - d / 1400.0f, 0.45f, 1.0f);
         DrawCircleV(sp, 9.0f, A({0, 0, 0, 150}, a));
         DrawCircleLines((int)sp.x, (int)sp.y, 8.0f, A(c, a));
@@ -1623,11 +1769,13 @@ void Game::DrawHUD() {
         float d = Vector3Distance(rv.pos, p);
         Vector2 sp;
         if (d < 60.0f || !rv.Project(p, sp) || sp.x < -20 || sp.y < -20 || sp.x > W + 20 || sp.y > H + 20) continue;
-        float a = Clamp(1.3f - d / 900.0f, 0.4f, 1.0f);
+        float pulse = 0.5f + 0.5f * sinf((float)now * 5.0f);
         Color gold = Scenery::PowerColor(PU_COUNT);
-        DrawPoly(sp, 4, 9.0f, 45.0f, A({0, 0, 0, 150}, a));
-        DrawPoly(sp, 4, 7.0f, 45.0f, A(gold, a));
-        if (d < 900.0f) Text(TextFormat("%d m", (int)d), sp.x, sp.y + 10, 12, A(gold, a * 0.8f), false, Center);
+        DrawCircleV(sp, 15.0f + 4.0f * pulse, Fade(gold, 0.15f));
+        DrawPoly(sp, 4, 11.0f, 45.0f, {0, 0, 0, 170});
+        DrawPoly(sp, 4, 8.5f, 45.0f, gold);
+        Label("TREASURE", sp.x, sp.y - 26, 11, gold, Center);
+        Text(TextFormat("%d m", (int)d), sp.x, sp.y + 13, 12, gold, false, Center);
     }
     // ---- friends and the pirate: always marked ----
     for (int id = 0; id < MAX_SHIPS && myId >= 0; ++id) {
@@ -1646,6 +1794,7 @@ void Game::DrawHUD() {
             DrawCircleV({sp.x - 3, sp.y - 1}, 1.8f, kRed);
             DrawCircleV({sp.x + 3, sp.y - 1}, 1.8f, kRed);
             Label("PIRATE", sp.x, sp.y - 24, 10, kRed, Center);
+            if (curMode == MODE_PIRATE) DrawPoly({sp.x, sp.y - 36}, 4, 5.0f, 45.0f, Scenery::PowerColor(PU_COUNT));  // has the treasure
             Text(TextFormat("%d m", (int)d), sp.x, sp.y + 11, 12, kRed, false, Center);
         } else {  // a friendly chevron
             Color c = mine ? kGreen : TeamOf(id);
@@ -1662,11 +1811,14 @@ void Game::DrawHUD() {
         Text(":", W * 0.5f, r.y + 3, 18, kDim, true, Center);
         Text(b, W * 0.5f + 12, r.y + 3, 18, ColorLerp(kSide[1], WHITE, 0.25f), true, Left);
     } else if (curMode == MODE_PIRATE) {
-        int pid = -1;
-        for (int id = 0; id < MAX_SHIPS; ++id)
-            if (view[id].present && (view[id].s.flags & SF_PIRATE)) pid = id;
-        const char* t = pid >= 0 ? TextFormat("PIRATE  %s   \xC2\xB7   BOOTY ABOARD %d   \xC2\xB7   BANKED %d", NameOf(pid).c_str(), view[pid].s.booty, teamScore[1])
-                                 : "NO PIRATE YET";
+        int pid = Carrier();
+        auto toCove = [&](Vector3 p) {
+            return pred.harbours.empty() ? 0 : (int)Vector2Distance({p.x, p.z}, {pred.harbours[0].x, pred.harbours[0].z});
+        };
+        const char* t = "A NEW TREASURE SURFACES SOON";
+        if (pid >= 0 && pid == myId) t = TextFormat("YOU HAVE THE TREASURE   \xC2\xB7   %d m TO THE COVE", toCove(view[pid].s.pos));
+        else if (pid >= 0) t = TextFormat("%s HAS THE TREASURE   \xC2\xB7   %d m FROM THE COVE", NameOf(pid).c_str(), toCove(view[pid].s.pos));
+        else if (!chests.empty() && me) t = TextFormat("THE TREASURE IS ADRIFT   \xC2\xB7   %d m", (int)Vector2Distance({chests[0].x, chests[0].z}, {me->pos.x, me->pos.z}));
         Vector2 m = Measure(t, 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
@@ -1770,8 +1922,8 @@ void Game::DrawHUD() {
         Color gold = Scenery::PowerColor(PU_COUNT);
         Panel(r, kPanel, 8);
         DrawPoly({r.x + 18, r.y + 16}, 4, 7.5f, 0.0f, gold);
-        Label(TextFormat("BOOTY ABOARD  %d", me->booty), r.x + 34, r.y + 9, 12, gold);
-        Text(me->booty > 0 ? "take it home to the cove" : TextFormat("banked %d", me->banked), r.x + r.width - 14, r.y + 8, 14, kDim, false, Right);
+        Label("TREASURE ABOARD", r.x + 34, r.y + 9, 12, gold);
+        Text("everyone is after you", r.x + r.width - 14, r.y + 8, 14, kDim, false, Right);
     }
     if (me && alive) {
         for (int p = PU_COUNT - 1; p >= 0; --p) {
@@ -1861,9 +2013,11 @@ void Game::DrawHUD() {
     // ---- scoreboard ----
     if (IsKeyDown(KEY_TAB) || opt.showScores) {
         std::vector<int> order;
-        for (int side = (curMode == MODE_FFA ? -1 : 0); side <= (curMode == MODE_FFA ? -1 : 1); ++side)
+        for (int side = (curMode != MODE_TEAMS ? -1 : 0); side <= (curMode != MODE_TEAMS ? -1 : 1); ++side)
             for (int id = 0; id < MAX_SHIPS; ++id)
                 if (view[id].present && IsCaptain(id) && (side < 0 || view[id].s.team == side)) order.push_back(id);
+        if (curMode == MODE_PIRATE)
+            std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return view[a].s.banked > view[b].s.banked; });
         int rows = (int)order.size();
         bool booty = curMode == MODE_PIRATE;
         float pw = booty ? 640 : 560, ph = 92 + rows * 40.0f;

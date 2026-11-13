@@ -17,7 +17,13 @@ constexpr int CANNONS_PER_SIDE = 4;
 namespace tune {
 constexpr float rhoWater = 1025.0f;
 constexpr float gravity = 9.81f;
-constexpr float shipGravityScale = 0.5f;  // ships fall at g * this (floaty on purpose; balls use full g)
+constexpr float shipGravityScale = 1.0f;  // ships fall at g * this (balls use full g too)
+// Breach boost: the moment a hull clears the crest while rising it gets a kick up (and a little
+// forward), so jumps stay big under full gravity but go up fast and come down fast.
+constexpr float breachMinVy = 3.0f;        // m/s upward needed to count as a breach
+constexpr float breachGain = 0.7f;         // extra vertical speed as a fraction of the takeoff speed
+constexpr float breachMax = 8.0f;          // m/s cap on that extra
+constexpr float breachKick = 3.0f;         // m/s forward
 // arcade drive: a speed controller on the hull instead of real sail aerodynamics.
 // Air time comes from hitting swells fast: the hull follows the face up and the crest drops away.
 constexpr float topSpeed = 30.0f;           // m/s full ahead (about 58 kn)
@@ -56,13 +62,14 @@ constexpr float respawnTime = 7.0f;
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
 constexpr float escortHp = 60.0f;
 constexpr float escortSpeed = 1.15f;       // escorts are a little quicker so they can keep station
-constexpr float pirateHp = 250.0f;         // one against many
+constexpr float pirateHp = 200.0f;         // the treasure carrier: one against many
 constexpr float pirateReload = 0.8f;
 constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
-constexpr int chestSlots = 8;              // pirate booty (the first chestCount respawn on their own)
-constexpr int chestCount = 5;
-constexpr float chestRespawn = 8.0f;
+constexpr int chestSlots = 1;              // pirate mode: the one treasure everyone chases
+constexpr float chestRespawn = 6.0f;       // s after it is banked before a new one appears
+constexpr float pirateSpeed = 0.9f;        // the treasure is heavy: its carrier is a little slower
+constexpr float escortCatchUp = 0.8f;      // max extra speed (x top speed) for an escort far off station
 }  // namespace tune
 
 // ---- hull shape (hull space: +z bow, +y up, +x port, origin at waterline amidships) ----
@@ -157,8 +164,9 @@ struct Ship {
     int8_t leader = -1;   // escorts: the captain they sail with
     uint8_t slot = 0;     // escorts: place in the formation
     float catchUp = 0.0f;  // escorts: extra speed while they're far off station
+    float strayTime = 0.0f;  // escorts: how long they've been hopelessly far off station (then they rejoin)
     bool stowed = false;  // escort that went down and waits for its captain to respawn or reach a harbour
-    bool pirate = false;
+    bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
     int booty = 0;        // pirate: chests aboard
     int banked = 0;       // pirate: chests brought home (score)
@@ -237,7 +245,7 @@ public:
     bool fleets = false;
     std::vector<Harbour> harbours;
     Crate chests[tune::chestSlots];  // pirate booty
-    int teamScore[2] = {0, 0};       // teams: ships sunk; pirate mode: [1] = booty banked
+    int teamScore[2] = {0, 0};       // teams: ships sunk
     uint32_t tick = 0;
     Ship ships[MAX_SHIPS];
     std::vector<Ball> balls;
@@ -264,8 +272,8 @@ private:
     void UpdateHarbours(float dt);
     void UpdateChests(float dt);
     void PlaceChest(Crate& c, bool random, float x, float z);
-    void EnsurePirate();
     void SetPirate(int id);
+    void DropTreasure(Ship& carrier);
     float MaxHpOf(const Ship& s) const;
     float rockInner = 1e9f;  // no rock comes closer to the centre than this
     uint16_t nextBallId = 1;

@@ -58,7 +58,8 @@ public:
     void Update(float dt, const OceanCPU& ocean, Vector3 wind);
     void Draw(const Camera3D& cam, const Lighting& L);
 
-    Texture2D soft{};  // plain radial blob, also handy for other billboards
+    Texture2D soft{};     // plain radial blob, also handy for other billboards
+    Texture2D glowTex{};  // light source: tight core, soft halo, long faint tail
 
 private:
     std::vector<Particle> ps;

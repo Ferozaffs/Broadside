@@ -277,9 +277,9 @@ int RunSimTest() {
                 if (e.type == EventType::Kill) kills++;
                 if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { aground++; if (e.value > 6.0f) groundings++; }
                 if (e.type == EventType::Resupply) resupply += e.b;
-                if (e.type == EventType::Booty) (e.flags & EF_DENY) ? denied++ : booty++;
-                if (e.type == EventType::Bank) banks += e.b;
-                if (e.type == EventType::NewPirate) pirates++;
+                if (e.type == EventType::Booty) booty++;
+                if (e.type == EventType::Bank) banks++;
+                if (e.type == EventType::ChestSpawn && e.b == 1) denied++;
             }
             g.events.clear();
             if (i % 60 == 0)  // how well escorts keep station on a living captain
@@ -292,7 +292,13 @@ int RunSimTest() {
         }
         printf("mode %-12s ships %d, %.0f min: %d hits, %d sunk, friendly-fire hits %d, escorts recovered in harbour %d, escort avg %.0f m from captain, team score %d-%d, rock hits %d (%d hard)",
                modeName[m], active, mins, hits, kills, friendly, resupply, stationN ? stationErr / stationN : 0.0f, g.teamScore[0], g.teamScore[1], aground, groundings);
-        if (m == MODE_PIRATE) printf(", booty grabbed %d, chests sunk by navy %d, banked %d, pirate changed hands %d", booty, denied, banks, pirates);
+        if (m == MODE_PIRATE) {
+            printf(", treasure grabbed %d, dropped by a sinking carrier %d, banked %d (", booty, denied, banks);
+            for (const Ship& x : g.ships)
+                if (x.active && x.leader < 0) printf(" %s:%d", x.name.c_str(), x.banked);
+            printf(" )");
+            (void)pirates;
+        }
         printf("\n");
     }
     return 0;

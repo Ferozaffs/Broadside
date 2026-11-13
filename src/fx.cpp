@@ -67,6 +67,23 @@ void System::Init() {
             }
     smokeTex = ToTexture(smoke);
 
+    {  // light glow: a lamp seen through a little haze
+        const int G = 128;
+        Image glow = GenImageColor(G, G, BLANK);
+        Color* gp = (Color*)glow.data;
+        for (int y = 0; y < G; ++y)
+            for (int x = 0; x < G; ++x) {
+                float u = (x + 0.5f) / G * 2 - 1, w = (y + 0.5f) / G * 2 - 1;
+                float r = sqrtf(u * u + w * w);
+                float core = expf(-r * r / (0.06f * 0.06f));
+                float halo = 0.42f * expf(-r * r / (0.25f * 0.25f));
+                float tail = 0.16f * powf(fmaxf(0.0f, 1.0f - r), 3.0f);
+                float a = fminf(1.0f, core + halo + tail);
+                gp[y * G + x] = {255, 255, 255, (unsigned char)(255 * a)};
+            }
+        glowTex = ToTexture(glow);
+    }
+
     const int F = 64;
     Image fire = GenImageColor(F, F, BLANK);
     px = (Color*)fire.data;
@@ -338,11 +355,12 @@ void System::Draw(const Camera3D& cam, const Lighting& L) {
             quad(flashTex, full, p, c);
         }
     }
+    const Rectangle gfull = {0, 0, (float)glowTex.width, (float)glowTex.height};
     for (const Glow& g : glows) {
         Particle p{};
         p.p = g.p;
         p.size = g.size;
-        quad(soft, full, p, g.c);
+        quad(glowTex, gfull, p, g.c);
     }
     glows.clear();
     EndBlendMode();
