@@ -341,6 +341,19 @@ Buf SynthTreasure() {
     return b;
 }
 
+Buf SynthConfirm() {
+    Buf b = Make(0.5f);
+    float p = 0;
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR;
+        p += TAU * (520.0f + 500.0f * expf(-t / 0.01f)) / SR;
+        b[i] = sinf(p) * Env(t, 0.001f, 0.025f) * 0.9f;
+    }
+    Bell(b, 0.012f, 1760.0f, 0.35f, 0.22f);
+    Normalize(b, 0.7f);
+    return b;
+}
+
 Buf SynthSink(uint32_t seed) {
     Rng r(seed);
     Buf b = Make(4.5f);
@@ -394,12 +407,13 @@ std::vector<Buf> Variants(Id id) {
         case Chime: v.push_back(SynthChime()); break;
         case Treasure: v.push_back(SynthTreasure()); break;
         case Sink: for (uint32_t s = 1; s <= 2; ++s) v.push_back(SynthSink(s * 41)); break;
+        case Confirm: v.push_back(SynthConfirm()); break;
         default: break;
     }
     return v;
 }
 
-const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink"};
+const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm"};
 
 // ---- live ambience (audio thread) ------------------------------------------------------------
 struct AmbienceGen {

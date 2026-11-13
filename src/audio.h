@@ -22,6 +22,7 @@ enum Id {
     Chime,       // power-up crate
     Treasure,    // treasure seized / banked
     Sink,        // a ship going down
+    Confirm,     // your shot landed (a knock and a bell tick)
     Count
 };
 

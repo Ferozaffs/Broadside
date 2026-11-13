@@ -37,19 +37,24 @@ Sail through the floating crates for 15-30 s power-ups: **Rapid Reload**, **Trip
 
 The host picks the game in the menu:
 
-- **Free-for-all**: everyone against everyone.
-- **Teams**: red against blue. No friendly fire; each side has a home harbour.
+- **Free-for-all**: everyone against everyone. First to 12 sinkings.
+- **Teams**: red against blue. No friendly fire; each side has a home harbour. First side to 20 sinkings.
 - **Pirate**: one treasure chest floats somewhere out on the bay and everyone races for it. Whoever hauls it
-  aboard turns pirate (black sails, a tougher hull and a faster reload, but a little slower) and has to sail it to
-  the pirate cove while everyone else hunts them. Sink the carrier and the treasure goes over the side for anyone
-  to grab. Most treasure banked wins.
+  aboard turns pirate (black sails, a slightly tougher hull and a faster reload, but slower, no Fair Wind and no
+  repairs) and has to sail it to the pirate cove and hold the cove for 10 seconds to unload it, while everyone
+  else hunts them. Sink the carrier and the treasure goes over the side for anyone to grab. First to 5 banked.
+
+Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
+the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
+Landlubber for the captain who found the most rocks), and 18 seconds later a fresh round starts.
 
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
 sail into a friendly harbour, which also repairs your hull.
 
-Aiming: the cannonballs land where the reticle points (on an enemy hull, the sea or the rocks). The guns only
-swing about 26 degrees either side of the beam; "CARRIAGE LIMIT" means they can't reach.
+Aiming: the cannonballs land where the reticle points (on an enemy hull, the sea or the rocks). The guns swing
+about 34 degrees either side of the beam; the dashed lines on the water show how far. When the reticle is outside
+them the HUD says "GUNS CAN'T BEAR" and which way to steer.
 
 ## Building
 

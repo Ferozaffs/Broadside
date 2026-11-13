@@ -235,6 +235,17 @@ public:
     int curMode = MODE_FFA;
     bool curFleets = false;
     uint16_t teamScore[2] = {0, 0};
+    // rounds
+    uint8_t matchState = 0, matchRound = 1;
+    float matchClock = 0.0f;
+    struct AwardLine { int ship, id; float value; };
+    std::vector<AwardLine> awards;
+    int winShip = -1, winTeam = -1;
+    bool winByLimit = false;
+    bool lowHpWarned = false;
+    int arcOut = 0;      // reticle outside the gun carriages' swing: +1 forward of it, -1 aft
+    void DrawFiringArcs();
+    void DrawResults(float W, float H);
     std::vector<NetCrate> chests;  // pirate booty
     std::string banner;            // big centre message ("YOU ARE THE PIRATE")
     double bannerTime = -100;
@@ -648,6 +659,9 @@ void Game::Interpolate() {
     chests = snaps.back().chests;
     teamScore[0] = snaps.back().teamScore[0];
     teamScore[1] = snaps.back().teamScore[1];
+    matchState = snaps.back().matchState;
+    matchRound = snaps.back().round;
+    matchClock = snaps.back().matchClock;
     float t = (b->time > a->time) ? (float)((renderTime - a->time) / (b->time - a->time)) : 0.0f;
     t = Clamp(t, 0.0f, 1.0f);
     float extra = (a == b) ? (float)Clamp(renderTime - a->time, 0.0, 0.25) : 0.0f;
@@ -906,6 +920,125 @@ void Game::RecordFrame() {
         if (opt.autopilot) AutopilotReport();
         quit = true;
     }
+}
+
+// The guns' reach on the water: two dashed lines either side of the beam where the carriages stop,
+// gold on the side you're aiming when it's loaded, faint on the other side.
+void Game::DrawFiringArcs() {
+    if (myId < 0 || !view[myId].present || matchState != 0) return;
+    const NetShip& s = view[myId].s;
+    if (!(s.flags & SF_ALIVE)) return;
+    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+    float hd = atan2f(f.x, f.z);
+    int aimSide = AimSide(s.rot, curInput.aim);
+    rlDrawRenderBatchActive();
+    rlSetTexture(rlGetTextureIdDefault());  // plain white (0 would keep whatever was bound last)
+    rlDisableBackfaceCulling();
+    rlBegin(RL_QUADS);
+    for (int side = 0; side < 2; ++side) {
+        bool active = side == aimSide;
+        bool ready = s.reload[side] <= 0.01f;
+        Color c = active ? (ready ? ui::kGold : Color{230, 236, 240, 255}) : Color{230, 236, 240, 255};
+        float baseA = active ? (arcOut ? 0.75f : 0.5f) : 0.14f;
+        float sg = side == 0 ? 1.0f : -1.0f;
+        for (int edge = -1; edge <= 1; edge += 2) {
+            // body-space direction of this edge -> world heading
+            float yaw = edge * tune::gunTraverse;
+            Vector3 dB = {sg * cosf(yaw), 0, sinf(yaw)};
+            float a = hd + atan2f(dB.x, dB.z);
+            Vector2 d = {sinf(a), cosf(a)}, n = {-d.y, d.x};
+            for (float r = 14.0f; r < 470.0f; r += 16.0f) {
+                float r1 = r + 9.0f;  // dashes
+                Vector3 p0 = {s.pos.x + d.x * r, 0, s.pos.z + d.y * r}, p1 = {s.pos.x + d.x * r1, 0, s.pos.z + d.y * r1};
+                p0.y = Ocean().Height(p0.x, p0.z) + 0.35f;
+                p1.y = Ocean().Height(p1.x, p1.z) + 0.35f;
+                float w = 0.35f + 0.0022f * Vector3Distance(rv.pos, p0);
+                float fade = baseA * (1.0f - r / 470.0f) * Clamp((r - 14.0f) / 30.0f, 0.0f, 1.0f);
+                rlColor4ub(c.r, c.g, c.b, (unsigned char)(255 * fade));
+                rlVertex3f(p0.x + n.x * w, p0.y, p0.z + n.y * w);
+                rlVertex3f(p0.x - n.x * w, p0.y, p0.z - n.y * w);
+                rlVertex3f(p1.x - n.x * w, p1.y, p1.z - n.y * w);
+                rlVertex3f(p1.x + n.x * w, p1.y, p1.z + n.y * w);
+            }
+        }
+    }
+    rlEnd();
+    rlSetTexture(0);
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+}
+
+// Between rounds: who won, the final standings, the awards, and the countdown to the next round.
+void Game::DrawResults(float W, float H) {
+    using namespace ui;
+    DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
+    bool won = (winShip >= 0 && winShip == myId) || (winTeam >= 0 && myId >= 0 && view[myId].present && view[myId].s.team == winTeam);
+    std::string title;
+    Color tc = kGold;
+    if (curMode == MODE_TEAMS) {
+        if (winTeam < 0) { title = "A DRAW"; tc = kText; }
+        else { title = winTeam == 0 ? "RED WINS THE ROUND" : "BLUE WINS THE ROUND"; tc = kSide[winTeam]; }
+    } else if (winShip < 0) {
+        title = "NOBODY SCORED";
+        tc = kText;
+    } else {
+        title = won ? "VICTORY" : TextFormat("%s WINS", TextToUpper(NameOf(winShip).c_str()));
+    }
+    float y = H * 0.12f;
+    Text(title.c_str(), W * 0.5f, y, 64, tc, true, Center);
+    Text(won && curMode != MODE_TEAMS ? "the sea is yours, captain" : (winByLimit ? "score limit reached" : "time's up"), W * 0.5f, y + 74, 20, kDim, false, Center);
+
+    // standings
+    std::vector<int> order;
+    for (int id = 0; id < MAX_SHIPS; ++id)
+        if (view[id].present && IsCaptain(id)) order.push_back(id);
+    auto score = [&](int id) { return curMode == MODE_PIRATE ? (int)view[id].s.banked : (int)view[id].s.kills; };
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        return score(a) != score(b) ? score(a) > score(b) : view[a].s.deaths < view[b].s.deaths;
+    });
+    if (order.size() > 8) order.resize(8);
+    const float colW = 420, gap = 40, total = colW * 2 + gap;
+    float x0 = W * 0.5f - total * 0.5f, x1 = x0 + colW + gap;
+    float top = y + 128;
+    Rectangle ps = {x0, top, colW, 60 + order.size() * 38.0f};
+    Panel(ps, {10, 16, 24, 230}, 14);
+    Label("STANDINGS", ps.x + 22, ps.y + 20, 12, kDim);
+    Label(curMode == MODE_PIRATE ? "BANKED" : "SUNK", ps.x + colW - 110, ps.y + 20, 12, kDim, Center);
+    Label("LOST", ps.x + colW - 40, ps.y + 20, 12, kDim, Center);
+    for (size_t i = 0; i < order.size(); ++i) {
+        int id = order[i];
+        float ry = ps.y + 46 + i * 38.0f;
+        if (id == myId) DrawRectangleRec({ps.x + 10, ry - 4, 3, 32}, kGold);
+        Text(TextFormat("%d", (int)i + 1), ps.x + 26, ry, 20, i == 0 ? kGold : kDim, true, Center);
+        DrawCircleV({ps.x + 50, ry + 11}, 6, TeamOf(id));
+        Text(NameOf(id).c_str(), ps.x + 64, ry, 20, id == myId ? kGold : kText, true, Left, false);
+        Text(TextFormat("%d", score(id)), ps.x + colW - 110, ry, 20, kText, true, Center);
+        Text(TextFormat("%d", view[id].s.deaths), ps.x + colW - 40, ry, 20, kDim, false, Center);
+    }
+    // awards
+    static const char* kAward[7] = {"ADMIRAL OF THE FLEET", "MASTER GUNNER", "FLYING DUTCHMAN", "SPIN DOCTOR", "TREASURE HUNTER", "LANDLUBBER", "UNSINKABLE"};
+    Rectangle pa = {x1, top, colW, 60 + awards.size() * 50.0f};
+    Panel(pa, {10, 16, 24, 230}, 14);
+    Label("AWARDS", pa.x + 22, pa.y + 20, 12, kDim);
+    for (size_t i = 0; i < awards.size(); ++i) {
+        const AwardLine& aw = awards[i];
+        if (aw.id < 0 || aw.id > 6) continue;
+        float ry = pa.y + 44 + i * 50.0f;
+        const char* what = "";
+        switch (aw.id) {
+            case 0: what = TextFormat("%d ship%s sunk", (int)aw.value, (int)aw.value == 1 ? "" : "s"); break;
+            case 1: what = TextFormat("%d damage dealt", (int)aw.value); break;
+            case 2: what = TextFormat("%.1f s in the air", aw.value); break;
+            case 3: what = TextFormat("a %d\xC2\xB0 spin", (int)aw.value); break;
+            case 4: what = TextFormat("%d treasure banked", (int)aw.value); break;
+            case 5: what = TextFormat("ran aground %d times", (int)aw.value); break;
+            case 6: what = TextFormat("sunk %d time%s", (int)roundf(aw.value), (int)roundf(aw.value) == 1 ? "" : "s"); break;
+        }
+        Label(kAward[aw.id], pa.x + 22, ry, 11, aw.id == 5 ? kDim : kGold);
+        Text(NameOf(aw.ship).c_str(), pa.x + 22, ry + 14, 20, aw.ship == myId ? kGold : kText, true, Left, false);
+        Text(what, pa.x + colW - 22, ry + 16, 16, kDim, false, Right);
+    }
+    Text(TextFormat("NEXT ROUND IN %d", (int)ceilf(fmaxf(matchClock, 0.0f))), W * 0.5f, H - 90, 22, kText, true, Center);
 }
 
 // The listener is the camera. Ambience: the sea always, wind by weather and by how fast we're going
@@ -1314,6 +1447,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 flash = fmaxf(flash, 0.25f);
             }
             if (e.a == myId && e.b != myId) {
+                sfx::PlayFlat(sfx::Confirm, 0.45f, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 0.85f : 1.0f);
                 hitMarker = 0.35f;
                 hitMarkerGold = (e.flags & (EF_PLUNGING | EF_AIRSHOT)) != 0;
                 std::string t = TextFormat("+%d", (int)roundf(e.value));
@@ -1327,6 +1461,10 @@ void Game::PlayEvent(const GameEvent& e) {
             fx.BigExplosion(e.pos);
             sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
             sfx::Play(sfx::Sink, e.pos, 0.9f);
+            if (e.a < MAX_SHIPS && e.a != e.b && myId >= 0 && view[e.a].present && (e.a == myId || view[e.a].s.leader == myId)) {
+                sfx::PlayFlat(sfx::Confirm, 0.85f, 0.6f);
+                floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("SUNK %s", TextToUpper(NameOf(e.b).c_str())), ui::kGold, 2.6f});
+            }
             if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
             else Feed3(NameOf(e.a), "  sank  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
             if (e.b == myId) flash = fmaxf(flash, 0.5f);
@@ -1335,7 +1473,8 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::BigAir: {
             int deg = e.b * 180;
             bool clean = e.flags & EF_CLEAN;
-            if (!IsCaptain(e.a) && e.a != myId) {  // escorts jump all the time: keep the feed for captains
+            bool feedIt = e.a == myId || (IsCaptain(e.a) && (deg >= 360 || e.value > 3.5f));  // only the big ones from others
+            if (!feedIt) {
             } else if (deg >= 360) {
                 const char* trick = TextFormat("%s%d", clean ? "" : "sketchy ", deg);
                 Feed3(NameOf(e.a), TextFormat("  landed a %s  ", trick), TextFormat("%.1fs", e.value), TeamOf(e.a), ui::kGold);
@@ -1358,7 +1497,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 for (int i = 0; i < 30; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(6, 16), Rnd(-6, 6)}, Rnd(0.8f, 1.6f), Rnd(0.5f, 1.1f), 0.6f, {235, 245, 250, 220}, 0);
                 if (e.a == myId) shake = fmaxf(shake, fminf(1.6f, 0.5f + e.value * 0.06f));
                 sfx::Play(sfx::RockHit, e.pos, Clamp(0.3f + e.value * 0.04f, 0.3f, 1.0f), 0.8f);
-                if (e.value > 6.0f && e.a < MAX_SHIPS && GetTime() - lastAground[e.a] > 10.0) {  // once is news, five times is spam
+                if (e.value > 6.0f && e.a < MAX_SHIPS && IsCaptain(e.a) && GetTime() - lastAground[e.a] > 30.0) {  // once is news, five times is spam
                     lastAground[e.a] = GetTime();
                     Feed3(NameOf(e.a), "  ran aground", "", TeamOf(e.a), ui::kText);
                 }
@@ -1384,7 +1523,8 @@ void Game::PlayEvent(const GameEvent& e) {
                 q.spin = Rnd(-400, 400);
             }
             for (int i = 0; i < 20; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(5, 12), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
-            Feed3(NameOf(e.a), "  grabbed  ", Scenery::PowerName(e.b), TeamOf(e.a), pc);
+            if (e.a == myId || (myId >= 0 && view[myId].present && Vector3Distance(e.pos, view[myId].s.pos) < 450.0f))
+                Feed3(NameOf(e.a), "  grabbed  ", Scenery::PowerName(e.b), TeamOf(e.a), pc);
             if (e.a == myId) sfx::PlayFlat(sfx::Chime, 0.7f);
             else sfx::Play(sfx::Chime, e.pos, 0.6f);
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("%s  %ds", Scenery::PowerName(e.b), (int)e.value), pc, 2.4f});
@@ -1435,6 +1575,34 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         case EventType::CrateSpawn:
             for (int i = 0; i < 24; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(4, 10), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
+            break;
+        case EventType::MatchEnd: {
+            winShip = e.a < MAX_SHIPS ? e.a : -1;
+            winTeam = e.b < 2 ? e.b : -1;
+            winByLimit = e.flags & 1;
+            awards.clear();
+            bool won = (winShip >= 0 && myId >= 0 && winShip == myId) ||
+                       (winTeam >= 0 && myId >= 0 && view[myId].present && view[myId].s.team == winTeam);
+            sfx::PlayFlat(sfx::Treasure, won ? 0.9f : 0.5f, won ? 1.0f : 0.75f);
+            break;
+        }
+        case EventType::Award:
+            if (e.a < MAX_SHIPS) awards.push_back({e.a, e.b, e.value});
+            break;
+        case EventType::MatchStart:
+            banner = TextFormat("ROUND %d", e.b);
+            bannerTime = GetTime();
+            awards.clear();
+            for (auto& hh : hullHits) hh.clear();
+            foamPatches.clear();
+            lowHpWarned = false;
+            camInit = false;
+            Feed(TextFormat("Round %d. Fresh hulls, fresh powder.", e.b), ui::kGold);
+            sfx::PlayFlat(sfx::Chime, 0.6f, 0.8f);
+            break;
+        case EventType::Warning:
+            Feed(e.b >= 60 ? "One minute left in the round!" : "Ten seconds!", ui::kGold);
+            sfx::PlayFlat(sfx::Chime, 0.5f, e.b >= 60 ? 0.7f : 1.2f);
             break;
         case EventType::Respawn:
             if (e.a == myId) camInit = false;
@@ -1544,6 +1712,9 @@ void Game::DrawTrajectory() {
             aimElevDeg = asinf(Clamp(d.y, -1.0f, 1.0f)) * RAD2DEG;
             Vector2 wantH = Vector2Normalize({aim.x, aim.z}), gotH = Vector2Normalize({d.x, d.z});
             aimClamped = fabsf(AimElevation(aim) * RAD2DEG - aimElevDeg) > 1.5f || Vector2DotProduct(wantH, gotH) < 0.9985f;
+            Vector3 ab = Vector3RotateByQuaternion(AimDirection(aim), QuaternionInvert(s.rot));
+            float yawB = atan2f(ab.z, fmaxf(fabsf(ab.x), 1e-4f));
+            arcOut = yawB > tune::gunTraverse + 0.02f ? 1 : (yawB < -tune::gunTraverse - 0.02f ? -1 : 0);
             if (opt.demo && getenv("BS_AIMLOG")) {  // test log: where the ball's free flight passes the reticle point (waves ignored)
                 static double lastLog = 0;
                 if (GetTime() - lastLog > 1.0) {
@@ -2001,6 +2172,7 @@ void Game::RenderWorld(float dt, bool menu) {
     }
     if (renderer.atm.rain > 0.0f) DrawRain(cam, dt);
     if (!menu) DrawTrajectory();
+    if (!menu) DrawFiringArcs();
     rlDrawRenderBatchActive();
     rlEnableDepthMask();
 
@@ -2273,6 +2445,7 @@ void Game::DrawHUD() {
         }
     }
     // ---- mode banner: team scores / the pirate's haul ----
+    float bannerRight = -1.0f;  // the round clock sits to the right of the mode banner
     if (curMode == MODE_TEAMS) {
         const char* a = TextFormat("RED  %d", teamScore[0]);
         const char* b = TextFormat("%d  BLUE", teamScore[1]);
@@ -2281,19 +2454,70 @@ void Game::DrawHUD() {
         Text(a, W * 0.5f - 12, r.y + 3, 18, kSide[0], true, Right);
         Text(":", W * 0.5f, r.y + 3, 18, kDim, true, Center);
         Text(b, W * 0.5f + 12, r.y + 3, 18, ColorLerp(kSide[1], WHITE, 0.25f), true, Left);
+        bannerRight = r.x + r.width;
     } else if (curMode == MODE_PIRATE) {
         int pid = Carrier();
         auto toCove = [&](Vector3 p) {
             return pred.harbours.empty() ? 0 : (int)Vector2Distance({p.x, p.z}, {pred.harbours[0].x, pred.harbours[0].z});
         };
         const char* t = "A NEW TREASURE SURFACES SOON";
-        if (pid >= 0 && pid == myId) t = TextFormat("YOU HAVE THE TREASURE   \xC2\xB7   %d m TO THE COVE", toCove(view[pid].s.pos));
+        float unload = pid >= 0 ? view[pid].s.unload : 0.0f;
+        if (pid >= 0 && unload > 0.0f)
+            t = pid == myId ? TextFormat("UNLOADING THE TREASURE   \xC2\xB7   HOLD THE COVE %.0f s", (1.0f - unload) * tune::bankTime)
+                            : TextFormat("%s IS UNLOADING AT THE COVE   \xC2\xB7   STOP THEM!", TextToUpper(NameOf(pid).c_str()));
+        else if (pid >= 0 && pid == myId) t = TextFormat("YOU HAVE THE TREASURE   \xC2\xB7   %d m TO THE COVE", toCove(view[pid].s.pos));
         else if (pid >= 0) t = TextFormat("%s HAS THE TREASURE   \xC2\xB7   %d m FROM THE COVE", NameOf(pid).c_str(), toCove(view[pid].s.pos));
         else if (!chests.empty() && me) t = TextFormat("THE TREASURE IS ADRIFT   \xC2\xB7   %d m", (int)Vector2Distance({chests[0].x, chests[0].z}, {me->pos.x, me->pos.z}));
         Vector2 m = Measure(t, 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
         Text(t, W * 0.5f, r.y + 4, 16, kPirateText, true, Center);
+        bannerRight = r.x + r.width;
+        if (unload > 0.0f) Bar({r.x + 10, r.y + r.height - 4, (r.width - 20), 3}, unload, kPirateText, {0, 0, 0, 120});
+    }
+    // ---- round clock ----
+    if (matchClock > 0.0f && matchState == 0) {
+        int secs = (int)ceilf(matchClock);
+        int lim = tune::scoreLimit[curMode < 3 ? curMode : 0];
+        const char* goal = curMode == MODE_PIRATE ? TextFormat("FIRST TO %d TREASURE", lim)
+                                                   : TextFormat("FIRST TO %d SINKINGS", lim);
+        std::string t = TextFormat("%d:%02d   \xC2\xB7   %s", secs / 60, secs % 60, goal);
+        if (bannerRight > 0) t = TextFormat("%d:%02d   Â·   FIRST TO %d", secs / 60, secs % 60, lim);  // short beside a banner
+        else if (curMode != MODE_TEAMS) {  // who's ahead
+            int lead = -1;
+            for (int id = 0; id < MAX_SHIPS; ++id) {
+                if (!view[id].present || !IsCaptain(id)) continue;
+                int sc = curMode == MODE_PIRATE ? view[id].s.banked : view[id].s.kills;
+                int ls = lead < 0 ? -1 : (curMode == MODE_PIRATE ? view[lead].s.banked : view[lead].s.kills);
+                if (sc > ls) lead = id;
+            }
+            if (lead >= 0 && (curMode == MODE_PIRATE ? view[lead].s.banked : view[lead].s.kills) > 0)
+                t += TextFormat("   \xC2\xB7   LEADER %s %d", TextToUpper(NameOf(lead).c_str()), curMode == MODE_PIRATE ? view[lead].s.banked : view[lead].s.kills);
+        }
+        Vector2 m = Measure(t.c_str(), 15, true);
+        float yy = 6.0f;
+        Rectangle r = {bannerRight > 0 ? bannerRight + 8 : W * 0.5f - m.x * 0.5f - 14, yy, m.x + 28, bannerRight > 0 ? 26.0f : 24.0f};
+        Panel(r, kPanel, 8);
+        bool hurry = secs <= 60;
+        float pulse = hurry ? 0.6f + 0.4f * sinf((float)now * 6.0f) : 1.0f;
+        Text(t.c_str(), r.x + r.width * 0.5f, yy + 4, 15, A(hurry ? kRed : kText, pulse), true, Center);
+    }
+    // ---- hull critical ----
+    if (alive && matchState == 0) {
+        float f = me->hp / me->maxHp;
+        if (f < 0.25f) {
+            if (!lowHpWarned) { lowHpWarned = true; sfx::PlayFlat(sfx::Chime, 0.6f, 0.5f); }
+            float pulse = 0.55f + 0.45f * sinf((float)now * 7.0f);
+            Text("HULL CRITICAL", W * 0.5f, H * 0.68f, 26, A(kRed, pulse), true, Center);
+            bool anyHarbour = false;
+            for (int i = 0; i < (int)pred.harbours.size(); ++i) {
+                int owner = HarbourOwner(curMode, i);
+                anyHarbour |= owner < 0 || owner == me->team;
+            }
+            if (anyHarbour) Text("make for a friendly harbour to repair", W * 0.5f, H * 0.68f + 32, 16, A(kText, 0.8f), false, Center);
+        } else if (f > 0.4f) {
+            lowHpWarned = false;
+        }
     }
     if (!banner.empty() && now - bannerTime < 4.0) {
         float a = (float)Clamp(4.0 - (now - bannerTime), 0.0, 1.0);
@@ -2302,15 +2526,15 @@ void Game::DrawHUD() {
 
     // ---- reticle: reload ring for the side you're aiming at ----
     Vector2 c = {W * 0.5f, H * 0.5f};
-    if (alive) {
+    if (alive && matchState == 0) {
         int side = AimSide(me->rot, curInput.aim);
         float rt = tune::reloadTime * (me->power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f);
         float r = Clamp(1.0f - me->reload[side] / rt, 0.0f, 1.0f);
         float ro = Clamp(1.0f - me->reload[1 - side] / rt, 0.0f, 1.0f);
         bool ready = r >= 0.999f;
         Ring(c, 31, 3.5f, 135, 405, ro, A(kDim, 0.55f), {255, 255, 255, 18});
-        Ring(c, 26, 3.5f, 135, 405, r, ready ? kGold : A(kText, 0.85f), {0, 0, 0, 70});
-        DrawCircleV(c, 2.5f, ready ? kGold : kText);
+        Ring(c, 26, 3.5f, 135, 405, r, arcOut ? A(kDim, 0.7f) : (ready ? kGold : A(kText, 0.85f)), {0, 0, 0, 70});
+        DrawCircleV(c, 2.5f, arcOut ? kDim : (ready ? kGold : kText));
         if (assist > 0.05f) {  // guns are swinging onto a target: corner brackets
             Color ac = A(kGold, Clamp(assist * 1.4f, 0.0f, 1.0f));
             for (int i = 0; i < 4; ++i) {
@@ -2330,8 +2554,16 @@ void Game::DrawHUD() {
         }
         Label(ready ? TextFormat("%s READY", SideName(side)) : SideName(side), c.x, c.y + 40, 12, ready ? kGold : kDim, Center);
         const char* rng = aimRange > 0 ? TextFormat("%.0f m", aimRange) : "--";
-        Text(TextFormat("%+.0f\xC2\xB0   %s", aimElevDeg, rng), c.x, c.y + 56, 17, aimClamped ? kRed : A(kText, 0.9f), false, Center);
-        if (aimClamped) Label("CARRIAGE LIMIT", c.x, c.y + 76, 11, kRed, Center);
+        Text(TextFormat("%+.0f\xC2\xB0   %s", aimElevDeg, rng), c.x, c.y + 56, 17, aimClamped && !arcOut ? kRed : A(kText, arcOut ? 0.5f : 0.9f), false, Center);
+        if (arcOut) {
+            // forward of the arc: turn away from the target's side; aft of it: turn towards it
+            bool toPort = (side == 0) == (arcOut < 0);
+            const char* hint = toPort ? "<<   STEER TO PORT" : "STEER TO STARBOARD   >>";
+            Label("GUNS CAN'T BEAR", c.x, c.y + 78, 11, kGold, Center);
+            Text(hint, c.x, c.y + 94, 16, A(kGold, 0.9f), true, Center);
+        } else if (aimClamped) {
+            Label(AimElevation(curInput.aim) > 0.3f ? "OUT OF RANGE" : "TOO CLOSE", c.x, c.y + 76, 11, kRed, Center);
+        }
     } else {
         DrawCircleV(c, 2.5f, A(kText, 0.6f));
     }
@@ -2515,6 +2747,8 @@ void Game::DrawHUD() {
         }
     }
 
+    if (matchState == 1) DrawResults(W, H);
+
     // ---- pause ----
     if (paused) {
         DrawRectangle(0, 0, (int)W, (int)H, {6, 10, 16, 150});
@@ -2597,6 +2831,7 @@ void Game::Frame() {
         }
         if (menuWeather != weatherSel) {  // rebuild the backdrop battle on the chosen sea
             menuWeather = weatherSel;
+            menuWorld.rounds = false;
             menuWorld.Init(7, (uint8_t)weatherSel);
             for (int i = 0; i < 3; ++i) menuWorld.AddShip("bot", true);
             for (int i = 0; i < 600; ++i) menuWorld.Step();

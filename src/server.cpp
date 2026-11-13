@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue"};
 
@@ -13,6 +14,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
         return false;
     }
     for (int& p : peerShip) p = -1;
+    if (const char* e = getenv("BS_ROUNDLEN")) world.roundLength = (float)atof(e);  // testing: short rounds
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets);
     for (int i = 0; i < bots; ++i)
         if (world.AddShip(kBotNames[i % 8], true) < 0) break;

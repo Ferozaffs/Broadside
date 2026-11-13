@@ -108,6 +108,19 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] --sfx-export <dir> writes every sound and a 46 s sampler.wav.
 - Not heard by a person yet: needs a listening pass (levels, which sounds feel synthetic).
 
+## Reviewer plan, part 1 (2026-11-13)
+- [x] Rounds: 8 min or the score limit (FFA 12 sinkings, Teams 20, Pirate 5 banked), 60 s / 10 s warnings, a results
+      screen (winner, standings, awards), 18 s later a fresh round (scores reset, everyone respawns). No damage or
+      firing during the results. BS_ROUNDLEN=<s> for short test rounds; simtest checks a round end + restart.
+- [x] Gun traverse 26 -> 34 deg (tune::gunTraverse), dashed firing-arc lines on the water, "GUNS CAN'T BEAR" +
+      which way to steer instead of "CARRIAGE LIMIT", "OUT OF RANGE"/"TOO CLOSE" for elevation.
+- [x] Hit-confirm tick sound, "SUNK <name>" for your sinkings, "HULL CRITICAL" warning under 25%.
+- [x] Pirate balance: the carrier was never sunk (stern chase: broadside guns can't fire ahead). Now 0.8x speed, no Fair
+      Wind, no harbour repairs, 120 hp (+20), must hold the cove 10 s to unload; hunter bots ahead of the carrier
+      cut it off between it and the cove. 3 seeds: 17 grabs, 5 carriers sunk, 10 banked (several limping in).
+- [x] Feed: others' air only for 360s or >3.5 s, power-ups only yours or within 450 m, groundings once per 30 s.
+- Protocol v8.
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).

@@ -12,6 +12,7 @@ static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateB
 
 int RunSimTest() {
     World w;
+    w.rounds = false;
     w.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1);
     // tuning sweeps: BS_SPEC="idx,scale,wind,fetch,gamma;..." overrides spectra before the run
     if (const char* e = getenv("BS_SPEC")) {
@@ -205,6 +206,7 @@ int RunSimTest() {
 
     {  // 6b) a lone captain bot and its fleet: do the escorts keep station?
         World g;
+        g.rounds = false;
         g.Init(1, 0, 0, MODE_FFA, true);
         int c = g.AddShip("lonely", true);
         float err[3] = {0, 0, 0};
@@ -254,10 +256,52 @@ int RunSimTest() {
         printf("fleet station keeping (alone, 2 min): slot error %.0f / %.0f / %.0f m\n", err[0] / n, err[1] / n, err[2] / n);
     }
     if (getenv("BS_NOMODES")) return 0;
+    {  // 6c) rounds: a short round ends, awards are handed out, nobody is hurt during the results, the next round starts clean
+        World g;
+        g.roundLength = 150.0f;
+        g.Init(3, 0, 0, MODE_FFA, false);
+        for (int i = 0; i < 4; ++i) g.AddShip(TextFormat("bot%d", i), true);
+        int ends = 0, awards = 0, starts = 0, killsInResults = 0, hitsInResults = 0, hpLostInResults = 0;
+        float hpBefore = 0;
+        bool resetOk = true;
+        for (int i = 0; i < (int)(200 * 60); ++i) {
+            bool results = g.matchState != 0;
+            if (results) { hpBefore = 0; for (const Ship& x : g.ships) if (x.active) hpBefore += x.hp; }
+            g.Step();
+            if (results && g.matchState != 0) {
+                float hpAfter = 0;
+                for (const Ship& x : g.ships) if (x.active) hpAfter += x.hp;
+                if (hpAfter < hpBefore - 0.01f) hpLostInResults++;
+            }
+            for (const GameEvent& e : g.events) {
+                if (e.type == EventType::MatchEnd) {
+                    ends++;
+                    printf("rounds: round over at %.0f s (%s), winner %s\n", g.time, e.flags ? "score limit" : "time",
+                           e.a < MAX_SHIPS ? g.ships[e.a].name.c_str() : "nobody");
+                }
+                if (e.type == EventType::Award) {
+                    awards++;
+                    printf("   award %d -> %s (%.1f)\n", e.b, g.ships[e.a].name.c_str(), e.value);
+                }
+                if (e.type == EventType::MatchStart) {
+                    starts++;
+                    for (const Ship& x : g.ships)
+                        if (x.active && (x.kills || x.deaths || x.statDamage > 0 || !x.alive || x.hp < x.maxHp)) resetOk = false;
+                }
+                if (results && e.type == EventType::Kill) killsInResults++;
+                if (results && e.type == EventType::Hit) hitsInResults++;
+            }
+            g.events.clear();
+        }
+        printf("rounds: %d ended, %d awards, %d started (round now %d), kills during results %d, hull damage during results %d, clean restart %s\n",
+               ends, awards, starts, g.round, killsInResults, hpLostInResults, resetOk ? "yes" : "NO");
+    }
     // 7) game modes: whole bot matches, checking the rules hold
     const char* modeName[] = {"free-for-all", "teams", "pirate"};
     for (int m = 0; m < MODE_COUNT; ++m) {
+        if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
+        g.rounds = false;
         g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true);
         int captains = m == MODE_PIRATE ? 5 : 4;
         for (int i = 0; i < captains; ++i) g.AddShip(TextFormat("bot%d", i), true);
@@ -267,6 +311,9 @@ int RunSimTest() {
         float stationErr = 0;
         int stationN = 0;
         const float mins = 6.0f;
+        double carryStart = -1;
+        int carrier = -1, carryHits = 0;
+        float carryDmg = 0, minDist = 1e9f, startDist = 0;
         for (int i = 0; i < (int)(mins * 60 * 60); ++i) {
             g.Step();
             for (const GameEvent& e : g.events) {
@@ -277,11 +324,26 @@ int RunSimTest() {
                 if (e.type == EventType::Kill) kills++;
                 if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { aground++; if (e.value > 6.0f) groundings++; }
                 if (e.type == EventType::Resupply) resupply += e.b;
-                if (e.type == EventType::Booty) booty++;
+                if (e.type == EventType::Booty) {
+                    booty++;
+                    carryStart = g.time; carrier = e.a; carryHits = 0; carryDmg = 0; minDist = 1e9f;
+                    startDist = Vector2Distance({g.ships[e.a].pos.x, g.ships[e.a].pos.z}, {g.harbours[0].x, g.harbours[0].z});
+                }
+                if (e.type == EventType::Hit && carrier >= 0 && e.b == carrier) { carryHits++; carryDmg += e.value; }
+                if (getenv("BS_PIRATELOG") && (e.type == EventType::Bank || (e.type == EventType::Kill && e.b == carrier && carrier >= 0))) {
+                    printf("   carry by %s: %s after %.0f s (started %.0f m from the cove), %d hits for %.0f dmg, nearest hunter %.0f m, hp %.0f/%.0f\n",
+                           g.ships[carrier].name.c_str(), e.type == EventType::Bank ? "BANKED" : "SUNK", g.time - carryStart, startDist, carryHits, carryDmg,
+                           minDist, g.ships[carrier].hp, g.ships[carrier].maxHp);
+                    carrier = -1;
+                }
                 if (e.type == EventType::Bank) banks++;
                 if (e.type == EventType::ChestSpawn && e.b == 1) denied++;
             }
             g.events.clear();
+            if (carrier >= 0 && i % 30 == 0)
+                for (const Ship& x : g.ships)
+                    if (x.active && x.alive && !x.stowed && g.Enemies(x, g.ships[carrier]))
+                        minDist = fminf(minDist, Vector3Distance(x.pos, g.ships[carrier].pos));
             if (i % 60 == 0)  // how well escorts keep station on a living captain
                 for (const Ship& x : g.ships)
                     if (x.active && x.alive && !x.stowed && x.leader >= 0 && g.ships[x.leader].alive) {

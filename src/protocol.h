@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 7;
+constexpr uint16_t PROTOCOL_VERSION = 8;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -104,7 +104,7 @@ struct NetShip {
     uint16_t kills = 0, deaths = 0;
     int8_t team = -1, leader = -1;
     float maxHp = 100;
-    uint8_t booty = 0;
+    float unload = 0;  // pirate: unloading progress in the cove, 0..1
     uint16_t banked = 0;
     Vector3 pos{}, vel{}, angVel{};
     Quaternion rot{0, 0, 0, 1};
@@ -129,6 +129,8 @@ struct Snapshot {
     std::vector<NetCrate> crates;
     std::vector<NetCrate> chests;  // pirate booty (type unused)
     uint16_t teamScore[2] = {0, 0};
+    uint8_t matchState = 0, round = 1;
+    float matchClock = 0;
 };
 
 inline void WriteSnapshot(ByteWriter& w, const World& world) {
@@ -137,6 +139,9 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(world.tick);
     w.Put((uint16_t)world.teamScore[0]);
     w.Put((uint16_t)world.teamScore[1]);
+    w.Put(world.matchState);
+    w.Put(world.round);
+    w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
     uint8_t n = 0;
     for (auto& s : world.ships) n += (s.active && !s.stowed) ? 1 : 0;
     w.Put(n);
@@ -147,7 +152,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(s.team);
         w.Put(s.leader);
         w.Put((uint8_t)Clamp(s.maxHp * 0.5f, 1.0f, 255.0f));
-        w.Put((uint8_t)std::min(s.booty, 255));
+        w.PutU8f(s.bankTimer / tune::bankTime);  // pirate: unloading progress
         w.Put((uint16_t)std::min(s.banked, 65535));
         w.PutU8f(s.hp / s.maxHp);
         w.Put((int8_t)(Clamp(s.sail, -1.0f, 1.0f) * 127));
@@ -207,6 +212,9 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.tick = r.Get<uint32_t>();
     s.teamScore[0] = r.Get<uint16_t>();
     s.teamScore[1] = r.Get<uint16_t>();
+    s.matchState = r.Get<uint8_t>();
+    s.round = r.Get<uint8_t>();
+    s.matchClock = r.Get<uint16_t>() / 10.0f;
     uint8_t n = r.Get<uint8_t>();
     s.ships.resize(n);
     for (auto& sh : s.ships) {
@@ -215,7 +223,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.team = r.Get<int8_t>();
         sh.leader = r.Get<int8_t>();
         sh.maxHp = r.Get<uint8_t>() * 2.0f;
-        sh.booty = r.Get<uint8_t>();
+        sh.unload = r.GetU8f();
         sh.banked = r.Get<uint16_t>();
         sh.hp = r.GetU8f() * sh.maxHp;
         sh.sail = r.Get<int8_t>() / 127.0f;

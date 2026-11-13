@@ -256,7 +256,7 @@ void CannonShot(Vector3 comPos, Quaternion rot, Vector3 vel, Vector3 angVel, Vec
     Vector3 want = AimDirection(aimWorld);
     Vector3 a = Vector3Normalize(ToBody(rot, want));
     float s = side == 0 ? 1.0f : -1.0f;
-    float yaw = Clamp(atan2f(a.z, fmaxf(fabsf(a.x), 1e-4f)), -0.45f, 0.45f);
+    float yaw = Clamp(atan2f(a.z, fmaxf(fabsf(a.x), 1e-4f)), -tune::gunTraverse, tune::gunTraverse);
     float elev = Clamp(asinf(Clamp(a.y, -1.0f, 1.0f)), -0.55f, 0.70f);
     yaw += yawOff;
     elev += elevOff;
@@ -323,6 +323,9 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     mode = mode_ < MODE_COUNT ? mode_ : MODE_FFA;
     fleets = fleets_;
     teamScore[0] = teamScore[1] = 0;
+    matchState = 0;
+    matchClock = roundLength;
+    round = 1;
     oceanParams = MakeOceanParams(seed, weather);
     ocean.Init(oceanParams);
     rng = seed * 2654435761u + 1;
@@ -420,7 +423,7 @@ void World::Respawn(Ship& s) {
 }
 
 void World::Damage(Ship& v, float amount, int attacker) {
-    if (!v.alive) return;
+    if (!v.alive || matchState != 0) return;
     if (attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // no friendly fire
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
@@ -462,6 +465,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
     // fire: each new fireSeq value is one trigger pull
     if (in.fireSeq != s.lastFireSeq) {
         s.lastFireSeq = in.fireSeq;
+        if (authoritative && matchState != 0) return;
         int side = AimSide(s.rot, in.aim);
         if (s.reload[side] <= 0.0f && s.pending.empty()) {
             s.reload[side] = ReloadTime(s);
@@ -609,7 +613,7 @@ void World::StepShip(Ship& s, float dt) {
         // speed controller along the keel; still pushes a little in the air (it's that kind of game)
         Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
         float windDot = fh.x * oceanParams.windDir.x + fh.y * oceanParams.windDir.y;
-        float boost = (s.power[PU_SPEED] > 0.0f ? tune::speedBoost : 1.0f) * (s.leader >= 0 ? tune::escortSpeed + s.catchUp : 1.0f) *
+        float boost = (s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f) * (s.leader >= 0 ? tune::escortSpeed + s.catchUp : 1.0f) *
                       (s.pirate ? tune::pirateSpeed : 1.0f);
         float vmax = (s.sail >= 0.0f ? tune::topSpeed * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : tune::reverseSpeed) * boost;
         if (fabsf(s.sail) > 0.02f) {
@@ -781,6 +785,7 @@ void World::RockCollide(Ship& s, bool authoritative) {
         ev.pos = worstAt;
         ev.value = dmg;
         events.push_back(ev);
+        if (s.leader < 0 && worst > 11.0f && matchState == 0) s.statGround++;
         Damage(s, dmg, -1);
     }
 }
@@ -889,6 +894,8 @@ void World::UpdateBalls(float dt) {
             e.dir = Vector3Normalize(b.vel);
             e.value = dmg;
             events.push_back(e);
+            if (sh.alive && b.owner < MAX_SHIPS && ships[b.owner].active && Enemies(ships[b.owner], sh))
+                ships[CaptainOf(b.owner)].statDamage += fminf(dmg, sh.hp);
             Damage(sh, dmg, b.owner);
             dead = true;
         }
@@ -977,8 +984,25 @@ void World::BotThink(Ship& s, float dt) {
         if (!harbours.empty()) {
             goal = {harbours[0].x, 0, harbours[0].z};
             haveGoal = true;
+            if (flat(goal, s.pos) < tune::harbourRadius * 0.6f) in.sail = 0.0f;  // heave to and unload
         }
         fight = false;
+    } else if (mode == MODE_PIRATE && s.leader < 0 && !harbours.empty() && [&] {
+                   for (const Ship& o : ships) if (o.active && o.pirate && o.alive) return true;
+                   return false;
+               }()) {
+        // someone has the treasure: whoever is nearer the cove than the carrier cuts it off there
+        const Ship* car = nullptr;
+        for (const Ship& o : ships) if (o.active && o.pirate && o.alive) car = &o;
+        Vector3 cove = {harbours[0].x, 0, harbours[0].z};
+        float dMe = flat(cove, s.pos), dCar = flat(cove, car->pos), dTo = flat(car->pos, s.pos);
+        if (dMe < dCar - 60.0f && dTo > 220.0f) {
+            Vector3 toCar = Vector3Normalize(Vector3Subtract(car->pos, cove));
+            goal = Vector3Add(cove, Vector3Scale({toCar.x, 0, toCar.z}, fminf(160.0f, dCar * 0.4f)));
+            haveGoal = true;
+            fight = false;
+            if (flat(goal, s.pos) < 60.0f) in.sail = 0.3f;
+        }
     } else if (mode == MODE_PIRATE && s.leader < 0) {  // the treasure is adrift: race for it
         const Crate& c = chests[0];
         if (c.active && !(target && best < 110.0f)) {
@@ -1031,7 +1055,7 @@ void World::BotThink(Ship& s, float dt) {
         int side = AimSide(s.rot, in.aim);
         Vector3 ab = Vector3RotateByQuaternion(in.aim, QuaternionInvert(s.rot));
         float yawOff = fabsf(atan2f(ab.z, fabsf(ab.x)));
-        if (yawOff < 0.4f && s.reload[side] <= 0.0f && RandF() < 0.05f) in.fireSeq++;
+        if (yawOff < tune::gunTraverse - 0.05f && s.reload[side] <= 0.0f && RandF() < 0.05f) in.fireSeq++;
     }
     // nothing to shoot nearby: go for a power-up crate (captains only; escorts keep station)
     if (!haveGoal && !cap && !s.pirate && (!target || best > 320.0f)) {
@@ -1156,6 +1180,101 @@ void World::SetPirate(int id) {
     p.hp = fminf(p.maxHp, p.hp + (p.maxHp - before));
 }
 
+// ---- rounds ----------------------------------------------------------------------
+void World::UpdateMatch(float dt) {
+    matchClock -= dt;
+    if (matchState == 0) {
+        for (float warn : {60.0f, 10.0f})
+            if (matchClock <= warn && matchClock + dt > warn) {
+                GameEvent e{EventType::Warning};
+                e.b = (uint8_t)warn;
+                events.push_back(e);
+            }
+        bool limit = false;
+        if (mode == MODE_TEAMS) limit = teamScore[0] >= ScoreLimit() || teamScore[1] >= ScoreLimit();
+        else
+            for (const Ship& s : ships)
+                if (s.active && s.leader < 0 && ScoreOf(s) >= ScoreLimit()) limit = true;
+        if (limit || matchClock <= 0.0f) EndRound(limit);
+    } else if (matchClock <= 0.0f) {
+        StartRound();
+    }
+}
+
+void World::EndRound(bool byLimit) {
+    matchState = 1;
+    matchClock = tune::intermission;
+    SetPirate(-1);
+    for (Crate& c : chests) c.active = false;
+    // the winner: best score; ties go to fewer losses, then more damage dealt
+    int best = -1;
+    for (const Ship& s : ships) {
+        if (!s.active || s.leader >= 0) continue;
+        if (best < 0) { best = s.id; continue; }
+        const Ship& b = ships[best];
+        if (ScoreOf(s) != ScoreOf(b) ? ScoreOf(s) > ScoreOf(b) : s.deaths != b.deaths ? s.deaths < b.deaths : s.statDamage > b.statDamage) best = s.id;
+    }
+    GameEvent e{EventType::MatchEnd};
+    e.flags = byLimit ? 1 : 0;
+    if (mode == MODE_TEAMS) {
+        e.a = 255;
+        e.b = teamScore[0] == teamScore[1] ? 255 : (teamScore[0] > teamScore[1] ? 0 : 1);
+    } else {
+        e.a = (uint8_t)(best >= 0 && ScoreOf(ships[best]) > 0 ? best : 255);
+        e.b = 255;
+    }
+    events.push_back(e);
+    // awards: 0 most sinkings, 1 most damage, 2 longest air, 3 biggest spin, 4 most treasure, 5 most groundings, 6 fewest losses
+    auto award = [&](int id, auto key, bool lowest = false) {
+        int pick = -1;
+        float pv = 0;
+        for (const Ship& s : ships) {
+            if (!s.active || s.leader >= 0) continue;
+            float v = key(s);
+            if (pick < 0 || (lowest ? v < pv : v > pv)) { pick = s.id; pv = v; }
+        }
+        if (pick < 0 || (!lowest && pv <= 0.0f)) return;
+        GameEvent a{EventType::Award};
+        a.a = (uint8_t)pick;
+        a.b = (uint8_t)id;
+        a.value = pv;
+        events.push_back(a);
+    };
+    award(0, [](const Ship& s) { return (float)s.kills; });
+    award(1, [](const Ship& s) { return s.statDamage; });
+    award(2, [](const Ship& s) { return s.statAir; });
+    award(3, [](const Ship& s) { return (float)s.statSpin; });
+    if (mode == MODE_PIRATE) award(4, [](const Ship& s) { return (float)s.banked; });
+    award(5, [](const Ship& s) { return (float)s.statGround; });
+    bool anySunk = false;
+    for (const Ship& s : ships) anySunk |= s.active && s.leader < 0 && s.deaths > 0;
+    if (anySunk) award(6, [](const Ship& s) { return (float)s.deaths - s.kills * 0.01f; }, true);
+}
+
+void World::StartRound() {
+    matchState = 0;
+    matchClock = roundLength;
+    round++;
+    teamScore[0] = teamScore[1] = 0;
+    for (Ship& s : ships) {
+        if (!s.active) continue;
+        s.kills = s.deaths = s.banked = s.booty = 0;
+        s.statDamage = s.statAir = 0;
+        s.statSpin = s.statGround = 0;
+        s.pirate = false;
+    }
+    for (int i = 0; i < tune::chestSlots; ++i) {
+        chests[i].active = false;
+        chests[i].timer = 4.0f;
+    }
+    balls.clear();
+    for (Ship& s : ships)
+        if (s.active && s.leader < 0) Respawn(s);  // fresh hulls, fresh fleets, spread round the bay
+    GameEvent e{EventType::MatchStart};
+    e.b = round;
+    events.push_back(e);
+}
+
 void World::DropTreasure(Ship& v) {
     SetPirate(-1);
     v.pirate = false;
@@ -1169,11 +1288,12 @@ void World::DropTreasure(Ship& v) {
 
 void World::UpdateHarbours(float dt) {
     for (Ship& s : ships) {
-        if (!s.active || !s.alive || s.stowed) continue;
+        if (!s.active || !s.alive || s.stowed) { s.bankTimer = 0; continue; }
+        bool atCove = false;
         for (int h = 0; h < (int)harbours.size(); ++h) {
             const Harbour& hb = harbours[h];
             if (Vector2Distance({s.pos.x, s.pos.z}, {hb.x, hb.z}) > tune::harbourRadius || !FriendlyHarbour(s, h)) continue;
-            s.hp = fminf(s.maxHp, s.hp + tune::harbourRepair * dt);  // shipwrights at work
+            if (!s.pirate) s.hp = fminf(s.maxHp, s.hp + tune::harbourRepair * dt);  // shipwrights at work (none for the treasure carrier)
             if (s.leader >= 0) continue;
             // a captain in port recovers the ships he has lost
             int got = 0;
@@ -1189,7 +1309,11 @@ void World::UpdateHarbours(float dt) {
                 ev.pos = {hb.x, 0, hb.z};
                 events.push_back(ev);
             }
-            if (s.pirate && h == 0) {  // the cove: bank the treasure
+            if (s.pirate && h == 0 && matchState == 0) {  // the cove: unload the treasure (it takes a while: a last stand)
+                atCove = true;
+                s.bankTimer += dt;
+                if (s.bankTimer < tune::bankTime) continue;
+                s.bankTimer = 0;
                 s.banked++;
                 SetPirate(-1);
                 GameEvent ev{EventType::Bank};
@@ -1201,6 +1325,7 @@ void World::UpdateHarbours(float dt) {
                 chests[0].timer = tune::chestRespawn;
             }
         }
+        if (!atCove) s.bankTimer = 0;
     }
 }
 
@@ -1276,6 +1401,10 @@ void World::UpdateAirTime(Ship& s, float dt, bool authoritative) {
         e.pos = s.pos;
         e.value = s.airTime;
         events.push_back(e);
+        if (s.leader < 0 && matchState == 0) {
+            s.statAir = fmaxf(s.statAir, s.airTime);
+            s.statSpin = std::max(s.statSpin, halfTurns * 180);
+        }
     }
     s.airSpin = 0.0f;
     if (s.airTime > 0.25f) s.lastAirTime = s.airTime;
@@ -1316,5 +1445,6 @@ void World::Step() {
     UpdateBalls(dt);
     UpdateCrates(dt);
     UpdateHarbours(dt);
-    if (mode == MODE_PIRATE) UpdateChests(dt);
+    if (mode == MODE_PIRATE && matchState == 0) UpdateChests(dt);
+    if (rounds) UpdateMatch(dt);
 }

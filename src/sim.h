@@ -45,6 +45,11 @@ constexpr float planing = 1.2f;            // how hard rising water under a fast
 constexpr float planingMax = 13.0f;        // m/s cap on that throw (keeps launches big, not orbital)
 constexpr float muzzleSpeed = 95.0f;
 constexpr float reloadTime = 3.5f;
+constexpr float gunTraverse = 0.6f;        // rad the carriages swing either side of the beam (~34 deg)
+// rounds
+constexpr float matchLength = 480.0f;      // s per round
+constexpr float intermission = 18.0f;     // s of results before the next round
+constexpr int scoreLimit[3] = {12, 20, 5};  // free-for-all sinkings / team sinkings / treasure banked
 constexpr float ballDamage = 8.0f;
 constexpr float ballKnockback = 1.6e6f;     // N*s impulse per ball hit (silly big)
 constexpr float recoilImpulse = 2.2e5f;     // per cannon
@@ -62,13 +67,14 @@ constexpr float respawnTime = 7.0f;
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
 constexpr float escortHp = 60.0f;
 constexpr float escortSpeed = 1.15f;       // escorts are a little quicker so they can keep station
-constexpr float pirateHp = 200.0f;         // the treasure carrier: one against many
+constexpr float pirateHp = 120.0f;         // the treasure carrier: one against many
 constexpr float pirateReload = 0.8f;
 constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
 constexpr int chestSlots = 1;              // pirate mode: the one treasure everyone chases
 constexpr float chestRespawn = 6.0f;       // s after it is banked before a new one appears
-constexpr float pirateSpeed = 0.9f;        // the treasure is heavy: its carrier is a little slower
+constexpr float pirateSpeed = 0.8f;        // the treasure is heavy: its carrier is slower than the hunters
+constexpr float bankTime = 10.0f;          // s the carrier must hold position in the cove to unload
 constexpr float escortCatchUp = 0.8f;      // max extra speed (x top speed) for an escort far off station
 }  // namespace tune
 
@@ -170,6 +176,10 @@ struct Ship {
     float maxHp = 100.0f;
     int booty = 0;        // pirate: chests aboard
     int banked = 0;       // pirate: chests brought home (score)
+    float bankTimer = 0;  // pirate: seconds spent unloading in the cove
+    // this round's stats, for the awards (captains; escorts' work counts for their captain)
+    float statDamage = 0, statAir = 0;
+    int statSpin = 0, statGround = 0;
     uint8_t lastFireSeq = 0;
     uint32_t lastInputSeq = 0;
     PlayerInput input;
@@ -197,6 +207,10 @@ enum class EventType : uint8_t {
     Bank = 12,       // a = pirate, b = booty banked at the cove
     NewPirate = 13,  // a = the new pirate, b = the old one (255 = none)
     ChestSpawn = 14,
+    MatchEnd = 15,   // a = winning captain (255 none), b = winning team (255 none), flags = 1 if the score limit ended it
+    Award = 16,      // a = ship, b = award id, value = the stat
+    MatchStart = 17, // b = round number
+    Warning = 18,    // b = seconds left in the round (60 / 10)
 };
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
@@ -248,6 +262,14 @@ public:
     std::vector<Harbour> harbours;
     Crate chests[tune::chestSlots];  // pirate booty
     int teamScore[2] = {0, 0};       // teams: ships sunk
+    // rounds: play for matchLength or until someone reaches the score limit, then an intermission
+    bool rounds = true;              // (simtest turns them off for its long bot matches)
+    uint8_t matchState = 0;          // 0 playing, 1 results
+    float matchClock = tune::matchLength;  // s left in the round (or in the results)
+    float roundLength = tune::matchLength;
+    uint8_t round = 1;
+    int ScoreOf(const Ship& captain) const { return mode == MODE_PIRATE ? captain.banked : captain.kills; }
+    int ScoreLimit() const { return tune::scoreLimit[mode < 3 ? mode : 0]; }
     uint32_t tick = 0;
     Ship ships[MAX_SHIPS];
     std::vector<Ball> balls;
@@ -276,6 +298,9 @@ private:
     void PlaceChest(Crate& c, bool random, float x, float z);
     void SetPirate(int id);
     void DropTreasure(Ship& carrier);
+    void UpdateMatch(float dt);
+    void EndRound(bool byLimit);
+    void StartRound();
     float MaxHpOf(const Ship& s) const;
     float rockInner = 1e9f;  // no rock comes closer to the centre than this
     uint16_t nextBallId = 1;
