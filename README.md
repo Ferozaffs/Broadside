@@ -25,6 +25,9 @@ Everyone must run the same version.
 | Mouse | Aim (cannons follow the camera) |
 | Left mouse | Fire broadside |
 | Right mouse | Zoom |
+| Mouse wheel | Camera distance; roll all the way in to stand on the quarterdeck |
+| V | Deck view on / off |
+| M | Sound on / off |
 | Tab | Scores |
 | F1 | Hide help |
 

@@ -452,6 +452,28 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
         }
         ropes += extIsRope[i] ? 1 : 0;
     }
+    // The shrouds' rope-ladder texture is an opacity mask exported as plain RGB (no alpha), so the
+    // gaps between the ratlines drew as solid black sheets. Turn its brightness into alpha.
+    for (int mi = 0; mi < (int)matNames.size() && mi + 1 < ext.materialCount; ++mi) {
+        if (TextToLower(matNames[mi].c_str()) != std::string("ratlines")) continue;
+        Texture2D& t = ext.materials[mi + 1].maps[MATERIAL_MAP_DIFFUSE].texture;
+        if (t.id == 0 || t.width <= 1) continue;
+        Image img = LoadImageFromTexture(t);
+        ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+        unsigned char* px = (unsigned char*)img.data;
+        for (int k = 0; k < img.width * img.height; ++k) {
+            unsigned char* q = px + k * 4;
+            unsigned char a = q[0] > q[1] ? (q[0] > q[2] ? q[0] : q[2]) : (q[1] > q[2] ? q[1] : q[2]);
+            q[0] = q[1] = q[2] = 255;  // the material colour is the rope's tar brown
+            q[3] = a;
+        }
+        UnloadTexture(t);
+        t = LoadTextureFromImage(img);
+        UnloadImage(img);
+        GenTextureMipmaps(&t);
+        SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+        TraceLog(LOG_INFO, "Ship model: ratlines mask -> alpha (%dx%d)", t.width, t.height);
+    }
     TraceLog(LOG_WARNING, "Ship model: %d sail meshes, %d rope meshes", sails, ropes);
     TraceLog(LOG_WARNING, "Ship model: %s  meshes %d  materials %d  triangles %ld  size %.1f x %.1f x %.1f -> scale %.3f", path.c_str(),
              ext.meshCount, ext.materialCount, tris, size.x, size.y, size.z, s);

@@ -146,6 +146,8 @@ void Scenery::Init(Shader lit) {
     }
     partMat = LoadMaterialDefault();
     partMat.shader = lit;
+    propMat = LoadMaterialDefault();
+    propMat.shader = lit;
     cube = GenMeshCube(1, 1, 1);
     cyl = GenMeshCylinder(0.5f, 1.0f, 14);
     cone = GenMeshCone(0.5f, 1.0f, 14);
@@ -165,9 +167,16 @@ static Mesh BuildIsland(const Rock& k) {
     static const float Uisle[] = {0.0f, 0.12f, 0.25f, 0.37f, 0.48f, 0.58f, 0.67f, 0.74f, 0.8f, 0.85f, 0.89f,
                                   0.925f, 0.952f, 0.972f, 0.987f, 1.0f, 1.015f, 1.05f, 1.12f, 1.25f, 1.45f};
     static const float Ustack[] = {0.0f, 0.3f, 0.55f, 0.72f, 0.84f, 0.92f, 0.97f, 1.0f, 1.08f, 1.3f, 1.8f, 2.6f};
-    const float* U = k.stack ? Ustack : Uisle;
-    const int NU = k.stack ? (int)(sizeof(Ustack) / sizeof(float)) : (int)(sizeof(Uisle) / sizeof(float));
-    const int NS = k.stack ? 20 : (int)Clamp(k.r * 0.8f, 44.0f, 120.0f);
+    // three rings for every step of the profile, twice the segments round: room for real relief
+    const float* U0 = k.stack ? Ustack : Uisle;
+    const int NU0 = k.stack ? (int)(sizeof(Ustack) / sizeof(float)) : (int)(sizeof(Uisle) / sizeof(float));
+    std::vector<float> Uv;
+    for (int i = 0; i + 1 < NU0; ++i)
+        for (int s = 0; s < 3; ++s) Uv.push_back(U0[i] + (U0[i + 1] - U0[i]) * s / 3.0f);
+    Uv.push_back(U0[NU0 - 1]);
+    const float* U = Uv.data();
+    const int NU = (int)Uv.size();
+    const int NS = k.stack ? 36 : (int)Clamp(k.r * 1.5f, 90.0f, 220.0f);
     const float so = (float)(k.seed % 1000);
 
     std::vector<Vector3> P;
@@ -186,7 +195,11 @@ static Mesh BuildIsland(const Rock& k) {
             float n1 = Fbm(x * 0.05f + so, y * 0.07f, z * 0.05f) - 0.5f;
             float n2 = Fbm(x * 0.11f, y * 0.11f + so, z * 0.11f) - 0.5f;
             float edge = Clamp((u - 0.35f) / 0.5f, 0.0f, 1.0f) * Clamp((1.12f - u) / 0.1f, 0.0f, 1.0f);
+            // buttresses and gullies running up the cliff (noise stretched vertically)
+            float n3 = Fbm(x * 0.07f + so, y * 0.012f, z * 0.07f) - 0.5f;
+            float n4 = Fbm(x * 0.2f, y * 0.04f + so, z * 0.2f) - 0.5f;
             float dr = (n1 * 2.0f + n2 * 0.5f) * (k.stack ? 0.1f * k.r : fminf(5.0f, 0.05f * k.r)) * edge;
+            dr += (n3 * 2.4f + n4 * 0.9f) * (k.stack ? 0.12f * k.r : fminf(6.0f, 0.06f * k.r)) * edge;
             x += cosf(a) * dr;
             z += sinf(a) * dr;
             if (u < 0.97f) y += (n1 + 0.5f * n2) * (k.stack ? 1.0f : 0.06f * k.h) * (1.0f - u * 0.5f);
@@ -230,32 +243,64 @@ static Mesh BuildIsland(const Rock& k) {
         }
         C[i] = c;
     }
-    // a few wind-bent pines on the gentle tops
+    std::vector<unsigned char> A(P.size(), 255);  // vertex alpha: 255 terrain, 128 bark, 0 needles
+    // conifers: a bark trunk under three tiers of needles, grown in forest patches on the gentle tops
     if (!k.stack) {
         uint32_t s = k.seed | 1;
         auto rnd = [&](float a, float b) { s = s * 1664525u + 1013904223u; return a + (b - a) * ((s >> 8) & 0xFFFFFF) / 16777216.0f; };
-        int want = (int)(k.r * 0.45f);
-        for (int t = 0; t < want * 3 && want > 0 && P.size() + 8 < 65000; ++t) {
-            float a = rnd(0, 2 * PI), u = sqrtf(rnd(0.0f, 0.55f));
+        int want = (int)(k.r * 1.1f);
+        const int SL = 7;
+        for (int t = 0; t < want * 6 && want > 0 && P.size() + 40 < 65000; ++t) {
+            float a = rnd(0, 2 * PI), u = sqrtf(rnd(0.0f, 0.7f));
             float d = u * RockCoast(k, a);
             float x = k.x + cosf(a) * d, z = k.z + sinf(a) * d;
             float y = RockHeight(k, x, z);
             float gx = RockHeight(k, x + 1, z) - RockHeight(k, x - 1, z), gz = RockHeight(k, x, z + 1) - RockHeight(k, x, z - 1);
-            if (y < 5.0f || gx * gx + gz * gz > 0.5f) continue;
-            float h = rnd(6.0f, 12.0f), rad = rnd(1.6f, 2.8f);
-            Vector3 lean = {rnd(-1.2f, 1.2f), 0, rnd(-1.2f, 1.2f)};
-            int base = (int)P.size();
-            Vector3 apex = {x + lean.x, y + h, z + lean.z};
-            P.push_back(apex);
-            N.push_back({0, 1, 0});
-            C.push_back({70, 96, 50, 255});
-            for (int q = 0; q < 6; ++q) {
-                float b = q * PI / 3.0f;
-                P.push_back({x + cosf(b) * rad, y + 0.6f, z + sinf(b) * rad});
-                N.push_back(Vector3Normalize({cosf(b), 0.6f, sinf(b)}));
-                C.push_back({32, 54, 30, 255});
+            if (y < 6.0f || gx * gx + gz * gz > 0.45f) continue;
+            float forest = Fbm(x * 0.018f + so, 3.0f, z * 0.018f);
+            if (forest < 0.5f && rnd(0, 1) > 0.12f) continue;  // mostly in woods, the odd lone tree
+            float h = rnd(7.0f, 15.0f) * (0.8f + 0.5f * forest), rad = h * rnd(0.2f, 0.27f);
+            Vector3 lean = {rnd(-0.6f, 0.6f), 0, rnd(-0.6f, 0.6f)};
+            float tone = rnd(0.75f, 1.15f);
+            Color dark = Shade({30, 52, 30, 255}, tone), mid = Shade({44, 72, 40, 255}, tone), tip = Shade({70, 98, 52, 255}, tone);
+            // trunk: a square post
+            int tb = (int)P.size();
+            for (int q = 0; q < 4; ++q) {
+                float b = q * PI * 0.5f + 0.4f;
+                for (int e = 0; e < 2; ++e) {
+                    float yy = e ? y + h * 0.35f : y - 0.6f;
+                    P.push_back({x + cosf(b) * 0.4f + lean.x * e * 0.3f, yy, z + sinf(b) * 0.4f + lean.z * e * 0.3f});
+                    N.push_back({cosf(b), 0, sinf(b)});
+                    C.push_back({62, 44, 30, 255});
+                    A.push_back(128);
+                }
             }
-            for (int q = 0; q < 6; ++q) tri(base + 1 + q, base, base + 1 + (q + 1) % 6);
+            for (int q = 0; q < 4; ++q) {
+                int a0 = tb + q * 2, a1 = tb + ((q + 1) % 4) * 2;
+                tri(a0, a1, a0 + 1);
+                tri(a1, a1 + 1, a0 + 1);
+            }
+            // three tiers of needles
+            for (int tier = 0; tier < 3; ++tier) {
+                float y0 = y + h * (0.22f + 0.24f * tier), r0 = rad * (1.0f - 0.28f * tier), th = h * (0.42f - 0.04f * tier);
+                float lk = (tier + 1) / 3.0f;
+                Vector3 apex = {x + lean.x * lk, y0 + th, z + lean.z * lk};
+                int base = (int)P.size();
+                P.push_back(apex);
+                N.push_back({0, 1, 0});
+                C.push_back(tier == 2 ? tip : mid);
+                A.push_back(0);
+                float rot = rnd(0, 2 * PI);
+                for (int q = 0; q < SL; ++q) {
+                    float b = rot + q * 2 * PI / SL;
+                    float rr = r0 * rnd(0.85f, 1.15f);
+                    P.push_back({x + lean.x * (lk - 0.33f) + cosf(b) * rr, y0 - rnd(0.0f, 0.5f), z + lean.z * (lk - 0.33f) + sinf(b) * rr});
+                    N.push_back(Vector3Normalize({cosf(b), 0.75f, sinf(b)}));
+                    C.push_back(dark);
+                    A.push_back(0);
+                }
+                for (int q = 0; q < SL; ++q) tri(base + 1 + q, base, base + 1 + (q + 1) % SL);
+            }
             if (--want <= 0) break;
         }
     }
@@ -270,7 +315,7 @@ static Mesh BuildIsland(const Rock& k) {
     for (size_t i = 0; i < P.size(); ++i) {
         m.vertices[i * 3 + 0] = P[i].x; m.vertices[i * 3 + 1] = P[i].y; m.vertices[i * 3 + 2] = P[i].z;
         m.normals[i * 3 + 0] = N[i].x; m.normals[i * 3 + 1] = N[i].y; m.normals[i * 3 + 2] = N[i].z;
-        m.colors[i * 4 + 0] = C[i].r; m.colors[i * 4 + 1] = C[i].g; m.colors[i * 4 + 2] = C[i].b; m.colors[i * 4 + 3] = 255;
+        m.colors[i * 4 + 0] = C[i].r; m.colors[i * 4 + 1] = C[i].g; m.colors[i * 4 + 2] = C[i].b; m.colors[i * 4 + 3] = A[i];
     }
     for (size_t i = 0; i < I.size(); ++i) m.indices[i] = I[i];
     UploadMesh(&m, false);
@@ -289,14 +334,14 @@ void Scenery::Build(const std::vector<Rock>& rocks) {
     }
 }
 
-void Scenery::DrawIslands(Renderer& r, const RenderView& v) {
+void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
     if (!ready) return;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(v.target, v.pos));
     r.SetLitParams(0.0f, 0.0f);
     r.SetShore(1.0f);
     rlDisableBackfaceCulling();  // ragged cliffs can fold over a little
     for (const Island& is : islands) {
-        if (Vector3DotProduct(Vector3Subtract(is.centre, v.pos), fwd) < -is.radius) continue;  // behind the camera
+        if (cull && Vector3DotProduct(Vector3Subtract(is.centre, v.pos), fwd) < -is.radius) continue;  // behind the camera
         DrawMesh(is.mesh, rockMat, MatrixIdentity());
     }
     rlDrawRenderBatchActive();
@@ -310,7 +355,87 @@ void Scenery::Part(const Mesh& m, Matrix world, Color c) {
     DrawMesh(m, partMat, world);
 }
 
+// Small CPU mesh builder for the harbour props: boxes and (tapered) cylinders with vertex colours.
+namespace {
+struct Builder {
+    std::vector<Vector3> P, N;
+    std::vector<Color> C;
+    std::vector<unsigned short> I;
+    void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 n, Color col) {
+        unsigned short o = (unsigned short)P.size();
+        P.insert(P.end(), {a, b, c, d});
+        N.insert(N.end(), {n, n, n, n});
+        C.insert(C.end(), {col, col, col, col});
+        I.insert(I.end(), {o, (unsigned short)(o + 1), (unsigned short)(o + 2), o, (unsigned short)(o + 2), (unsigned short)(o + 3)});
+    }
+    // box of size s centred at c, its local axes x, y, z (unit vectors)
+    void Box(Vector3 c, Vector3 s, Vector3 x, Vector3 y, Vector3 z, Color col) {
+        Vector3 hx = Vector3Scale(x, s.x * 0.5f), hy = Vector3Scale(y, s.y * 0.5f), hz = Vector3Scale(z, s.z * 0.5f);
+        auto V = [&](float i, float j, float k) {
+            return Vector3Add(c, Vector3Add(Vector3Scale(hx, i), Vector3Add(Vector3Scale(hy, j), Vector3Scale(hz, k))));
+        };
+        Quad(V(1, -1, -1), V(1, 1, -1), V(1, 1, 1), V(1, -1, 1), x, col);
+        Quad(V(-1, -1, 1), V(-1, 1, 1), V(-1, 1, -1), V(-1, -1, -1), Vector3Negate(x), col);
+        Quad(V(-1, 1, -1), V(-1, 1, 1), V(1, 1, 1), V(1, 1, -1), y, col);
+        Quad(V(-1, -1, 1), V(-1, -1, -1), V(1, -1, -1), V(1, -1, 1), Vector3Negate(y), col);
+        Quad(V(-1, -1, 1), V(1, -1, 1), V(1, 1, 1), V(-1, 1, 1), z, col);
+        Quad(V(1, -1, -1), V(-1, -1, -1), V(-1, 1, -1), V(1, 1, -1), Vector3Negate(z), col);
+    }
+    // vertical (tapered) cylinder from base b up h, radii r0 -> r1
+    void Cyl(Vector3 b, float r0, float r1, float h, int sl, Color col, bool cap = true) {
+        unsigned short o = (unsigned short)P.size();
+        float slope = (r0 - r1) / fmaxf(h, 0.01f);
+        for (int i = 0; i <= sl; ++i) {
+            float a = 2 * PI * i / sl;
+            Vector3 n = Vector3Normalize({cosf(a), slope, sinf(a)});
+            P.push_back({b.x + cosf(a) * r0, b.y, b.z + sinf(a) * r0});
+            P.push_back({b.x + cosf(a) * r1, b.y + h, b.z + sinf(a) * r1});
+            N.push_back(n);
+            N.push_back(n);
+            C.push_back(col);
+            C.push_back(col);
+        }
+        for (int i = 0; i < sl; ++i) {
+            unsigned short a0 = (unsigned short)(o + i * 2), a1 = (unsigned short)(o + i * 2 + 2);
+            I.insert(I.end(), {a0, (unsigned short)(a0 + 1), a1, a1, (unsigned short)(a0 + 1), (unsigned short)(a1 + 1)});
+        }
+        if (cap && r1 > 0.01f) {
+            unsigned short c0 = (unsigned short)P.size();
+            P.push_back({b.x, b.y + h, b.z});
+            N.push_back({0, 1, 0});
+            C.push_back(col);
+            for (int i = 0; i <= sl; ++i) {
+                float a = 2 * PI * i / sl;
+                P.push_back({b.x + cosf(a) * r1, b.y + h, b.z + sinf(a) * r1});
+                N.push_back({0, 1, 0});
+                C.push_back(col);
+            }
+            for (int i = 0; i < sl; ++i) I.insert(I.end(), {c0, (unsigned short)(c0 + 2 + i), (unsigned short)(c0 + 1 + i)});
+        }
+    }
+    Mesh Build() {
+        Mesh m{};
+        m.vertexCount = (int)P.size();
+        m.triangleCount = (int)(I.size() / 3);
+        m.vertices = (float*)RL_MALLOC(P.size() * 3 * sizeof(float));
+        m.normals = (float*)RL_MALLOC(P.size() * 3 * sizeof(float));
+        m.colors = (unsigned char*)RL_MALLOC(P.size() * 4);
+        m.indices = (unsigned short*)RL_MALLOC(I.size() * sizeof(unsigned short));
+        for (size_t i = 0; i < P.size(); ++i) {
+            m.vertices[i * 3 + 0] = P[i].x; m.vertices[i * 3 + 1] = P[i].y; m.vertices[i * 3 + 2] = P[i].z;
+            m.normals[i * 3 + 0] = N[i].x; m.normals[i * 3 + 1] = N[i].y; m.normals[i * 3 + 2] = N[i].z;
+            m.colors[i * 4 + 0] = C[i].r; m.colors[i * 4 + 1] = C[i].g; m.colors[i * 4 + 2] = C[i].b; m.colors[i * 4 + 3] = 255;
+        }
+        for (size_t i = 0; i < I.size(); ++i) m.indices[i] = I[i];
+        UploadMesh(&m, false);
+        return m;
+    }
+};
+}  // namespace
+
 void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Rock>& rocks) {
+    for (Port& p : ports)
+        if (p.hasMesh) UnloadMesh(p.mesh);
     ports.clear();
     for (const Harbour& h : hs) {
         Port p;
@@ -324,60 +449,124 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
         p.pierTo = 752.0f;
         p.dock = {h.x, 0.0f, h.z};
         p.lamp = {p.out.x * (p.pierTo - 2.0f), 27.0f, p.out.y * (p.pierTo - 2.0f)};
+
+        // local frame: Z runs out along the pier towards the island, X across it
+        Vector3 Z = {p.out.x, 0, p.out.y}, X = {-p.out.y, 0, p.out.x}, Y = {0, 1, 0};
+        auto at = [&](float rr, float side, float y) { return Vector3{p.out.x * rr + X.x * side, y, p.out.y * rr + X.z * side}; };
+        uint32_t sd = (uint32_t)(h.ang * 1000.0f) | 1;
+        auto rnd = [&](float a, float b) { sd = sd * 1664525u + 1013904223u; return a + (b - a) * ((sd >> 8) & 0xFFFFFF) / 16777216.0f; };
+        auto tone = [&](Color c, float k) { return Shade(c, k); };
+        const Color wood = {118, 86, 58, 255}, woodDk = {70, 52, 38, 255}, stone = {138, 132, 120, 255}, stoneDk = {104, 98, 90, 255};
+        const Color white = {226, 222, 210, 255}, red = {170, 44, 38, 255}, iron = {36, 36, 40, 255};
+        Builder B;
+        float len = p.pierFrom - p.pierTo;
+        // deck planks across the pier, each a slightly different board
+        for (float d = p.pierTo + 4.0f; d < p.pierFrom; d += 0.95f)
+            B.Box(at(d, rnd(-0.08f, 0.08f), 2.75f), {8.6f, 0.22f, 0.86f}, X, Y, Z, tone(wood, rnd(0.8f, 1.15f)));
+        // stringers under the deck, kerbs and a rail along both edges
+        for (int k = -1; k <= 1; k += 2) {
+            B.Box(at(p.pierTo + 4.0f + (len - 4.0f) * 0.5f, k * 3.2f, 2.3f), {0.5f, 0.7f, len - 4.0f}, X, Y, Z, woodDk);
+            B.Box(at(p.pierTo + 4.0f + (len - 4.0f) * 0.5f, k * 4.15f, 3.05f), {0.35f, 0.35f, len - 4.0f}, X, Y, Z, woodDk);
+            B.Box(at(p.pierTo + 4.0f + (len - 4.0f) * 0.5f, k * 4.15f, 4.15f), {0.18f, 0.16f, len - 4.0f}, X, Y, Z, wood);
+            for (float d = p.pierTo + 5.0f; d < p.pierFrom; d += 3.0f) B.Box(at(d, k * 4.15f, 3.6f), {0.16f, 1.1f, 0.16f}, X, Y, Z, woodDk);
+        }
+        // pilings with cross bracing
+        for (float d = p.pierTo + 5.0f; d < p.pierFrom - 1.0f; d += 4.5f) {
+            for (int k = -1; k <= 1; k += 2) B.Cyl(at(d, k * 3.6f, -9.0f), 0.42f, 0.38f, 11.5f, 8, tone(woodDk, rnd(0.8f, 1.1f)), false);
+            Vector3 c = at(d, 0, 0.2f);
+            Vector3 diag = Vector3Normalize(Vector3Add(X, Vector3Scale(Y, 0.55f)));
+            Vector3 dn = Vector3Normalize(Vector3CrossProduct(diag, Z));
+            B.Box(c, {8.2f, 0.22f, 0.22f}, diag, dn, Z, woodDk);
+        }
+        // the stone pier head: courses of blocks, a parapet, mooring bollards
+        Vector3 hb = at(p.pierTo - 2.0f, 0, 0);
+        for (int course = 0; course < 9; ++course) {
+            float y0 = -8.0f + course * 1.4f;
+            B.Cyl({hb.x, y0, hb.z}, 7.1f, 7.0f, 1.32f, 22, tone(course % 2 ? stone : stoneDk, rnd(0.85f, 1.05f)), course == 8);
+        }
+        B.Cyl({hb.x, 4.6f, hb.z}, 7.1f, 7.1f, 0.9f, 22, stoneDk, false);  // parapet (outer face)
+        for (int k = 0; k < 4; ++k) {
+            float a = k * PI * 0.5f + 0.4f;
+            B.Cyl({hb.x + cosf(a) * 5.6f, 4.6f, hb.z + sinf(a) * 5.6f}, 0.35f, 0.3f, 0.8f, 8, iron);
+        }
+        // the lighthouse: a tapering tower in red and white bands, gallery, lamp room, domed roof
+        Vector3 lb = at(p.pierTo - 2.0f, 0, 4.6f);
+        const float towerH = 17.4f;
+        for (int band = 0; band < 6; ++band) {
+            float t0 = band / 6.0f, t1 = (band + 1) / 6.0f;
+            B.Cyl({lb.x, lb.y + t0 * towerH, lb.z}, 3.1f - 1.0f * t0, 3.1f - 1.0f * t1, towerH / 6.0f, 20, band % 2 ? red : white, false);
+        }
+        float gy = lb.y + towerH;
+        B.Cyl({lb.x, gy, lb.z}, 3.0f, 3.0f, 0.35f, 24, iron);
+        for (int k = 0; k < 16; ++k) {
+            float a = k * 2 * PI / 16;
+            B.Box({lb.x + cosf(a) * 2.8f, gy + 0.85f, lb.z + sinf(a) * 2.8f}, {0.08f, 1.0f, 0.08f}, X, Y, Z, iron);
+        }
+        B.Cyl({lb.x, gy + 1.3f, lb.z}, 2.85f, 2.85f, 0.1f, 24, iron, false);  // rail
+        p.glass = {lb.x, gy + 0.35f, lb.z};
+        B.Cyl({lb.x, gy + 3.2f, lb.z}, 2.1f, 2.1f, 0.25f, 20, iron);
+        B.Cyl({lb.x, gy + 3.45f, lb.z}, 2.1f, 0.25f, 1.9f, 20, iron);  // roof
+        B.Cyl({lb.x, gy + 5.35f, lb.z}, 0.25f, 0.05f, 0.9f, 8, iron);   // finial
+        B.Box({lb.x + Z.x * -3.0f, lb.y + 1.2f, lb.z + Z.z * -3.0f}, {1.2f, 2.2f, 0.3f}, X, Y, Z, woodDk);  // door
+        // flag pole beside the lighthouse
+        p.flagPole = at(p.pierTo + 8.0f, 6.0f, 3.0f);
+        B.Cyl(p.flagPole, 0.22f, 0.14f, 22.0f, 8, woodDk);
+        // warehouses on the quay: plastered walls, a pitched tile roof, door and shutters; barrels and crates outside
+        for (int k = -1; k <= 1; k += 2) {
+            Vector3 hc = at(p.pierFrom - 4.0f, k * 14.0f, 0);
+            Color wall = tone({196, 182, 154, 255}, rnd(0.9f, 1.05f)), roof = tone({140, 62, 44, 255}, rnd(0.85f, 1.1f));
+            B.Box({hc.x, 1.0f, hc.z}, {10.6f, 2.4f, 8.6f}, X, Y, Z, stoneDk);  // footing
+            B.Box({hc.x, 4.6f, hc.z}, {10.0f, 5.0f, 8.0f}, X, Y, Z, wall);
+            for (int sdd = -1; sdd <= 1; sdd += 2) {  // two roof slopes
+                Vector3 ny = Vector3Normalize(Vector3Add(Y, Vector3Scale(Z, sdd * 0.8f)));
+                Vector3 nz = Vector3Normalize(Vector3CrossProduct(X, ny));
+                Vector3 c = Vector3Add({hc.x, 8.6f, hc.z}, Vector3Scale(Z, sdd * 2.2f));
+                B.Box(c, {10.8f, 0.3f, 5.9f}, X, ny, nz, roof);
+            }
+            B.Box({hc.x, 8.55f, hc.z}, {10.0f, 2.8f, 0.2f}, X, Y, Z, wall);  // gable infill (rough)
+            Vector3 face = Vector3Add({hc.x, 0, hc.z}, Vector3Scale(Z, -4.05f));
+            B.Box({face.x, 3.4f, face.z}, {2.2f, 3.2f, 0.12f}, X, Y, Z, woodDk);
+            for (int wdw = -1; wdw <= 1; wdw += 2)
+                B.Box(Vector3Add({face.x, 5.2f, face.z}, Vector3Scale(X, wdw * 3.2f)), {1.3f, 1.2f, 0.12f}, X, Y, Z, {52, 64, 60, 255});
+            for (int q = 0; q < 5; ++q) {
+                Vector3 bp = Vector3Add(Vector3Add({face.x, 2.2f, face.z}, Vector3Scale(X, rnd(-5.0f, 5.0f))), Vector3Scale(Z, -rnd(1.0f, 3.5f)));
+                if (q < 3) B.Cyl(bp, 0.55f, 0.5f, 1.3f, 10, tone(wood, rnd(0.7f, 1.0f)));
+                else B.Box(Vector3Add(bp, {0, 0.6f, 0}), {1.2f, 1.2f, 1.2f}, X, Y, Z, tone({150, 112, 70, 255}, rnd(0.8f, 1.1f)));
+            }
+        }
+        if (B.P.size() < 65000) {
+            p.mesh = B.Build();
+            p.hasMesh = true;
+        }
         ports.push_back(p);
     }
 }
 
-void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time) {
+void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time, bool cull) {
     if (!ready) return;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(v.target, v.pos));
     r.SetLitParams(0.0f, 0.0f);
-    const Color wood = {112, 80, 52, 255}, woodDk = {70, 50, 34, 255}, stone = {150, 142, 128, 255};
     for (size_t i = 0; i < ports.size(); ++i) {
         const Port& p = ports[i];
         Vector3 mid = {p.out.x * (p.pierFrom + p.pierTo) * 0.5f, 0, p.out.y * (p.pierFrom + p.pierTo) * 0.5f};
-        if (Vector3DotProduct(Vector3Subtract(mid, v.pos), fwd) < -150.0f) continue;  // behind the camera
-        float len = p.pierFrom - p.pierTo;
-        Matrix rot = MatrixRotateY(-p.ang + PI * 0.5f);  // local +z runs outwards along the pier
-        auto at = [&](float rr, float side, float y) {
-            Vector2 sd = {-p.out.y, p.out.x};
-            return Vector3{p.out.x * rr + sd.x * side, y, p.out.y * rr + sd.y * side};
-        };
-        auto box = [&](Vector3 c, Vector3 size, Color col) {
-            Part(cube, MatrixMultiply(MatrixMultiply(MatrixScale(size.x, size.y, size.z), rot), MatrixTranslate(c.x, c.y, c.z)), col);
-        };
+        if (cull && Vector3DotProduct(Vector3Subtract(mid, v.pos), fwd) < -150.0f) continue;  // behind the camera
+        if (p.hasMesh) {
+            r.SetProp(1.0f);
+            DrawMesh(p.mesh, propMat, MatrixIdentity());
+            r.SetProp(0.0f);
+        }
         auto column = [&](const Mesh& m, Vector3 base, float rad, float h, Color col) {
             Part(m, MatrixMultiply(MatrixScale(rad * 2, h, rad * 2), MatrixTranslate(base.x, base.y, base.z)), col);
         };
-        // pier deck on pilings
-        box(at(p.pierTo + len * 0.5f, 0, 2.6f), {9.0f, 0.7f, len}, wood);
-        box(at(p.pierTo + len * 0.5f, 4.3f, 3.4f), {0.4f, 0.9f, len}, woodDk);
-        box(at(p.pierTo + len * 0.5f, -4.3f, 3.4f), {0.4f, 0.9f, len}, woodDk);
-        for (float d = p.pierTo + 3.0f; d < p.pierFrom; d += 9.0f)
-            for (int sd = -1; sd <= 1; sd += 2) column(cyl, at(d, sd * 3.8f, -8.0f), 0.55f, 10.6f, woodDk);
-        // stone head at the end, lighthouse on it
-        column(cyl, at(p.pierTo - 2.0f, 0, -8.0f), 7.0f, 12.0f, stone);
-        Vector3 lb = at(p.pierTo - 2.0f, 0, 4.0f);
-        for (int band = 0; band < 5; ++band)  // red and white rings
-            column(cyl, {lb.x, lb.y + band * 3.6f, lb.z}, 3.0f - band * 0.22f, 3.6f, band % 2 ? Color{196, 52, 44, 255} : Color{236, 232, 222, 255});
-        column(cyl, {lb.x, lb.y + 18.0f, lb.z}, 2.4f, 0.6f, {40, 40, 44, 255});
+        // the lamp room glass glows
         r.SetLitParams(0.0f, 1.0f);
-        column(cyl, {lb.x, lb.y + 18.6f, lb.z}, 1.7f, 3.0f, {255, 220, 150, 255});  // the lamp room glows
+        column(cyl, p.glass, 1.75f, 2.85f, {255, 220, 150, 255});
         r.SetLitParams(0.0f, 0.0f);
-        column(cone, {lb.x, lb.y + 21.6f, lb.z}, 2.5f, 3.0f, {40, 40, 44, 255});
-        // a big flag in the owner's colours, flying from a mast beside the lighthouse
-        Vector3 fp = at(p.pierTo + 8.0f, 6.0f, 3.0f);
-        column(cyl, fp, 0.25f, 22.0f, woodDk);
+        // a big flag in the owner's colours
+        Vector3 fp = p.flagPole;
         float wave = sinf(time * 3.0f + i) * 0.15f;
         Matrix fr = MatrixMultiply(MatrixRotateY(-p.ang + wave), MatrixTranslate(fp.x, fp.y + 19.5f, fp.z));
         Part(cube, MatrixMultiply(MatrixMultiply(MatrixScale(0.15f, 4.5f, 7.0f), MatrixTranslate(0, 0, 3.6f)), fr), flag[i]);
-        // warehouses on the quay where the pier meets the island
-        for (int k = -1; k <= 1; k += 2) {
-            Vector3 hc = at(p.pierFrom - 4.0f, k * 14.0f, 0);
-            hc.y = 2.0f;
-            box({hc.x, hc.y + 3.0f, hc.z}, {10.0f, 6.0f, 8.0f}, {170, 150, 120, 255});
-            box({hc.x, hc.y + 6.6f, hc.z}, {11.0f, 1.4f, 9.0f}, {120, 58, 40, 255});
-        }
         // buoys round the anchorage, bobbing on the swell
         for (int b = 0; b < 10; ++b) {
             float a = b * 2.0f * PI / 10.0f;

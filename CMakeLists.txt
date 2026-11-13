@@ -50,7 +50,9 @@ if(MSVC)
     target_compile_options(broadside PRIVATE /W3 /wd4244 /wd4305)
 endif()
 
-# Ship the shaders next to the executable as well
-add_custom_command(TARGET broadside POST_BUILD
+# Ship the shaders next to the executable as well. A separate target that runs on every build, so a
+# shader-only edit still gets copied (a POST_BUILD step only runs when the exe relinks).
+add_custom_target(broadside_assets ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:broadside>/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/data $<TARGET_FILE_DIR:broadside>/data)
+add_dependencies(broadside_assets broadside)

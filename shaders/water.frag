@@ -2,6 +2,7 @@
 // screen-space refraction + depth absorption from above, and Snell's window / total internal
 // reflection when seen from below.
 #include "common.glsl"
+#include "shadow.glsl"
 in vec3 vWorld;
 in vec2 vXZ;
 in float vDist;
@@ -11,19 +12,23 @@ uniform sampler2D uSceneDepth;
 uniform vec2 uScreenSize;
 uniform float uNear;
 uniform float uFar;
+uniform sampler2D uWake;   // ships' wakes from above: r foam, g churned water, b ridge height
+uniform sampler2D uNoise;
+uniform float uWakeExtent;
 
 out vec4 fragColor;
 
-const vec3 kScatterColor = vec3(0.016, 0.0736, 0.16);
-const vec3 kBubbleColor = vec3(0.0, 0.02, 0.016);
+const vec3 kScatterColor = vec3(0.0065, 0.041, 0.057);  // dark Atlantic blue-green (Garrett's was a light 0.016, 0.0736, 0.16)
+const vec3 kPeakColor = vec3(0.012, 0.11, 0.085);      // light through the thin crests turns green
+const vec3 kBubbleColor = vec3(0.0, 0.012, 0.014);
 const vec3 kFoamColor = vec3(0.6, 0.5568, 0.492);
 const float kRoughness = 0.075;
 const float kBubbleDensity = 1.0;
 const float kHeightModifier = 0.12;
 const float kWavePeakScatter = 1.0;
-const float kScatterStrength = 1.0;
+const float kScatterStrength = 0.75;
 const float kScatterShadow = 0.5;
-const float kEnvStrength = 0.6;
+const float kEnvStrength = 0.42;  // less pale sky in the reflection, so the sea keeps its own colour
 const vec4 kFoamSubtract = vec4(0.04, -0.04, -0.46, -0.38);
 
 float LinearDepth(float d) {
@@ -64,6 +69,28 @@ void main() {
     vec3 N = normalize(vec3(-slopes.x, 1.0, -slopes.y));
     N = normalize(mix(macroNormal, N, atten));
 
+    // ---- ship wakes ----
+    vec2 wuv = vWorld.xz / (2.0 * uWakeExtent) + 0.5;
+    vec4 wk = texture(uWake, wuv);
+    float churn = 0.0;
+    if (wk.r + wk.g + wk.b > 0.002) {
+        // foam: thin foam breaks up into streaks and lace, thick foam is solid
+        vec4 n1 = texture(uNoise, vWorld.xz * 0.021 + vec2(uTime * 0.004, 0.0));
+        vec4 n2 = texture(uNoise, vWorld.xz * 0.083 - vec2(0.0, uTime * 0.01));
+        vec4 n3 = texture(uNoise, vWorld.xz * 0.29 + vec2(uTime * 0.02, -uTime * 0.015));
+        float lace = n1.r * 0.35 + n2.g * 0.35 + n3.b * 0.3;
+        float wf = clamp(wk.r * 1.5 - (1.0 - lace) * 1.25 + 0.12, 0.0, 1.0);
+        wf = max(wf, smoothstep(0.8, 1.6, wk.r));
+        foam = max(foam, min(wf, 0.95));
+        churn = clamp(wk.g, 0.0, 1.0);
+        // ridges of the bow waves, and the chop of churned water
+        float e = 2.0 * uWakeExtent / 2048.0;
+        float hx = texture(uWake, wuv + vec2(1.0 / 2048.0, 0.0)).b - texture(uWake, wuv - vec2(1.0 / 2048.0, 0.0)).b;
+        float hz = texture(uWake, wuv + vec2(0.0, 1.0 / 2048.0)).b - texture(uWake, wuv - vec2(0.0, 1.0 / 2048.0)).b;
+        vec2 chop = (vec2(n2.b, n2.a) - 0.5) * 2.0 * churn * 0.35;
+        N = normalize(N + vec3(-hx / (2.0 * e) * 0.9 + chop.x, 0.0, -hz / (2.0 * e) * 0.9 + chop.y));
+    }
+
     vec2 suv = gl_FragCoord.xy / uScreenSize;
     float waterLin = LinearDepth(gl_FragCoord.z);
     vec3 outCol;
@@ -71,6 +98,9 @@ void main() {
     if (gl_FrontFacing) {
         // ---------------- seen from above (Garrett's lighting) ----------------
         float NdotL = max(dot(N, lightDir), 0.0);
+        // ships and islands shade the sea: no glints, less light scattered up through the waves
+        float sh = SunShadow(vWorld, vec3(0.0, 1.0, 0.0));
+        float shScatter = mix(0.45, 1.0, sh);
         float a = kRoughness + foam * 0.0;
         float ndoth = max(0.0001, dot(N, halfwayDir));
         float viewMask = SmithMaskingBeckmann(halfwayDir, viewDir, a);
@@ -83,7 +113,7 @@ void main() {
 
         vec3 specular = uSunColor * F * G * Beckmann(ndoth, a);
         specular /= 4.0 * max(0.001, max(dot(macroNormal, lightDir), 0.0));
-        specular *= NdotL;
+        specular *= NdotL * sh;
 
         vec3 refl = reflect(-viewDir, N);
         refl.y = abs(refl.y);
@@ -94,8 +124,8 @@ void main() {
         float k2 = kScatterStrength * pow(max(dot(viewDir, N), 0.0), 2.0);
         float k3 = kScatterShadow * NdotL;
         float k4 = kBubbleDensity;
-        vec3 scatter = (k1 + k2) * kScatterColor * uSunColor / (1.0 + lightMask);
-        scatter += k3 * kScatterColor * uSunColor + k4 * kBubbleColor * uSunColor;
+        vec3 scatter = (k1 * kPeakColor * 1.6 + k2 * kScatterColor) * uSunColor / (1.0 + lightMask) * shScatter;
+        scatter += k3 * kScatterColor * uSunColor * sh + k4 * kBubbleColor * uSunColor * shScatter;
 
         // refraction of whatever is under the surface (dunked ships, cannonballs)
         vec2 ruv = suv + N.xz * 0.04 * atten;
@@ -108,10 +138,11 @@ void main() {
         vec3 T = exp(-kWaterAbsorb * thickness * 1.5);
         vec3 refracted = texture(uSceneColor, ruv).rgb;
         vec3 body = scatter * (1.0 - T) + refracted * T;
+        body += vec3(0.03, 0.12, 0.10) * uSunColor * churn * (0.35 + 0.65 * sh);  // aerated water
 
         outCol = (1.0 - F) * body + specular + F * envReflection;
         outCol = max(outCol, vec3(0.0));
-        outCol = mix(outCol, kFoamColor * (0.35 + 0.65 * uSunColor.g), clamp(foam, 0.0, 1.0));
+        outCol = mix(outCol, kFoamColor * (0.35 + 0.65 * uSunColor.g) * mix(0.55, 1.0, sh), clamp(foam, 0.0, 1.0));
     } else {
         // ---------------- seen from below: Snell's window ----------------
         vec3 n = -N;               // faces the viewer, pointing down into the water

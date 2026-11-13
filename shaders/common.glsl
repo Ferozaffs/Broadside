@@ -65,11 +65,11 @@ vec3 SkyColor(vec3 d) {
     return col;
 }
 
-// Over-the-top clear water so you can see ships that got dunked
-const vec3 kWaterAbsorb = vec3(0.24, 0.055, 0.038);
+// Clear enough to see a dunked ship a few metres down, but no swimming pool
+const vec3 kWaterAbsorb = vec3(0.42, 0.105, 0.075);
 
 vec3 UnderwaterFogColor(float depthBelow, float viewY) {
-    vec3 base = vec3(0.010, 0.060, 0.090) * (0.4 + 0.6 * uSunColor.g);
+    vec3 base = vec3(0.005, 0.036, 0.064) * (0.4 + 0.6 * uSunColor.g);
     base *= mix(0.45, 1.5, clamp(viewY * 0.5 + 0.5, 0.0, 1.0));
     return base * exp(-max(depthBelow, 0.0) * 0.035);
 }

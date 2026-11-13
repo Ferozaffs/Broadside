@@ -8,12 +8,13 @@
 
 struct RenderView {
     Vector3 pos, target;
+    Vector3 up{0, 1, 0};  // tilted a little on deck, so you feel the ship roll
     float fovy = 60.0f;
     float nearZ = 0.5f, farZ = 12000.0f;
     int width = 0, height = 0;
     Matrix view, proj, viewProj, invViewProj;
     void Build(int w, int h);
-    Camera3D AsCamera() const { return {pos, target, {0, 1, 0}, fovy, CAMERA_PERSPECTIVE}; }
+    Camera3D AsCamera() const { return {pos, target, up, fovy, CAMERA_PERSPECTIVE}; }
     bool Project(Vector3 p, Vector2& out) const;  // world -> screen pixels
 };
 
@@ -29,6 +30,20 @@ public:
     void End();
     void Post(float flash);
 
+    // Sun shadows. Cascade 0: a box round the camera's focus (ships, every frame). Cascade 1: the whole
+    // arena (islands, harbours: render it once per match). Draw with the lit shader between these.
+    void BeginShadow(int cascade, Vector3 centre, float halfSize, float depth);
+    void EndShadow();
+    bool shadowsReady[2] = {false, false};
+    Texture2D noiseTex{};  // tiling fractal noise (4 channels) for procedural surfaces
+    // Wake map: the whole arena seen from above, redrawn every frame (r = foam, g = churned water,
+    // b = wave ridge height). Draw into it with rlgl between BeginWake/EndWake, world x,z as 2D vertices.
+    static constexpr float kWakeExtent = 1000.0f;  // covers -1000..1000 m
+    static constexpr int kWakeRes = 2048;
+    void BeginWake();
+    void EndWake();
+    unsigned int wakeFbo = 0, wakeTex = 0;
+
     // Lit shader for ships / balls (raylib Shader so DrawMesh works with it)
     Shader litShader{};
     int locFlash = -1, locEmissive = -1, locSailWave = -1, locSailPhase = -1;
@@ -39,7 +54,9 @@ public:
     // per-ship lantern lights: world-space xyz, w = intensity, max 4
     void SetLights(const Vector4* lights, int count);
     void SetShore(float amount);  // surf foam where the sea meets this surface (islands)
-    int locShore = -1;
+    void SetProp(float amount);   // weathered scenery props (grain, grime line at the sea)
+    int locProp = -1;
+    int locShore = -1, locShadowPass = -1;
     int locDamage = -1, locHits = -1, locHitCount = -1, locLights = -1, locLightCount = -1;
     int msaaSamples = 4;
 
@@ -53,6 +70,12 @@ private:
     void BuildWaterGrid();
     void SetCommonUniforms(unsigned int prog);
     void BindOceanTextures(int dispUnit, int slopeUnit);
+    void SetShadowUniforms(unsigned int prog, int unit0, int unit1);  // raw GL program (water)
+    void BindShadowTextures(int unit0, int unit1);
+    static constexpr int kShadowRes[2] = {2048, 4096};
+    unsigned int shadowFbo[2] = {0, 0}, shadowTex[2] = {0, 0};
+    Matrix shadowVP[2] = {};
+    float shadowTexel[2] = {1, 1};
 
     int width = 0, height = 0;
     unsigned int msFbo = 0, msColor = 0, msDepth = 0;  // multisampled scene target (renderbuffers)

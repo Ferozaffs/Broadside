@@ -75,6 +75,39 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       further out than their captain (600-650 m), outer slots are pulled inside, and a second 40 m rock probe.
 - playtest/ (gitignored) holds the clips; playtest/make_trailer.py cuts the trailer.
 
+## Rendering pass (2026-11-13: "the other models don't match the water's fidelity")
+- [x] Sun shadows: two cascades (ships round the camera every frame, the whole arena once per match), PCF, on
+      ships, islands, props and the sea (no glints / less scatter in shadow). shaders/shadow.glsl.
+- [x] Lit shader: GGX sun highlight + fresnel sky reflection by roughness, sky/horizon/sea-bounce ambient, wet rock
+      glossy at the waterline, sails translucent against the sun and sky-lit from both sides.
+- [x] Islands: 6x denser mesh with buttresses/gullies, procedural rock + turf from a tiling noise texture (triplanar,
+      world-space finite-difference bump), three-tier conifers in forest patches.
+- [x] Harbours: one built mesh each (planked pier on braced pilings, stone pier head, tapered banded lighthouse with
+      gallery and lamp room, tiled sheds, barrels and crates), weathering + grime line in the shader.
+- [x] Deck view: the mouse wheel zooms on past 22 m onto the quarterdeck rail (V toggles), camera fixed to the hull
+      with a share of its heel; near plane 0.12 m. BS_EYE "y z x" moves the eye, BS_CAMREL=1 makes --cam yaw ship-relative.
+- [x] Water deeper and more saturated (scatter colour, green crest light, absorption ~1.8x, darker underwater fog).
+- [x] Ratlines were solid black sheets: their texture is an RGB opacity mask; converted to alpha on load.
+
+## Wakes (2026-11-13: "no effect from the boat crossing the water")
+- [x] Wake map (Renderer::BeginWake/EndWake): a 2048^2 RGBA16F top-down map of the arena, redrawn every frame from
+      each ship's track (Game::UpdateWake/DrawWakeMap). r = foam, g = churned water, b = wave ridge height.
+- [x] Kelvin arms at 19.5 deg from the bow that follow the curved track, a frothy stern trail that breaks up
+      within a few lengths into lighter churned water, foam where the hull meets the sea, a bow wave.
+- [x] Foam patches: landings, breaches, cannonball splashes (light for skips), ships going down.
+- [x] water.frag: foam broken up with three noise scales, ridges/chop bend the normal, aerated water lighter.
+- Build: shaders are now copied by a target that runs on every build (shader-only edits used to be skipped).
+
+## Sound (2026-11-13)
+- [x] src/audio.cpp: every effect synthesised at startup (no sample files): cannon near/far, hull hit, rock hit,
+      splash, skip, slam, breach whoosh, creak, thunder, chime, treasure, sinking; 2-6 variants each, random pitch.
+- [x] Live ambience on the audio thread: rolling sea + breaking crests, gusting wind with a rigging whistle, water
+      rushing along our hull (by speed, louder on deck), rain; everything muffled when the camera is under water.
+- [x] 3D: distance falloff, stereo pan, speed-of-sound delay (far broadsides arrive late, and use the dull variant).
+      Thunder follows lightning. M mutes; BS_VOLUME sets the level; automated runs (--shot/--record) are muted.
+- [x] --sfx-export <dir> writes every sound and a 46 s sampler.wav.
+- Not heard by a person yet: needs a listening pass (levels, which sounds feel synthetic).
+
 ## Known issues / next
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).

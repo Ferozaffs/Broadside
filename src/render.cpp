@@ -2,6 +2,7 @@
 #include "gl43.h"
 #include "rlgl.h"
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 using namespace gl;
@@ -11,7 +12,7 @@ void RenderView::Build(int w, int h) {
     width = w;
     height = h;
     proj = MatrixPerspective(fovy * DEG2RAD, (double)w / (double)h, nearZ, farZ);
-    view = MatrixLookAt(pos, target, {0, 1, 0});
+    view = MatrixLookAt(pos, target, up);
     viewProj = MatrixMultiply(view, proj);
     invViewProj = MatrixInvert(viewProj);
 }
@@ -79,6 +80,188 @@ void Renderer::Init() {
     locLightCount = GetShaderLocation(litShader, "uLightCount");
     locSailPhase = GetShaderLocation(litShader, "uSailPhase");
     locShore = GetShaderLocation(litShader, "uShore");
+    locShadowPass = GetShaderLocation(litShader, "uShadowPass");
+    locProp = GetShaderLocation(litShader, "uProp");
+
+    // four independent tiling fractal noises, one per channel
+    {
+        const int S = 512;
+        auto hash = [](int x, int y, int c) {
+            uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)c * 2246822519u;
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return ((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+        };
+        auto vnoise = [&](float x, float y, int period, int c) {
+            int ix = (int)floorf(x), iy = (int)floorf(y);
+            float fx = x - ix, fy = y - iy;
+            fx = fx * fx * (3 - 2 * fx);
+            fy = fy * fy * (3 - 2 * fy);
+            auto H = [&](int a, int b) { return hash(((a % period) + period) % period, ((b % period) + period) % period, c); };
+            float a = H(ix, iy) + (H(ix + 1, iy) - H(ix, iy)) * fx;
+            float b = H(ix, iy + 1) + (H(ix + 1, iy + 1) - H(ix, iy + 1)) * fx;
+            return a + (b - a) * fy;
+        };
+        std::vector<unsigned char> px((size_t)S * S * 4);
+        for (int y = 0; y < S; ++y)
+            for (int x = 0; x < S; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    float v = 0, amp = 0.5f, tot = 0;
+                    for (int o = 0; o < 5; ++o) {
+                        int period = 8 << o;
+                        v += amp * vnoise(x * period / (float)S, y * period / (float)S, period, c * 7 + o);
+                        tot += amp;
+                        amp *= 0.5f;
+                    }
+                    v /= tot;
+                    v = Clamp((v - 0.5f) * 1.6f + 0.5f, 0.0f, 1.0f);  // stretch the contrast back out
+                    px[((size_t)y * S + x) * 4 + c] = (unsigned char)(v * 255.0f);
+                }
+        Image img = {px.data(), S, S, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        noiseTex = LoadTextureFromImage(img);
+        GenTextureMipmaps(&noiseTex);
+        SetTextureFilter(noiseTex, TEXTURE_FILTER_TRILINEAR);  // (raylib's default is nearest)
+        BindTexture(TEXTURE_2D, noiseTex.id);
+        TexParameterf(TEXTURE_2D, TEXTURE_MAX_ANISOTROPY, 8.0f);
+        BindTexture(TEXTURE_2D, 0);
+        SetTextureWrap(noiseTex, TEXTURE_WRAP_REPEAT);
+    }
+
+    // shadow maps: depth only, sampled with hardware comparison (2x2 PCF with linear filtering)
+    for (int c = 0; c < 2; ++c) {
+        shadowTex[c] = MakeTex2D(DEPTH_COMPONENT32F, kShadowRes[c], kShadowRes[c]);
+        BindTexture(TEXTURE_2D, shadowTex[c]);
+        TexParameteri(TEXTURE_2D, TEXTURE_COMPARE_MODE, COMPARE_REF_TO_TEXTURE);
+        TexParameteri(TEXTURE_2D, TEXTURE_COMPARE_FUNC, LEQUAL);
+        BindTexture(TEXTURE_2D, 0);
+        GLuint_ f;
+        GenFramebuffers(1, &f);
+        BindFramebuffer(FRAMEBUFFER, f);
+        FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, shadowTex[c], 0);
+        DrawBuffer(NONE_);
+        ReadBuffer(NONE_);
+        if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE) TraceLog(LOG_ERROR, "shadow FBO incomplete");
+        BindFramebuffer(FRAMEBUFFER, 0);
+        shadowFbo[c] = f;
+        shadowVP[c] = MatrixIdentity();
+    }
+    wakeTex = MakeTex2D(RGBA16F, kWakeRes, kWakeRes);
+    {
+        GLuint_ f;
+        GenFramebuffers(1, &f);
+        BindFramebuffer(FRAMEBUFFER, f);
+        FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, wakeTex, 0);
+        if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE) TraceLog(LOG_ERROR, "wake FBO incomplete");
+        ClearColor(0, 0, 0, 0);
+        Clear(COLOR_BUFFER_BIT);
+        BindFramebuffer(FRAMEBUFFER, 0);
+        wakeFbo = f;
+    }
+}
+
+void Renderer::BeginShadow(int c, Vector3 centre, float half, float depth) {
+    rlDrawRenderBatchActive();
+    Vector3 L = Vector3Normalize(atm.sunDir);
+    if (L.y < 0.12f) L = Vector3Normalize({L.x, 0.12f, L.z});  // a sun on the horizon: keep the shadows finite
+    Vector3 up = {0, 1, 0};
+    Vector3 f = Vector3Negate(L);
+    Vector3 r = Vector3Normalize(Vector3CrossProduct(f, up));
+    Vector3 u = Vector3CrossProduct(r, f);
+    // snap the box to whole texels so the shadows don't crawl as the camera moves
+    float ts = 2.0f * half / kShadowRes[c];
+    float cr = floorf(Vector3DotProduct(centre, r) / ts) * ts, cu = floorf(Vector3DotProduct(centre, u) / ts) * ts;
+    float cl = Vector3DotProduct(centre, L);
+    Vector3 cs = Vector3Add(Vector3Add(Vector3Scale(r, cr), Vector3Scale(u, cu)), Vector3Scale(L, cl));
+    Matrix v = MatrixLookAt(Vector3Add(cs, Vector3Scale(L, depth)), cs, up);
+    Matrix p = MatrixOrtho(-half, half, -half, half, 1.0, depth * 2.0f);
+    shadowVP[c] = MatrixMultiply(v, p);
+    shadowTexel[c] = ts;
+    shadowsReady[c] = true;
+
+    for (int k = 7; k <= 8; ++k) {  // never sample a map while it's being drawn
+        ActiveTexture(TEXTURE0 + k);
+        BindTexture(TEXTURE_2D, 0);
+    }
+    ActiveTexture(TEXTURE0);
+    BindFramebuffer(FRAMEBUFFER, shadowFbo[c]);
+    Viewport(0, 0, kShadowRes[c], kShadowRes[c]);
+    DepthMask(TRUE_);
+    Enable(DEPTH_TEST);
+    Clear(DEPTH_BUFFER_BIT);
+    Enable(POLYGON_OFFSET_FILL);
+    PolygonOffset(1.5f, 3.0f);
+    rlMatrixMode(RL_PROJECTION);
+    rlPushMatrix();
+    rlLoadIdentity();
+    rlMultMatrixf(MatrixToFloat(p));
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
+    rlMultMatrixf(MatrixToFloat(v));
+    rlEnableDepthTest();
+    float one = 1.0f, t = time;
+    SetShaderValue(litShader, locShadowPass, &one, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litShader, GetShaderLocation(litShader, "uTime"), &t, SHADER_UNIFORM_FLOAT);
+}
+
+void Renderer::BeginWake() {
+    rlDrawRenderBatchActive();
+    BindFramebuffer(FRAMEBUFFER, wakeFbo);
+    Viewport(0, 0, kWakeRes, kWakeRes);
+    ClearColor(0, 0, 0, 0);
+    Clear(COLOR_BUFFER_BIT);
+    Disable(DEPTH_TEST);
+    Disable(CULL_FACE);
+    rlMatrixMode(RL_PROJECTION);
+    rlPushMatrix();
+    rlLoadIdentity();
+    rlMultMatrixf(MatrixToFloat(MatrixOrtho(-kWakeExtent, kWakeExtent, -kWakeExtent, kWakeExtent, -10.0, 10.0)));
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
+    rlDisableDepthTest();
+    rlDisableBackfaceCulling();
+    BeginBlendMode(BLEND_ADDITIVE);
+}
+
+void Renderer::EndWake() {
+    rlDrawRenderBatchActive();
+    EndBlendMode();
+    rlMatrixMode(RL_PROJECTION);
+    rlPopMatrix();
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
+    rlEnableBackfaceCulling();
+    Enable(CULL_FACE);
+    BindFramebuffer(FRAMEBUFFER, 0);
+    if (width > 0) Viewport(0, 0, width, height);
+}
+
+void Renderer::EndShadow() {
+    rlDrawRenderBatchActive();
+    rlMatrixMode(RL_PROJECTION);
+    rlPopMatrix();
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
+    Disable(POLYGON_OFFSET_FILL);
+    BindFramebuffer(FRAMEBUFFER, 0);
+    if (width > 0) Viewport(0, 0, width, height);
+    float zero = 0.0f;
+    SetShaderValue(litShader, locShadowPass, &zero, SHADER_UNIFORM_FLOAT);
+}
+
+void Renderer::BindShadowTextures(int u0, int u1) {
+    ActiveTexture(TEXTURE0 + u0);
+    BindTexture(TEXTURE_2D, shadowTex[0]);
+    ActiveTexture(TEXTURE0 + u1);
+    BindTexture(TEXTURE_2D, shadowTex[1]);
+    ActiveTexture(TEXTURE0);
+}
+
+void Renderer::SetShadowUniforms(unsigned int p, int u0, int u1) {
+    Uniform1i(GetUniformLocation(p, "uShadow0"), u0);
+    Uniform1i(GetUniformLocation(p, "uShadow1"), u1);
+    SetMat(p, "uShadowVP0", shadowVP[0]);
+    SetMat(p, "uShadowVP1", shadowVP[1]);
+    Uniform2f(GetUniformLocation(p, "uShadowTexel"), shadowTexel[0], shadowTexel[1]);
+    Uniform1f(GetUniformLocation(p, "uShadowOn"), shadowsReady[0] && shadowsReady[1] ? 1.0f : 0.0f);
 }
 
 void Renderer::BuildWaterGrid() {
@@ -268,7 +451,26 @@ void Renderer::Begin(const RenderView& v, const OceanGPU& oc, double t) {
     SetDamage(0.0f, nullptr, 0);
     SetLights(nullptr, 0);
     SetShore(0.0f);
+    SetProp(0.0f);
     BindOceanTextures(5, 6);
+    {
+        int u7 = 7, u8 = 8;
+        float on = shadowsReady[0] && shadowsReady[1] ? 1.0f : 0.0f, zero = 0.0f;
+        Vector2 tx = {shadowTexel[0], shadowTexel[1]};
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShadow0"), &u7, SHADER_UNIFORM_INT);
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShadow1"), &u8, SHADER_UNIFORM_INT);
+        SetShaderValueMatrix(litShader, GetShaderLocation(litShader, "uShadowVP0"), shadowVP[0]);
+        SetShaderValueMatrix(litShader, GetShaderLocation(litShader, "uShadowVP1"), shadowVP[1]);
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShadowTexel"), &tx, SHADER_UNIFORM_VEC2);
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uShadowOn"), &on, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(litShader, locShadowPass, &zero, SHADER_UNIFORM_FLOAT);
+        BindShadowTextures(7, 8);
+        int u9 = 9;
+        SetShaderValue(litShader, GetShaderLocation(litShader, "uNoise"), &u9, SHADER_UNIFORM_INT);
+        ActiveTexture(TEXTURE0 + 9);
+        BindTexture(TEXTURE_2D, noiseTex.id);
+        ActiveTexture(TEXTURE0);
+    }
 }
 
 void Renderer::SetLitParams(float flash, float emissive) {
@@ -296,6 +498,16 @@ void Renderer::Water() {
     Uniform1i(GetUniformLocation(progWater, "uSlope"), 1);
     Uniform1i(GetUniformLocation(progWater, "uSceneColor"), 2);
     Uniform1i(GetUniformLocation(progWater, "uSceneDepth"), 3);
+    SetShadowUniforms(progWater, 4, 5);
+    BindShadowTextures(4, 5);
+    Uniform1i(GetUniformLocation(progWater, "uWake"), 10);
+    Uniform1i(GetUniformLocation(progWater, "uNoise"), 11);
+    Uniform1f(GetUniformLocation(progWater, "uWakeExtent"), kWakeExtent);
+    ActiveTexture(TEXTURE0 + 10);
+    BindTexture(TEXTURE_2D, wakeTex);
+    ActiveTexture(TEXTURE0 + 11);
+    BindTexture(TEXTURE_2D, noiseTex.id);
+    ActiveTexture(TEXTURE0);
     BindOceanTextures(0, 1);
     ActiveTexture(TEXTURE0 + 2);
     BindTexture(TEXTURE_2D, copyColor);
@@ -308,6 +520,11 @@ void Renderer::Water() {
     BindTexture(TEXTURE_2D, 0);
     ActiveTexture(TEXTURE0 + 2);
     BindTexture(TEXTURE_2D, 0);
+    BindShadowTextures(7, 8);  // back where the lit shader expects them (units 4/5 are free again)
+    ActiveTexture(TEXTURE0 + 4);
+    BindTexture(TEXTURE_2D, 0);
+    ActiveTexture(TEXTURE0 + 5);
+    BindTexture(TEXTURE_2D_ARRAY, ocean->DisplacementTex());
     ActiveTexture(TEXTURE0);
     BindTexture(TEXTURE_2D, 0);
     UseProgram(0);
@@ -335,6 +552,7 @@ void Renderer::SetSail(float amplitude, float phase) {
 }
 
 void Renderer::SetShore(float amount) { SetShaderValue(litShader, locShore, &amount, SHADER_UNIFORM_FLOAT); }
+void Renderer::SetProp(float amount) { SetShaderValue(litShader, locProp, &amount, SHADER_UNIFORM_FLOAT); }
 
 void Renderer::SetDamage(float damage, const Vector4* hits, int count) {
     count = count < 0 ? 0 : (count > 12 ? 12 : count);

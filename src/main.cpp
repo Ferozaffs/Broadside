@@ -6,6 +6,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "render.h"
+#include "audio.h"
 #include "rlgl.h"
 #include "server.h"
 #include "shipmodel.h"
@@ -216,6 +217,9 @@ public:
 
     // input / camera
     float camYaw = 0.6f, camPitch = 0.28f, camDist = 75.0f;
+    float lastChaseDist = 75.0f;  // where V takes you back to from the deck
+    Vector3 deckEye{1.5f, 3.0f, 3.5f};  // on deck: at the quarterdeck rail, a step to starboard (BS_EYE "y z x" to try others)
+    float DeckView() const { float u = Clamp(camDist / 22.0f, 0.0f, 1.0f); return 1.0f - u * u * (3.0f - 2.0f * u); }  // 1 = on deck
     Vector3 camTarget{};
     bool camInit = false;
     float sailTarget = 0.0f;
@@ -274,6 +278,23 @@ public:
     void DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Color team, float flash, float hpFrac, bool alive,
                   Vector3 pos, Quaternion rot, float phase);
     Texture2D softTex{};
+    // wakes: each ship's recent track (redrawn into the renderer's wake map every frame), and foam patches
+    struct WakePt { Vector2 p, d; double t; float spd; bool water; };
+    std::deque<WakePt> wakeHist[MAX_SHIPS];
+    struct FoamPatch { float x, z, r0, r1; double t0; float life, amt; };
+    std::vector<FoamPatch> foamPatches;
+    bool prevAlive[MAX_SHIPS] = {};
+    void UpdateWake(int id, Vector3 pos, Quaternion rot, Vector3 vel, bool water);
+    void AddFoam(Vector3 p, float r0, float r1, float life, float amt) {
+        if (foamPatches.size() < 400) foamPatches.push_back({p.x, p.z, r0, r1, GetTime(), life, amt});
+    }
+    void DrawWakeMap(bool menu);
+    bool soundOn = false;
+    float creakTimer = 2.0f;
+    void UpdateSound(float dt, bool menu);
+    bool shadowPass = false;        // DrawShip: geometry only, no lanterns/fx
+    uint32_t arenaShadowKey = 0;    // what the arena shadow cascade was last drawn for
+    void DrawShips(bool menu, bool shadow, Vector3 centre, float radius);
     std::deque<FeedLine> feed;
     std::vector<FloatText> floats;
     RenderView rv;
@@ -375,6 +396,11 @@ void Game::Init() {
     std::string assetDir = std::string(GetApplicationDirectory()) + "../assets/ship";
     if (!DirectoryExists(assetDir.c_str())) assetDir = std::string(GetApplicationDirectory()) + "assets/ship";
     if (DirectoryExists(assetDir.c_str())) shipModel.LoadExternal(assetDir.c_str(), renderer.litShader);
+    soundOn = sfx::Init();
+    if (soundOn) {
+        sfx::SetVolume(getenv("BS_VOLUME") ? (float)atof(getenv("BS_VOLUME")) : 0.8f);
+        if (opt.shotTime > 0 || !opt.recordPath.empty()) sfx::SetMuted(true);  // automated runs stay quiet
+    }
     Image img = GenImageGradientRadial(64, 64, 0.0f, WHITE, BLANK);
     softTex = LoadTextureFromImage(img);
     UnloadImage(img);
@@ -404,6 +430,7 @@ void Game::Init() {
     fleetSel = opt.fleets ? 1 : 0;
 
     if (opt.camOverride) { camYaw = opt.camYaw; camPitch = opt.camPitch; camDist = opt.camDist; }
+    if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
     switch (opt.start) {
         case Options::Host: StartSession(true, opt.bots); break;
         case Options::Practice: StartSession(true, botCount); break;
@@ -418,6 +445,7 @@ void Game::Shutdown() {
                predStatMax, opt.fakeLagMs);
     net.Disconnect();
     server.Stop();
+    if (soundOn) sfx::Shutdown();
 }
 
 void Game::SetOcean(uint32_t seed, int weather) {
@@ -460,6 +488,8 @@ void Game::StartSession(bool host, int bots) {
     for (auto& i : info) i = Info{};
     for (auto& v : view) { v.present = false; v.s = NetShip{}; }
     chests.clear();
+    for (auto& w : wakeHist) w.clear();
+    foamPatches.clear();
     crates.clear();
     teamScore[0] = teamScore[1] = 0;
     banner.clear();
@@ -663,6 +693,10 @@ void Game::UpdateInput(float dt) {
         else DisableCursor();
     }
     if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
+    if (IsKeyPressed(KEY_M) && soundOn) {
+        sfx::SetMuted(!sfx::Muted());
+        Feed(sfx::Muted() ? "Sound off  (M)" : "Sound on  (M)", ui::kDim);
+    }
     if (IsKeyPressed(KEY_F3)) showDebug = !showDebug;
 
     PlayerInput in;
@@ -670,8 +704,16 @@ void Game::UpdateInput(float dt) {
     if (active && !opt.autopilot) {
         Vector2 md = GetMouseDelta();
         camYaw -= md.x * 0.0035f;
-        camPitch = Clamp(camPitch + md.y * 0.0030f, -0.75f, 1.35f);
-        camDist = Clamp(camDist * (1.0f - GetMouseWheelMove() * 0.1f), 22.0f, 220.0f);
+        camPitch = Clamp(camPitch + md.y * 0.0030f, camDist < 11.0f ? -1.35f : -0.75f, 1.35f);  // on deck you can look up the masts
+        // wheel: 220 m out to 22 m behind the ship, then on in (a few notches) to the quarterdeck
+        float wm = GetMouseWheelMove();
+        if (wm > 0 && camDist <= 22.5f) camDist = fmaxf(0.0f, camDist - wm * 5.5f);
+        else if (wm < 0 && camDist < 22.0f) camDist = fminf(22.0f, camDist - wm * 5.5f);
+        else if (wm != 0) camDist = Clamp(camDist * (1.0f - wm * 0.1f), 22.0f, 220.0f);
+        if (IsKeyPressed(KEY_V)) {  // jump to the deck and back
+            if (camDist > 0.5f) { lastChaseDist = camDist; camDist = 0.0f; }
+            else camDist = lastChaseDist;
+        }
         // hold to drive: W full ahead, S full astern, neither = coast
         sailTarget = (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN) ? 1.0f : 0.0f);
         in.rudder = (IsKeyDown(KEY_A) ? -1.0f : 0.0f) + (IsKeyDown(KEY_D) ? 1.0f : 0.0f);
@@ -864,6 +906,38 @@ void Game::RecordFrame() {
         if (opt.autopilot) AutopilotReport();
         quit = true;
     }
+}
+
+// The listener is the camera. Ambience: the sea always, wind by weather and by how fast we're going
+// (and whether we're flying), water rushing along our hull (louder on deck), rain, and everything
+// dulled when the camera is under water. Our own timbers creak as she works in the swell.
+void Game::UpdateSound(float dt, bool menu) {
+    if (!soundOn) return;
+    sfx::SetListener(rv.pos, Vector3Subtract(rv.target, rv.pos));
+    int w = menu ? weatherSel : curWeather;
+    sfx::Ambience a;
+    a.sea = w == 1 ? 0.85f : (w == 2 ? 0.45f : 0.55f);
+    a.wind = w == 1 ? 0.75f : (w == 2 ? 0.08f : 0.2f);
+    a.rain = renderer.atm.rain > 0.0f ? 0.8f : 0.0f;
+    a.underwater = rv.pos.y < Ocean().Height(rv.pos.x, rv.pos.z) ? 1.0f : 0.0f;
+    if (!menu && myId >= 0 && view[myId].present) {
+        const NetShip& me = view[myId].s;
+        float spd = Vector3Length(me.vel);
+        float deck = DeckView();
+        float inWater = me.airTime <= 0.0f ? 1.0f : 0.0f;
+        a.rush = inWater * Clamp(spd / 26.0f, 0.0f, 1.0f) * (0.35f + 0.65f * deck);
+        a.wind = Clamp(a.wind + spd / 30.0f * 0.15f + (me.airTime > 0.3f ? 0.25f : 0.0f), 0.0f, 1.0f);
+        // creaks: more often and louder the harder she rolls and pitches
+        float work = Vector3Length(me.angVel);
+        creakTimer -= dt * (0.6f + work * 2.0f);
+        if (creakTimer <= 0.0f && (me.flags & SF_ALIVE)) {
+            creakTimer = Rnd(1.5f, 4.5f);
+            sfx::Play(sfx::Creak, HullToWorld(me.pos, me.rot, {Rnd(-3, 3), 3.0f, Rnd(-12, 12)}),
+                      Clamp(0.15f + work * 0.5f, 0.15f, 0.6f) * (0.4f + 0.6f * deck), Rnd(0.8f, 1.15f));
+        }
+    }
+    sfx::SetAmbience(a);
+    sfx::Update();
 }
 
 // Where is the reticle pointing? The first thing the camera ray meets: an enemy hull, the sea, or the
@@ -1121,24 +1195,58 @@ void Game::ApplyPrediction(float dt) {
 
 void Game::UpdateCamera(float dt, Vector3 focus) {
     // orbit a pivot well above the ship (World of Warships style): the ship sits in the lower
-    // part of the frame and the crosshair looks past it at the sea and the enemy
     // part of the frame and the crosshair looks past it at the sea and the enemy. The lift runs
     // along the camera's own up axis so the ship stays low in frame even when looking down steeply.
-    float dist = camDist * (1.0f - 0.35f * aimZoom);
-    Vector3 off = {cosf(camPitch) * sinf(camYaw), sinf(camPitch), cosf(camPitch) * cosf(camYaw)};
+    // Zoomed in past 22 m the camera slides down into the ship and ends up standing on the quarterdeck.
+    float fp = DeckView();
+    float dist = fmaxf(camDist, 22.0f) * (1.0f - 0.35f * aimZoom);
+    float yaw = camYaw;
+    if (getenv("BS_CAMREL") && myId >= 0 && view[myId].present) {  // test shots: yaw relative to the ship's heading
+        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, view[myId].s.rot);
+        yaw += atan2f(-f.x, -f.z);
+    }
+    Vector3 off = {cosf(camPitch) * sinf(yaw), sinf(camPitch), cosf(camPitch) * cosf(yaw)};
     Vector3 camUp = Vector3Normalize(Vector3Subtract({0, 1, 0}, Vector3Scale(off, off.y)));
     Vector3 want = Vector3Add(Vector3Add(focus, {0, 10.0f, 0}), Vector3Scale(camUp, 0.36f * dist));
     if (!camInit) { camTarget = want; camInit = true; }
     camTarget = Vector3Lerp(camTarget, want, fminf(1.0f, dt * 8.0f));
-    rv.target = camTarget;
-    rv.pos = Vector3Add(camTarget, Vector3Scale(off, dist));
-    float rockY = RocksHeight(pred.rocks, rv.pos.x, rv.pos.z);
-    if (rv.pos.y < rockY + 4.0f) rv.pos.y = rockY + 4.0f;
+    Vector3 chasePos = Vector3Add(camTarget, Vector3Scale(off, dist));
+    Vector3 chaseTarget = camTarget;
+    rv.up = {0, 1, 0};
+    rv.nearZ = 0.5f;
+    if (fp > 0.0f && myId >= 0 && view[myId].present) {
+        // eye height on the quarterdeck, fixed to the hull: it rises, falls and rolls with her
+        const NetShip& me = view[myId].s;
+        Vector3 eyeLocal = {deckEye.x, hull::DeckHeight(-11.0f) + deckEye.y, -11.0f + deckEye.z};
+        Vector3 eye = HullToWorld(me.pos, me.rot, eyeLocal);
+        Vector3 eyeTarget = Vector3Subtract(eye, Vector3Scale(off, 60.0f));
+        chasePos = Vector3Lerp(chasePos, eye, fp);
+        chaseTarget = Vector3Lerp(chaseTarget, eyeTarget, fp);
+        // a share of the ship's heel and pitch in the horizon
+        Vector3 shipUp = Vector3RotateByQuaternion({0, 1, 0}, me.rot);
+        rv.up = Vector3Normalize(Vector3Lerp({0, 1, 0}, shipUp, 0.35f * fp));
+        rv.nearZ = 0.5f + (0.12f - 0.5f) * fp;
+        if (getenv("BS_EYELOG")) {
+            static double lastLog = 0;
+            if (GetTime() - lastLog > 1.0) {
+                lastLog = GetTime();
+                printf("[eye] fp %.2f camDist %.1f ship %.1f %.1f %.1f eye %.1f %.1f %.1f sea %.1f\n", fp, camDist, me.pos.x, me.pos.y, me.pos.z,
+                       eye.x, eye.y, eye.z, Ocean().Height(eye.x, eye.z));
+                fflush(stdout);
+            }
+        }
+    }
+    rv.target = chaseTarget;
+    rv.pos = chasePos;
+    if (fp < 0.5f) {
+        float rockY = RocksHeight(pred.rocks, rv.pos.x, rv.pos.z);
+        if (rv.pos.y < rockY + 4.0f) rv.pos.y = rockY + 4.0f;
+    }
     if (shake > 0) {
-        rv.pos = Vector3Add(rv.pos, Vector3Scale(RandDir(1.0f), shake));
+        rv.pos = Vector3Add(rv.pos, Vector3Scale(RandDir(1.0f), shake * (1.0f - 0.7f * fp)));
         shake = fmaxf(0.0f, shake - dt * 3.0f);
     }
-    rv.fovy = 62.0f - 22.0f * aimZoom;
+    rv.fovy = 62.0f + 8.0f * fp - (22.0f + 8.0f * fp) * aimZoom;  // a bit wider on deck; RMB still zooms
 }
 
 // ----------------------------------------------------------------------------
@@ -1157,11 +1265,13 @@ void Game::PlayEvent(const GameEvent& e) {
     switch (e.type) {
         case EventType::Fire: {
             fx.CannonFire(e.pos, e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
+            sfx::Play(sfx::Cannon, e.pos, 0.55f);
             if (e.a == myId) shake = fmaxf(shake, 0.35f);
             break;
         }
         case EventType::Splash: {
             if (e.flags & EF_ROCK) {  // ball into an island: stone chips and dust
+                sfx::Play(sfx::RockHit, e.pos, 0.6f, 1.1f);
                 for (int i = 0; i < 18; ++i) {
                     fx::Particle& q = fx.Add(fx::Debris, e.pos, Vector3Add(RandDir(Rnd(5, 14)), {0, Rnd(3, 9), 0}), Rnd(1.0f, 2.2f), Rnd(0.3f, 0.8f), 0,
                                              {118, 110, 100, 255});
@@ -1178,6 +1288,8 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             bool skip = e.flags & EF_SKIP;
             int n = skip ? 14 : 30;
+            sfx::Play(skip ? sfx::Skip : sfx::Splash, e.pos, skip ? 0.45f : 0.6f);
+            AddFoam(e.pos, skip ? 0.6f : 1.5f, skip ? 2.2f : 6.0f, skip ? 1.6f : 4.5f, skip ? 0.3f : 0.9f);
             for (int i = 0; i < n; ++i) {
                 Vector3 v = {Rnd(-3, 3), Rnd(6, skip ? 10 : 18), Rnd(-3, 3)};
                 Emit(e.pos, v, Rnd(0.8f, 1.6f), Rnd(0.4f, 0.9f), 0.5f, {235, 245, 250, 220}, 0);
@@ -1188,6 +1300,7 @@ void Game::PlayEvent(const GameEvent& e) {
         }
         case EventType::Hit: {
             hitFlash[e.b] = 1.0f;
+            sfx::Play(sfx::Hit, e.pos, (e.flags & EF_PLUNGING) ? 0.9f : 0.75f, (e.flags & EF_PLUNGING) ? 0.85f : 1.0f);
             fx.Explosion(e.pos, e.dir, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 1.4f : 1.0f);
             if (e.b < MAX_SHIPS && view[e.b].present) {
                 const NetShip& v = view[e.b].s;
@@ -1212,6 +1325,8 @@ void Game::PlayEvent(const GameEvent& e) {
         }
         case EventType::Kill: {
             fx.BigExplosion(e.pos);
+            sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
+            sfx::Play(sfx::Sink, e.pos, 0.9f);
             if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
             else Feed3(NameOf(e.a), "  sank  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
             if (e.b == myId) flash = fmaxf(flash, 0.5f);
@@ -1242,6 +1357,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 }
                 for (int i = 0; i < 30; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(6, 16), Rnd(-6, 6)}, Rnd(0.8f, 1.6f), Rnd(0.5f, 1.1f), 0.6f, {235, 245, 250, 220}, 0);
                 if (e.a == myId) shake = fmaxf(shake, fminf(1.6f, 0.5f + e.value * 0.06f));
+                sfx::Play(sfx::RockHit, e.pos, Clamp(0.3f + e.value * 0.04f, 0.3f, 1.0f), 0.8f);
                 if (e.value > 6.0f && e.a < MAX_SHIPS && GetTime() - lastAground[e.a] > 10.0) {  // once is news, five times is spam
                     lastAground[e.a] = GetTime();
                     Feed3(NameOf(e.a), "  ran aground", "", TeamOf(e.a), ui::kText);
@@ -1249,6 +1365,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 break;
             }
             for (int i = 0; i < 30; ++i) Emit(e.pos, RandDir(10.0f), Rnd(1.0f, 2.5f), Rnd(0.4f, 0.9f), 0.0f, {110, 75, 45, 255}, 4);
+            sfx::Play(sfx::Hit, e.pos, 0.8f, 0.7f);  // timbers grinding
             if (e.flags & EF_CRUSH) Feed3(NameOf(e.a), "  landed on  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
             if (e.a == myId || e.b == myId) shake = fmaxf(shake, 1.2f);
             break;
@@ -1268,6 +1385,8 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             for (int i = 0; i < 20; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(5, 12), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
             Feed3(NameOf(e.a), "  grabbed  ", Scenery::PowerName(e.b), TeamOf(e.a), pc);
+            if (e.a == myId) sfx::PlayFlat(sfx::Chime, 0.7f);
+            else sfx::Play(sfx::Chime, e.pos, 0.6f);
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("%s  %ds", Scenery::PowerName(e.b), (int)e.value), pc, 2.4f});
             break;
         }
@@ -1284,6 +1403,7 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             for (int i = 0; i < 16; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(5, 12), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
             Feed3(NameOf(e.a), "  seized the treasure!", "", TeamOf(e.a), gold);
+            sfx::PlayFlat(sfx::Treasure, e.a == myId ? 0.7f : 0.35f);
             if (e.a == myId) {
                 banner = "YOU HAVE THE TREASURE";
                 bannerTime = GetTime();
@@ -1298,6 +1418,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 q.drag = 0.4f;
             }
             Feed3(NameOf(e.a), TextFormat("  banked the treasure! (%d)", e.b), "", TeamOf(e.a), gold);
+            sfx::PlayFlat(sfx::Treasure, e.a == myId ? 0.8f : 0.4f, 0.8f);
             if (e.a == myId) { banner = "TREASURE BANKED!"; bannerTime = GetTime(); }
             break;
         }
@@ -1344,9 +1465,15 @@ void Game::SpawnShipFx(float dt) {
                 Emit(p, v, Rnd(1.0f, 2.2f), Rnd(0.6f, 1.4f), 0.8f, {235, 245, 250, 220}, 0);
             }
             if (id == myId) shake = fmaxf(shake, fminf(2.0f, prevAir[id] * 0.6f));
+            AddFoam(s.pos, 10.0f, 30.0f + prevAir[id] * 4.0f, 7.0f, Clamp(0.5f + prevAir[id] * 0.25f, 0.6f, 1.4f));
+            sfx::Play(sfx::Slam, s.pos, Clamp(0.4f + prevAir[id] * 0.2f, 0.4f, 1.0f), Clamp(1.1f - prevAir[id] * 0.05f, 0.85f, 1.1f));
+            AddFoam(HullToWorld(s.pos, s.rot, {0, 0, 12}), 6.0f, 16.0f, 4.0f, 0.8f);
+            AddFoam(HullToWorld(s.pos, s.rot, {0, 0, -12}), 6.0f, 16.0f, 4.0f, 0.8f);
         }
         // breach: the hull just tore clear of a crest going up fast (that's when the sim kicks it on up)
         if (prevAir[id] <= 0.0f && s.airTime > 0.0f && s.vel.y > tune::breachMinVy && s.leader < 0) {
+            AddFoam(HullToWorld(s.pos, s.rot, {0, 0, -6}), 7.0f, 18.0f, 5.0f, 0.9f);
+            sfx::Play(sfx::Whoosh, s.pos, 0.7f);
             int n = (int)Clamp(s.vel.y * 10.0f, 40.0f, 160.0f);
             for (int i = 0; i < n; ++i) {
                 Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-4.5f, 4.5f), -2.5f, Rnd(-16, 6)});
@@ -1356,6 +1483,9 @@ void Game::SpawnShipFx(float dt) {
         }
         prevAir[id] = s.airTime;
         bool alive = s.flags & SF_ALIVE;
+        if (prevAlive[id] && !alive) AddFoam(s.pos, 8.0f, 34.0f, 14.0f, 1.2f);  // going down
+        prevAlive[id] = alive;
+        UpdateWake(id, s.pos, s.rot, s.vel, s.airTime <= 0.0f && s.depthBelow < 4.0f);
         // bow spray
         if (s.submerged > 0.05f && s.airTime <= 0 && speed > 7.0f && s.depthBelow < 0.0f) {
             float rate = speed * 1.2f * dt;
@@ -1479,6 +1609,11 @@ void Game::DrawShip(int id, const Matrix& m, const NetShip* ns, float sail, Colo
             hits[n++] = {w.x, w.y, w.z, h.radius};
         }
     renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
+    if (shadowPass) {
+        shipModel.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos), phase);
+        renderer.SetDamage(0.0f, nullptr, 0);
+        return;
+    }
     Vector4 lights[4];
     int nl = 0;
     Vector3 spots[4];
@@ -1535,6 +1670,7 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
         lightningTimer -= dt;
         if (lightningTimer <= 0.0f) {
             lightning = 1.0f;
+            if (!menu) sfx::PlayLater(sfx::Thunder, Rnd(0.4f, 3.5f), Rnd(0.5f, 0.95f), Rnd(0.85f, 1.1f));
             lightningSecond = Rnd(0, 1) < 0.6f ? Rnd(0.12f, 0.3f) : -1.0f;  // often a double strike
             lightningTimer = Rnd(5.0f, 13.0f);
         }
@@ -1598,6 +1734,180 @@ void Game::DrawCrates(bool menu) {
     }
 }
 
+// ---- wakes ------------------------------------------------------------------------
+// Each ship leaves a track of points; every frame its wake is drawn from that track into the wake map:
+// the two arms of the Kelvin wave fanning out from the bow at 19.5 degrees (they follow the curve of
+// the track, so a turning ship leaves a bent V), the churned water behind the stern widening and fading,
+// and foam where the hull meets the sea. The water shader turns the map into foam, ridges and chop.
+void Game::UpdateWake(int id, Vector3 pos, Quaternion rot, Vector3 vel, bool water) {
+    std::deque<WakePt>& h = wakeHist[id];
+    double now = GetTime();
+    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, rot);
+    Vector2 d = Vector2Normalize({f.x, f.z});
+    if (Vector2Length({f.x, f.z}) < 0.2f) d = h.empty() ? Vector2{0, 1} : h.back().d;  // standing on her nose
+    float spd = fmaxf(0.0f, vel.x * d.x + vel.z * d.y);
+    Vector2 p = {pos.x, pos.z};
+    if (!h.empty() && Vector2Distance(h.back().p, p) > 60.0f) h.clear();  // respawned
+    if (h.empty() || Vector2Distance(h.back().p, p) > 2.0f || now - h.back().t > 0.3) h.push_back({p, d, now, spd, water});
+    while (!h.empty() && (now - h.front().t > 13.0 || h.size() > 420)) h.pop_front();
+}
+
+void Game::DrawWakeMap(bool menu) {
+    double now = GetTime();
+    if (menu)  // the menu's backdrop battle gets wakes too
+        for (const Ship& s : menuWorld.ships)
+            if (s.active && s.id < MAX_SHIPS) UpdateWake(s.id, s.pos, s.rot, s.vel, s.airTime <= 0.0f);
+    renderer.BeginWake();
+    rlSetTexture(softTex.id);
+    rlBegin(RL_QUADS);
+    auto V = [](Vector2 p) { rlVertex3f(p.x, p.y, 0.0f); };
+    auto col = [](float r, float g, float b) {
+        rlColor4ub((unsigned char)Clamp(r * 255.0f, 0, 255), (unsigned char)Clamp(g * 255.0f, 0, 255), (unsigned char)Clamp(b * 255.0f, 0, 255), 255);
+    };
+    // a ribbon: centre line c, unit normal n, half width hw, and the r/g/b it adds
+    struct RP { Vector2 c, n; float hw, r, g, b; };
+    auto strip = [&](const std::vector<RP>& pts) {
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const RP &a = pts[i], &b = pts[i + 1];
+            if (a.r + a.g + a.b + b.r + b.g + b.b < 0.004f) continue;
+            if (Vector2Distance(a.c, b.c) > 30.0f) continue;
+            col(a.r, a.g, a.b); rlTexCoord2f(0.0f, 0.5f); V(Vector2Add(a.c, Vector2Scale(a.n, a.hw)));
+            col(a.r, a.g, a.b); rlTexCoord2f(1.0f, 0.5f); V(Vector2Subtract(a.c, Vector2Scale(a.n, a.hw)));
+            col(b.r, b.g, b.b); rlTexCoord2f(1.0f, 0.5f); V(Vector2Subtract(b.c, Vector2Scale(b.n, b.hw)));
+            col(b.r, b.g, b.b); rlTexCoord2f(0.0f, 0.5f); V(Vector2Add(b.c, Vector2Scale(b.n, b.hw)));
+        }
+    };
+    auto splat = [&](Vector2 c, float r, float fr, float fg, float fb) {
+        col(fr, fg, fb);
+        rlTexCoord2f(0, 0); V({c.x - r, c.y - r});
+        rlTexCoord2f(1, 0); V({c.x + r, c.y - r});
+        rlTexCoord2f(1, 1); V({c.x + r, c.y + r});
+        rlTexCoord2f(0, 1); V({c.x - r, c.y + r});
+    };
+    const float kBow = hull::halfLength + 1.0f, kTan = 0.354f;  // tan(19.47 deg)
+    std::vector<RP> armL, armR, trail;
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        const std::deque<WakePt>& h = wakeHist[id];
+        if (h.empty()) continue;
+        bool present = menu ? (id < (int)(sizeof(menuWorld.ships) / sizeof(menuWorld.ships[0])) && menuWorld.ships[id].active) : view[id].present;
+        if (!present) continue;
+        Vector3 pos, vel;
+        Quaternion rot;
+        float air, depth;
+        if (menu) {
+            const Ship& s = menuWorld.ships[id];
+            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = 0.0f;
+        } else {
+            const NetShip& s = view[id].s;
+            pos = s.pos; vel = s.vel; rot = s.rot; air = s.airTime; depth = s.depthBelow;
+        }
+        // track points, newest first, with their distance back along the track from the ship's centre
+        struct TP { Vector2 p, d; float s, age, spd; bool water; };
+        std::vector<TP> tp;
+        Vector3 f3 = Vector3RotateByQuaternion({0, 0, 1}, rot);
+        Vector2 fwd = Vector2Normalize({f3.x, f3.z});
+        float spdNow = fmaxf(0.0f, vel.x * fwd.x + vel.z * fwd.y);
+        bool waterNow = air <= 0.0f && depth < 4.0f;
+        Vector2 here = {pos.x, pos.z};
+        tp.push_back({Vector2Add(here, Vector2Scale(fwd, kBow)), fwd, -kBow, 0.0f, spdNow, waterNow});
+        tp.push_back({Vector2Add(here, Vector2Scale(fwd, kBow * 0.5f)), fwd, -kBow * 0.5f, 0.0f, spdNow, waterNow});
+        tp.push_back({here, fwd, 0.0f, 0.0f, spdNow, waterNow});
+        float acc = 0.0f;
+        Vector2 last = here;
+        for (int i = (int)h.size() - 1; i >= 0; --i) {
+            acc += Vector2Distance(last, h[i].p);
+            last = h[i].p;
+            if (acc < 1.0f) continue;
+            tp.push_back({h[i].p, h[i].d, acc, (float)(now - h[i].t), h[i].spd, h[i].water});
+        }
+        armL.clear(); armR.clear(); trail.clear();
+        for (const TP& q : tp) {
+            Vector2 n = {-q.d.y, q.d.x};
+            float sb = q.s + kBow;  // distance behind the bow
+            float sp = Clamp((q.spd - 3.0f) / 20.0f, 0.0f, 1.0f);
+            float w = q.water ? 1.0f : 0.0f;
+            // Kelvin arms
+            float off = 0.8f + kTan * sb;
+            float hwA = 1.8f + 0.07f * sb;
+            float fA = w * sp * expf(-q.age / 3.2f) * (0.6f + 1.2f * expf(-sb / 25.0f)) * Clamp(sb / 4.0f, 0.3f, 1.0f);
+            float bA = w * sp * expf(-q.age / 6.5f) * 0.8f;
+            if (off < 120.0f) {
+                armL.push_back({Vector2Add(q.p, Vector2Scale(n, off)), n, hwA, fA, fA * 0.3f, bA});
+                armR.push_back({Vector2Subtract(q.p, Vector2Scale(n, off)), n, hwA, fA, fA * 0.3f, bA});
+            }
+            // churned water behind the stern
+            float st = q.s - hull::halfLength * 0.6f;
+            if (st > -4.0f) {
+                float hwT = Clamp(5.0f + 0.09f * fmaxf(st, 0.0f), 5.0f, 18.0f);
+                float fT = w * Clamp((q.spd - 2.0f) / 12.0f, 0.0f, 1.0f) * expf(-q.age / 2.6f) * 1.5f;  // froth breaks up within a few lengths
+                float gT = w * Clamp(q.spd / 10.0f, 0.0f, 1.0f) * expf(-q.age / 9.0f);
+                trail.push_back({q.p, n, hwT, fT, gT, 0.0f});
+            }
+        }
+        strip(armL);
+        strip(armR);
+        strip(trail);
+        // foam where the hull meets the sea: along both sides, heavier at the bow and with speed
+        if (air <= 0.0f && depth < 3.0f) {
+            for (float z = -hull::halfLength + 1.0f; z <= hull::halfLength + 0.5f; z += 2.0f) {
+                float hwz = hull::HalfWidth(fminf(z, hull::halfLength - 0.5f));
+                Vector3 top = HullToWorld(pos, rot, {0, hull::DeckHeight(z), z});
+                Vector3 bot = HullToWorld(pos, rot, {0, -hull::KeelDepth(z), z});
+                float sea = Ocean().Height(top.x, top.z);
+                if (sea < bot.y || sea > top.y) continue;  // this section is clear of the water (or under it)
+                float bow = Clamp((z - 4.0f) / 10.0f, 0.0f, 1.0f);
+                float amt = (0.7f + 1.0f * Clamp(spdNow / 16.0f, 0.0f, 1.0f)) * (0.7f + 0.6f * bow);
+                for (int sd = -1; sd <= 1; sd += 2) {
+                    Vector3 wpt = HullToWorld(pos, rot, {sd * (hwz + 0.8f + bow * 1.2f), 0.0f, z});
+                    splat({wpt.x, wpt.z}, 2.4f + bow * 1.8f + spdNow * 0.05f, amt, amt * 0.6f, 0.0f);
+                }
+            }
+            if (spdNow > 4.0f) {  // the bow wave piling up ahead of the stem
+                Vector3 b = HullToWorld(pos, rot, {0, 0, hull::halfLength + 1.5f});
+                float k = Clamp((spdNow - 4.0f) / 16.0f, 0.0f, 1.0f);
+                splat({b.x, b.z}, 4.5f + 2.5f * k, 1.8f * k, 0.6f * k, 0.6f * k);
+            }
+        }
+    }
+    // foam patches: landings, breaches, cannonball splashes, ships going down
+    for (size_t i = 0; i < foamPatches.size();) {
+        const FoamPatch& fp = foamPatches[i];
+        float a = (float)(now - fp.t0) / fp.life;
+        if (a >= 1.0f) { foamPatches.erase(foamPatches.begin() + i); continue; }
+        float r = fp.r0 + (fp.r1 - fp.r0) * (1.0f - (1.0f - a) * (1.0f - a));
+        float k = fp.amt * (1.0f - a) * (1.0f - a);
+        splat({fp.x, fp.z}, r, k, k * 0.8f, 0.0f);
+        ++i;
+    }
+    rlEnd();
+    rlSetTexture(0);
+    renderer.EndWake();
+}
+
+// All ships (and cannonballs). shadow = the shadow pass: only what's within `radius` of `centre`.
+void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
+    auto inShadowBox = [&](Vector3 p) { return Vector2Distance({p.x, p.z}, {centre.x, centre.z}) < radius; };
+    if (menu) {
+        for (const Ship& s : menuWorld.ships)
+            if (s.active && (!shadow || inShadowBox(s.pos)))
+                DrawShip(-1, ShipModelMatrix(s.pos, s.rot), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp, s.alive, s.pos,
+                         s.rot, s.id * 1.7f);
+        if (!shadow)
+            for (const Ball& b : menuWorld.balls) shipModel.DrawBall(renderer, b.pos);
+    } else {
+        Vector3 look = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+        for (int id = 0; id < MAX_SHIPS; ++id) {
+            if (!view[id].present) continue;
+            const NetShip& s = view[id].s;
+            if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
+            DrawShip(id, ShipModelMatrix(s.pos, s.rot), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
+                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f);
+        }
+        if (!shadow)
+            for (const NetBall& b : viewBalls) shipModel.DrawBall(renderer, b.pos);
+    }
+}
+
 void Game::RenderWorld(float dt, bool menu) {
     int w = GetScreenWidth(), h = GetScreenHeight();
     renderer.Resize(w, h);
@@ -1606,20 +1916,46 @@ void Game::RenderWorld(float dt, bool menu) {
     // other ships are interpolated ~100 ms + latency behind, which is barely visible on long swells
     double t = menu ? menuWorld.time : predTime;
     oceanGpu.Update(t, dt);
+
+    const std::vector<Rock>& rocks = menu ? menuWorld.rocks : pred.rocks;
+    uint32_t key = menu ? 0x80000007u : oceanSeed;
+    if (key != sceneryKey) {
+        scenery.Build(rocks);
+        scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
+        sceneryKey = key;
+    }
+    Color flags[4];
+    for (int i = 0; i < 4; ++i) flags[i] = menu ? Color{232, 228, 216, 255} : HarbourColor(i);
+
+    // sun shadows: the arena (islands, harbours) once per match and time of day, ships round the focus every frame
+    {
+        renderer.atm = renderer.atm;  // (set by UpdateAtmosphere)
+        Vector3 sd = renderer.atm.sunDir;
+        uint32_t sk = key * 2654435761u ^ (uint32_t)(int)(sd.x * 1000.0f) * 97u ^ (uint32_t)(int)(sd.y * 1000.0f) * 7919u ^
+                      (uint32_t)(int)(sd.z * 1000.0f);
+        if (sk != arenaShadowKey || !renderer.shadowsReady[1]) {
+            renderer.BeginShadow(1, {0, 0, 0}, 1350.0f, 1800.0f);
+            scenery.DrawIslands(renderer, rv, false);
+            scenery.DrawHarbours(renderer, rv, Ocean(), flags, (float)GetTime(), false);
+            renderer.EndShadow();
+            arenaShadowKey = sk;
+        }
+        Vector3 f = Vector3Subtract(rv.target, rv.pos);
+        Vector2 fh = Vector2Normalize({f.x, f.z});
+        Vector3 centre = {rv.pos.x + fh.x * 90.0f, 0.0f, rv.pos.z + fh.y * 90.0f};
+        renderer.BeginShadow(0, centre, 150.0f, 700.0f);
+        shadowPass = true;
+        DrawShips(menu, true, centre, 230.0f);
+        shadowPass = false;
+        renderer.EndShadow();
+    }
+
+    DrawWakeMap(menu);
     renderer.Begin(rv, oceanGpu, t);
 
     // the island ring
     {
-        const std::vector<Rock>& rocks = menu ? menuWorld.rocks : pred.rocks;
-        uint32_t key = menu ? 0x80000007u : oceanSeed;
-        if (key != sceneryKey) {
-            scenery.Build(rocks);
-            scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
-            sceneryKey = key;
-        }
         scenery.DrawIslands(renderer, rv);
-        Color flags[4];
-        for (int i = 0; i < 4; ++i) flags[i] = menu ? Color{232, 228, 216, 255} : HarbourColor(i);
         scenery.DrawHarbours(renderer, rv, Ocean(), flags, (float)GetTime());
         for (int i = 0; i < 4; ++i) {  // lighthouse lamps
             Vector3 L = scenery.Lamp(i);
@@ -1632,23 +1968,7 @@ void Game::RenderWorld(float dt, bool menu) {
 
     // ships
     lanternPts.clear();
-    if (menu) {
-        for (const Ship& s : menuWorld.ships)
-            if (s.active)
-                DrawShip(-1, ShipModelMatrix(s.pos, s.rot), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp, s.alive, s.pos,
-                         s.rot, s.id * 1.7f);
-        for (const Ball& b : menuWorld.balls) shipModel.DrawBall(renderer, b.pos);
-    } else {
-        Vector3 look = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
-        for (int id = 0; id < MAX_SHIPS; ++id) {
-            if (!view[id].present) continue;
-            const NetShip& s = view[id].s;
-            if (Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
-            DrawShip(id, ShipModelMatrix(s.pos, s.rot), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
-                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f);
-        }
-        for (const NetBall& b : viewBalls) shipModel.DrawBall(renderer, b.pos);
-    }
+    DrawShips(menu, false, {}, 0.0f);
 
     renderer.Water();
 
@@ -2144,7 +2464,8 @@ void Game::DrawHUD() {
     if (showHelp) {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
-                          {"RMB", nullptr, "Zoom"},      {"TAB", nullptr, "Scores"}, {"F1", nullptr, "Hide"}};
+                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"TAB", nullptr, "Scores"},
+                          {"F1", nullptr, "Hide"}};
         const int n = sizeof(keys) / sizeof(keys[0]);
         float rowH = 26, pw = 230, ph = n * rowH + 20;
         Rectangle r = {W - 24 - pw, H - 24 - ph, pw, ph};
@@ -2296,6 +2617,7 @@ void Game::Frame() {
         if (mode != Mode::Menu && mode != Mode::Connecting) { EndDrawing(); return; }
         SetOcean(7, weatherSel);
         UpdateAtmosphere(dt, true);
+        UpdateSound(dt, true);
         RenderWorld(dt, true);
         DrawLanternHalos(true);
         DrawMenu();
@@ -2325,6 +2647,7 @@ void Game::Frame() {
         SpawnShipFx(dt);
         UpdateParticles(dt);
         UpdateAtmosphere(dt, false);
+        UpdateSound(dt, false);
         RenderWorld(dt, false);
         DrawLanternHalos(false);
         DrawHUD();
@@ -2354,8 +2677,10 @@ static int RunDedicated(const Options& o) {
 }
 
 int main(int argc, char** argv) {
-    for (int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--simtest")) return RunSimTest();
+        if (!strcmp(argv[i], "--sfx-export") && i + 1 < argc) return sfx::ExportAll(argv[i + 1]) ? 0 : 1;
+    }
     Options opt;
     ParseArgs(argc, argv, opt);
     if (opt.start == Options::Dedicated) return RunDedicated(opt);

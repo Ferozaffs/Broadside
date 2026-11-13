@@ -48,6 +48,8 @@ enum : unsigned int {
     FRAMEBUFFER_BINDING = 0x8CA6,
     RENDERBUFFER = 0x8D41,
     MULTISAMPLE = 0x809D,
+    POLYGON_OFFSET_FILL = 0x8037, NONE_ = 0,
+    TEXTURE_COMPARE_MODE = 0x884C, TEXTURE_COMPARE_FUNC = 0x884D, COMPARE_REF_TO_TEXTURE = 0x884E,
     TRUE_ = 1, FALSE_ = 0,
 };
 
@@ -111,7 +113,10 @@ enum : unsigned int {
     X(void, Viewport, (GLint_ x, GLint_ y, GLsizei_ w, GLsizei_ h)) \
     X(void, ClearColor, (GLfloat_ r, GLfloat_ g, GLfloat_ b, GLfloat_ a)) \
     X(void, Clear, (GLbitfield_ m)) \
-    X(void, GetIntegerv, (GLenum_ p, GLint_* v))
+    X(void, GetIntegerv, (GLenum_ p, GLint_* v)) \
+    X(void, DrawBuffer, (GLenum_ b)) \
+    X(void, ReadBuffer, (GLenum_ b)) \
+    X(void, PolygonOffset, (GLfloat_ factor, GLfloat_ units))
 
 #define GL43_DECLARE(ret, name, args) typedef ret (GLAPIENTRY_* PFN_##name) args; extern PFN_##name name;
 GL43_FUNCS(GL43_DECLARE)
