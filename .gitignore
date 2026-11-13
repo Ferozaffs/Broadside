@@ -7,3 +7,4 @@ dist/
 *.pak
 *.zip
 playtest/
+.claude/settings.local.json
