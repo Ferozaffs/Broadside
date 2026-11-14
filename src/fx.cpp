@@ -299,7 +299,12 @@ void System::Draw(const Camera3D& cam, const Lighting& L) {
     Vector3 fwd = Vector3Normalize(Vector3Subtract(cam.target, cam.position));
     Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
     Vector3 up = Vector3CrossProduct(right, fwd);
+    // a sprite the camera is about to pass through would fill the screen for a frame: fade it out as it closes in
     auto quad = [&](Texture2D& t, Rectangle src, const Particle& p, Color c) {
+        float d = Vector3Distance(p.p, cam.position);
+        float nf = Clamp((d - p.size * 0.4f) / (p.size * 0.8f + 1.0f), 0.0f, 1.0f);
+        if (nf <= 0.0f) return;
+        c.a = (unsigned char)(c.a * nf);
         DrawBillboardPro(cam, t, src, p.p, up, {p.size, p.size}, {p.size * 0.5f, p.size * 0.5f}, p.rot, c);
     };
     const Rectangle full = {0, 0, 64, 64};

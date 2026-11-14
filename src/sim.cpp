@@ -1126,11 +1126,12 @@ void World::BotThink(Ship& s, float dt) {
         float sc = (mode == MODE_PIRATE && o.pirate) ? d * 0.2f : d;
         if (sc < score) { score = sc; best = d; target = &o; }
     }
-    if (skills && s.dashCd <= 0.0f) {  // someone has a line on us: dash to snap it
+    if (skills && s.dashCd <= 0.0f) {  // someone has had a line on us for a while: dash to snap it
+        const float wait = s.pirate ? 0.3f : 1.5f;  // (a human needs a moment to notice; the carrier is watching for it)
         bool onLine = false;
         for (const Ship& o : ships)
-            if (o.active && o.hooked == s.id) onLine = true;
-        if (onLine && RandF() < (s.pirate ? 0.05f : 0.02f)) in.dashSeq++;
+            if (o.active && o.hooked == s.id && o.hookTimer < tune::hookTime - wait) onLine = true;
+        if (onLine && RandF() < (s.pirate ? 0.05f : 0.008f)) in.dashSeq++;
     }
     Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
     float heading = atan2f(fwd.x, fwd.z);

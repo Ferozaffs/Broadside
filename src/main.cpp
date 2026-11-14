@@ -929,7 +929,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
         static double lastSkill = 0;
         bool onLine = false;  // someone has a line on us: dash to snap it
         for (int id = 0; id < MAX_SHIPS; ++id)
-            if (view[id].present && view[id].s.hooked == myId) onLine = true;
+            if (view[id].present && view[id].s.hooked == myId && view[id].s.hookTimer < tune::hookTime - 2.0f) onLine = true;
         if (onLine && my.dashCd <= 0.0f && GetTime() - lastSkill > 0.4) { dashSeq++; lastSkill = GetTime(); }
         if (GetTime() - lastSkill > 1.0) {
             if (my.hooked < 0 && my.hookCd <= 0.0f && best < tune::hookRange * 0.8f) { hookAim = (uint8_t)tgt; hookSeq++; lastSkill = GetTime(); }
@@ -955,7 +955,8 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     }
     camYaw += wrap(wantYaw - camYaw) * fminf(1.0f, dt * 2.5f);
     camPitch += (wantPitch - camPitch) * fminf(1.0f, dt * 2.0f);
-    if (!opt.camOverride) camDist += (85.0f - camDist) * fminf(1.0f, dt);
+    if (curDeckOnly) camDist = 0.0f;  // the host wants everyone on deck
+    else if (!opt.camOverride) camDist += (85.0f - camDist) * fminf(1.0f, dt);
     // stats for the report
     static float apPrevAir = 0;
     if (apPrevAir > 1.0f && my.airTime <= 0) apJumps++;  // landings after more than a second of air
@@ -1255,6 +1256,7 @@ int Game::HookCandidate(Vector3 dir) const {
 
 // Grappling lines: a sagging rope from the bow of the ship that threw it to the other hull.
 void Game::DrawHookLines() {
+    const float lit = 1.0f - 0.8f * Clamp(lanternBoost, 0.0f, 1.0f);  // unlit geometry: dim it at night
     rlDrawRenderBatchActive();
     rlSetTexture(rlGetTextureIdDefault());
     rlDisableBackfaceCulling();
@@ -1277,9 +1279,9 @@ void Game::DrawHookLines() {
             p.y -= sinf(u * PI) * (0.03f * len) * (0.4f + 0.6f * slack);  // sag
             Vector3 dir = Vector3Normalize(Vector3Subtract(p, prev));
             Vector3 side = Vector3CrossProduct(dir, Vector3Normalize(Vector3Subtract(rv.pos, p)));
-            float w = 0.12f + 0.0015f * Vector3Distance(rv.pos, p);
+            float w = 0.2f + 0.0028f * Vector3Distance(rv.pos, p);  // reads as a line at range too
             side = Vector3Scale(Vector3Normalize(side), w);
-            rlColor4ub(70, 52, 34, 255);
+            rlColor4ub((unsigned char)(196 * lit), (unsigned char)(168 * lit), (unsigned char)(118 * lit), 255);  // pale hemp
             rlVertex3f(prev.x + side.x, prev.y + side.y, prev.z + side.z);
             rlVertex3f(prev.x - side.x, prev.y - side.y, prev.z - side.z);
             rlVertex3f(p.x - side.x, p.y - side.y, p.z - side.z);

@@ -70,10 +70,13 @@ void main() {
     col *= mix(0.35, 1.0, smoothstep(0.0, 0.035, wl));
     col += vec3(0.6, 0.8, 0.9) * (1.0 - smoothstep(0.0, 0.012, wl)) * 0.15;
 
-    col += vec3(1.0, 0.85, 0.7) * uFlash;
     col = ACES(col * uExposure);
     vec2 v = vUV - 0.5;
     col *= 1.0 - dot(v, v) * uVignette;
+    // getting hit: a warm flare in from the screen edges, after tone mapping so it is the same at noon and at night
+    // (added before exposure it washed the whole night screen out white)
+    float edge = clamp(dot(v, v) * 3.0, 0.0, 1.0);
+    col += vec3(0.9, 0.45, 0.25) * uFlash * (0.1 + 0.9 * edge) * 0.5;
     col = pow(col, vec3(1.0 / 2.2));
     fragColor = vec4(col, 1.0);
 }

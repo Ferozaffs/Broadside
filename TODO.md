@@ -180,6 +180,10 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Skills (protocol v12): Shift dash (0.35 s x 55 m/s^2, 8 s cd), E grappling hook (150 m, 7 s, reel 10 m/s,
       mass-shared pull, parts at 230 m or when the hooked ship dashes, 12 s cd). Server-authoritative; prediction pulls our own end. Bot hunters
       dash and hook the carrier, the carrier dashes away; --autopilot uses both. BS_HOOKTEST=1, BS_SKILLS=1 (simtest).
+      Bots dash free of a line after 1.5 s (carriers 0.3 s). Pirate banking over 6 seeds: 46% with skills, 55% without.
+- [x] Hit flash: was added before exposure, so at night one hit turned the screen white for ~0.2 s. Now a warm flare
+      from the screen edges after tone mapping. Particles fade as the camera closes on them. Rope: pale hemp, wider.
+- [x] Deck-only is enforced under --autopilot too.
 
 ## Known issues / next
 - Deck view: the camera can clip into the quarterdeck structure when the ship pitches hard.
