@@ -18,7 +18,9 @@ constexpr int MAX_GUNS = 6;          // per side, any class
 // Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
 // follow `scale`. How each one rides the swell falls out of that: a short light hull gets thrown off every
 // crest, a long heavy one spans them.
-enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_COUNT = 3 };
+enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_COUNT = 4 };
+constexpr int SC_PLAYABLE = 3;  // captains sail classes 0..2; the gunboat is a fleet escort only
+constexpr uint8_t SC_ALL = (1 << SC_PLAYABLE) - 1;
 struct ShipClass {
     const char* name;
     const char* blurb;
@@ -99,6 +101,18 @@ constexpr float pirateHpBonus = 20.0f;     // the treasure carrier: a little tou
 constexpr float chaserReload = 2.2f;       // the cutter's bow chaser
 constexpr float chaserCone = 0.5f;         // rad either side of the bow it covers
 constexpr float chaserDamage = 0.8f;
+// skills (host option)
+constexpr float dashTime = 0.35f;          // s of thrust
+constexpr float dashAccel = 55.0f;         // m/s^2 along the heading (also in the air)
+constexpr float dashCooldown = 8.0f;
+constexpr float hookRange = 150.0f;        // m
+constexpr float hookTime = 7.0f;           // s the line holds
+constexpr float hookReel = 10.0f;          // m/s the line is reeled in
+constexpr float hookMinLen = 24.0f;        // m (hull lengths are added on top)
+constexpr float hookStiff = 2.6f;          // m/s^2 per metre of stretch
+constexpr float hookMaxAccel = 26.0f;
+constexpr float hookBreak = 230.0f;        // m: the line parts
+constexpr float hookCooldown = 12.0f;
 constexpr float rakeBonus = 0.25f;         // raking fire (a ball in at the bow or stern, down the length of the decks):
                                            // +0 on a cutter's short deck .. +25% down a ship of the line's
 constexpr float rakeCos = 0.82f;           // how close to the keel line it must travel (~35 deg)
@@ -172,6 +186,9 @@ struct PlayerInput {
     float rudder = 0.0f;  // -1 port .. +1 starboard
     Vector3 aim = {0, 0, 1};
     uint8_t fireSeq = 0;
+    uint8_t dashSeq = 0;      // skills: each new value is one press
+    uint8_t hookSeq = 0;
+    uint8_t hookTarget = 255; // the ship the hook is fired at (client picks it from the reticle)
     uint32_t seq = 0;  // client input sequence number (acked back in snapshots for prediction)
 };
 
@@ -225,6 +242,12 @@ struct Ship {
     float statDamage = 0, statAir = 0;
     int statSpin = 0, statGround = 0;
     uint8_t lastFireSeq = 0;
+    // skills
+    uint8_t lastDashSeq = 0, lastHookSeq = 0;
+    float dashTimer = 0, dashCd = 0, hookCd = 0, hookTimer = 0, hookRest = 0;
+    int8_t hooked = -1;              // the ship our line is fast to
+    Vector3 hookPos{}, hookVel{};    // prediction only: where that ship is (the client fills it in)
+    float hookMass = 0;
     uint32_t lastInputSeq = 0;
     PlayerInput input;
     std::vector<PendingShot> pending;
@@ -252,6 +275,8 @@ enum class EventType : uint8_t {
     Bank = 12,       // a = pirate, b = booty banked at the cove
     NewPirate = 13,  // a = the new pirate, b = the old one (255 = none)
     ChestSpawn = 14,
+    Dash = 19,       // a = ship
+    Hook = 20,       // a = ship, b = target (255: missed / let go), flags 1 = let go / parted
     MatchEnd = 15,   // a = winning captain (255 none), b = winning team (255 none), flags = 1 if the score limit ended it
     Award = 16,      // a = ship, b = award id, value = the stat
     MatchStart = 17, // b = round number
@@ -311,6 +336,12 @@ public:
     std::vector<Harbour> harbours;
     Crate chests[tune::chestSlots];  // pirate booty
     uint8_t cove = 0;                // pirate: the harbour the treasure must be delivered to (changes with every treasure)
+    uint8_t allowedCls = SC_ALL;     // host: which classes captains may sail (bit per class)
+    bool deckOnly = false;           // host: everyone plays from the deck (the client enforces it)
+    bool skills = false;             // host: dash and grappling hook
+    void UpdateHooks(float dt);
+    bool predicting = false;
+    int AllowedClass(int want) const;  // want if allowed, else the nearest allowed one
     int teamScore[2] = {0, 0};       // teams: ships sunk
     // rounds: play for matchLength or until someone reaches the score limit, then an intermission
     bool rounds = true;              // (simtest turns them off for its long bot matches)

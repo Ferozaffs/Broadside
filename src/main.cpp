@@ -53,6 +53,9 @@ struct Options {
     int harbourCam = -1;       // --harbour-cam i: look at harbour i (screenshots)
     bool showScores = false;   // --scores: hold the scoreboard open (screenshots)    // visual test: show all power-ups as active on the HUD
     int shipClass = SC_FRIGATE;  // --class cutter|frigate|line
+    int allowedCls = SC_ALL;     // host: --classes cutter,frigate,line
+    bool deckOnly = false;       // host: --deck-only
+    bool skills = false;         // host: --skills (dash + grappling hook)
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
     float recordSec = 0, recordStart = 0;  // --record <sec> <file.mp4> [--record-start <sec>]: video via ffmpeg
     std::string recordPath;
@@ -90,6 +93,14 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
         else if (a == "--autopilot") o.autopilot = true;
+        else if (a == "--deck-only") o.deckOnly = true;
+        else if (a == "--skills") o.skills = true;
+        else if (a == "--classes") {
+            std::string c = next("cutter,frigate,line");
+            o.allowedCls = (c.find("cutter") != std::string::npos ? 1 : 0) | (c.find("frigate") != std::string::npos ? 2 : 0) |
+                           (c.find("line") != std::string::npos ? 4 : 0);
+            if (!o.allowedCls) o.allowedCls = SC_ALL;
+        }
         else if (a == "--class") {
             std::string c = next("frigate");
             o.shipClass = c == "cutter" ? SC_CUTTER : (c == "line" ? SC_LINE : SC_FRIGATE);
@@ -180,7 +191,7 @@ public:
     bool predValid = false;
     double predTime = 0.0;      // sim time of predShip ("present")
     uint32_t inputSeq = 0;
-    uint8_t ackedFireSeq = 0;
+    uint8_t ackedFireSeq = 0, ackedDashSeq = 0, ackedHookSeq = 0;
     struct Hist { uint32_t seq; PlayerInput in; };
     std::deque<Hist> history;
     bool needReconcile = false;
@@ -242,6 +253,15 @@ public:
     int curTod = 0, curWeather = 0;  // the match we're in
     int modeSel = 0, fleetSel = 0;   // host's choice of game
     int classSel = SC_FRIGATE;       // the ship we sail (from the next sinking or round)
+    int allowSel = SC_ALL;           // host's choice: classes allowed (bits)
+    int viewSel = 0;                 // host's choice: 0 free camera, 1 deck only
+    int curAllowed = SC_ALL;         // the match we're in
+    bool curDeckOnly = false;
+    int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
+    bool curSkills = false;
+    uint8_t dashSeq = 0, hookSeq = 0, hookAim = 255;
+    int HookCandidate(Vector3 dir) const;
+    void DrawHookLines();
     void PickClass(int c);
     void DrawClassCards(Rectangle area, bool keys, bool row);
     float ScaleOf(int id) const { return id >= 0 && id < MAX_SHIPS ? ClassOf(view[id].s.cls).scale : 1.0f; }
@@ -457,6 +477,10 @@ void Game::Init() {
 
     if (opt.camOverride) { camYaw = opt.camYaw; camPitch = opt.camPitch; camDist = opt.camDist; }
     classSel = opt.shipClass;
+    allowSel = opt.allowedCls;
+    viewSel = opt.deckOnly ? 1 : 0;
+    skillSel = opt.skills ? 1 : 0;
+    if (const char* e = getenv("BS_LOD")) shipModel.forceLod = atoi(e);  // (testing: pin a level of detail)
     if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
     switch (opt.start) {
         case Options::Host: StartSession(true, opt.bots, true); break;
@@ -490,7 +514,7 @@ void Game::StartSession(bool host, int bots, bool open) {
     status.clear();
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-        if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0)) {
+        if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -600,6 +624,15 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             if (curMode >= MODE_COUNT) curMode = MODE_FFA;
             curFleets = r.Get<uint8_t>() != 0;
             double t = r.Get<double>();
+            curAllowed = r.Get<uint8_t>() & SC_ALL;
+            if (!curAllowed) curAllowed = SC_ALL;
+            curDeckOnly = r.Get<uint8_t>() != 0;
+            curSkills = r.Get<uint8_t>() != 0;
+            if (!(curAllowed & (1 << classSel))) {  // our pick isn't allowed here: the server gave us another
+                for (int c : {SC_FRIGATE, SC_CUTTER, SC_LINE})
+                    if (curAllowed & (1 << c)) { classSel = c; break; }
+            }
+            if (curDeckOnly) camDist = 0.0f;
             SetOcean(seed, curWeather);
             predTime = t;
             predValid = false;
@@ -732,7 +765,7 @@ void Game::UpdateInput(float dt) {
         else DisableCursor();
     }
     if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
-    for (int c = 0; c < SC_COUNT; ++c)
+    for (int c = 0; c < SC_PLAYABLE; ++c)
         if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) PickClass(c);
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
@@ -751,7 +784,8 @@ void Game::UpdateInput(float dt) {
         if (wm > 0 && camDist <= 22.5f) camDist = fmaxf(0.0f, camDist - wm * 5.5f);
         else if (wm < 0 && camDist < 22.0f) camDist = fminf(22.0f, camDist - wm * 5.5f);
         else if (wm != 0) camDist = Clamp(camDist * (1.0f - wm * 0.1f), 22.0f, 220.0f);
-        if (IsKeyPressed(KEY_V)) {  // jump to the deck and back
+        if (curDeckOnly && mode == Mode::Playing) camDist = 0.0f;  // the host wants everyone on deck
+        else if (IsKeyPressed(KEY_V)) {  // jump to the deck and back
             if (camDist > 0.5f) { lastChaseDist = camDist; camDist = 0.0f; }
             else camDist = lastChaseDist;
         }
@@ -759,6 +793,15 @@ void Game::UpdateInput(float dt) {
         sailTarget = (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN) ? 1.0f : 0.0f);
         in.rudder = (IsKeyDown(KEY_A) ? -1.0f : 0.0f) + (IsKeyDown(KEY_D) ? 1.0f : 0.0f);
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) fireSeq++;
+        if (curSkills && (IsKeyPressed(KEY_LEFT_SHIFT) || IsKeyPressed(KEY_RIGHT_SHIFT))) dashSeq++;
+        if (curSkills && IsKeyPressed(KEY_E) && myId >= 0 && view[myId].present) {
+            if (view[myId].s.hooked >= 0) { hookAim = 255; hookSeq++; }  // cut the line
+            else {
+                int t = HookCandidate(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
+                if (t >= 0 && view[myId].s.hookCd <= 0.0f) { hookAim = (uint8_t)t; hookSeq++; }
+                else if (t < 0) Feed("Nothing to hook: put the reticle on a ship within 150 m", ui::kDim);
+            }
+        }
     }
     aimZoom += ((active && (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) || getenv("BS_AIMZOOM")) ? 1.0f : 0.0f) - aimZoom) * fminf(1.0f, dt * 10.0f);  // (BS_AIMZOOM: screenshots)
 
@@ -790,6 +833,9 @@ void Game::UpdateInput(float dt) {
     if (opt.autopilot && myId >= 0 && view[myId].present) Autopilot(dt, in);
     in.sail = sailTarget;
     in.fireSeq = fireSeq;
+    in.dashSeq = dashSeq;
+    in.hookSeq = hookSeq;
+    in.hookTarget = hookAim;
     in.aim = SolveAim(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
     curInput = in;
 
@@ -810,6 +856,14 @@ void Game::UpdateInput(float dt) {
         pred.ocean.Update(predTime);
         if (predValid) {
             predShip.input = tickIn;
+            if (predShip.hooked >= 0 && predShip.hooked < MAX_SHIPS && view[predShip.hooked].present) {
+                predShip.hookPos = view[predShip.hooked].s.pos;
+                predShip.hookVel = view[predShip.hooked].s.vel;
+                predShip.hookMass = powf(ClassOf(view[predShip.hooked].s.cls).scale, 3.0f);
+            } else if (tickIn.hookTarget < MAX_SHIPS && view[tickIn.hookTarget].present) {
+                predShip.hookPos = view[tickIn.hookTarget].s.pos;
+                predShip.hookVel = view[tickIn.hookTarget].s.vel;
+            }
             pred.PredictStep(predShip);
         }
     }
@@ -870,6 +924,18 @@ void Game::Autopilot(float dt, PlayerInput& in) {
         if (sc < bestScore) { bestScore = sc; best = d; tgt = id; }
     }
     float wantYaw, wantPitch = 0.16f;
+    // skills through the player path: hook the target when it's in reach, dash when it's a little further
+    if (curSkills && tgt >= 0) {
+        static double lastSkill = 0;
+        bool onLine = false;  // someone has a line on us: dash to snap it
+        for (int id = 0; id < MAX_SHIPS; ++id)
+            if (view[id].present && view[id].s.hooked == myId) onLine = true;
+        if (onLine && my.dashCd <= 0.0f && GetTime() - lastSkill > 0.4) { dashSeq++; lastSkill = GetTime(); }
+        if (GetTime() - lastSkill > 1.0) {
+            if (my.hooked < 0 && my.hookCd <= 0.0f && best < tune::hookRange * 0.8f) { hookAim = (uint8_t)tgt; hookSeq++; lastSkill = GetTime(); }
+            else if (my.dashCd <= 0.0f && best > 180.0f && best < 400.0f) { dashSeq++; lastSkill = GetTime(); }
+        }
+    }
     if (tgt >= 0 && best < 480.0f) {
         Vector3 d = Vector3Subtract(view[tgt].s.pos, my.pos);
         wantYaw = atan2f(-d.x, -d.z);
@@ -1104,7 +1170,11 @@ void Game::UpdateSound(float dt, bool menu) {
 }
 
 void Game::PickClass(int c) {
-    if (c < 0 || c >= SC_COUNT) return;
+    if (c < 0 || c >= SC_PLAYABLE) return;
+    if (mode == Mode::Playing && !(curAllowed & (1 << c))) {
+        Feed(TextFormat("The host doesn't allow the %s in this battle", ClassOf(c).name), ui::kDim);
+        return;
+    }
     bool changed = c != classSel;
     classSel = c;
     if (mode != Mode::Playing) return;
@@ -1121,17 +1191,19 @@ void Game::DrawClassCards(Rectangle area, bool keys, bool row) {
     using namespace ui;
     float gap = 10;
     float cw = row ? (area.width - gap * 2) / 3 : area.width, ch = row ? area.height : (area.height - gap * 2) / 3;
-    for (int c = 0; c < SC_COUNT; ++c) {
+    for (int c = 0; c < SC_PLAYABLE; ++c) {
         const ShipClass& C = ClassOf(c);
+        bool allowed = mode == Mode::Playing ? (curAllowed & (1 << c)) != 0 : (allowSel & (1 << c)) != 0;
         Rectangle r = row ? Rectangle{area.x + c * (cw + gap), area.y, cw, ch} : Rectangle{area.x, area.y + c * (ch + gap), cw, ch};
-        bool sel = c == classSel;
-        bool hover = !keys && CheckCollisionPointRec(GetMousePosition(), r);
+        bool sel = c == classSel && allowed;
+        bool hover = allowed && !keys && CheckCollisionPointRec(GetMousePosition(), r);
         Panel(r, sel ? Color{40, 34, 18, 235} : (hover ? Color{24, 32, 44, 235} : Color{12, 18, 26, 220}), 10);
         if (sel) DrawRectangleRoundedLinesEx(r, 0.12f, 8, 2.0f, kGold);
         if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) PickClass(c);
         float x = r.x + 14, y = r.y + 10;
         if (keys) { Keycap(TextFormat("%d", c + 1), x, y + 2, 14); x += 26; }
-        Text(C.name, x, y, 19, sel ? kGold : kText, true, Left, false);
+        Text(C.name, x, y, 19, sel ? kGold : (allowed ? kText : kDim), true, Left, false);
+        if (!allowed) Label("NOT ALLOWED", r.x + r.width - 14, y + 5, 10, kRed, Right);
         y += 26;
         float fire = C.guns * C.damage / C.reload / (6 * 1.25f / 4.5f);
         const float vals[4] = {C.topSpeed / 36.0f, C.turnRate / 2.4f, C.hp / 170.0f, fire};
@@ -1142,8 +1214,83 @@ void Game::DrawClassCards(Rectangle area, bool keys, bool row) {
             Label(names[k], bx, y, 9, kDim);
             Bar({bx, y + 13, bw, 5}, Clamp(vals[k], 0.05f, 1.0f), sel ? kGold : A(kText, 0.8f), {255, 255, 255, 25});
         }
-        if (r.height > 96) Text(C.blurb, r.x + 14, y + 26, 13, A(kDim, 0.95f), false, Left, false);
+        if (r.height > 96) {  // one line if it fits, else wrapped onto two at the last space that does
+            const float avail = r.width - 28;
+            std::string b = C.blurb;
+            if (Measure(b.c_str(), 13).x <= avail) {
+                Text(b.c_str(), r.x + 14, y + 26, 13, A(kDim, 0.95f), false, Left, false);
+            } else {
+                size_t cut = b.size();
+                while (cut > 0) {
+                    cut = b.rfind(' ', cut - 1);
+                    if (cut == std::string::npos) { cut = b.size(); break; }
+                    if (Measure(b.substr(0, cut).c_str(), 12).x <= avail) break;
+                }
+                Text(b.substr(0, cut).c_str(), r.x + 14, y + 23, 12, A(kDim, 0.95f), false, Left, false);
+                if (cut < b.size()) Text(b.substr(cut + 1).c_str(), r.x + 14, y + 38, 12, A(kDim, 0.95f), false, Left, false);
+            }
+        }
     }
+}
+
+// The ship under the reticle (or nearest to it) that a grappling line would reach.
+int Game::HookCandidate(Vector3 dir) const {
+    if (myId < 0 || !view[myId].present) return -1;
+    const NetShip& me = view[myId].s;
+    int best = -1;
+    float bestScore = 1e9f;
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
+        const NetShip& o = view[id].s;
+        if (Vector3Distance(o.pos, me.pos) > tune::hookRange) continue;
+        Vector3 to = Vector3Subtract(o.pos, rv.pos);
+        float d = Vector3Length(to);
+        float ang = acosf(Clamp(Vector3DotProduct(Vector3Scale(to, 1.0f / fmaxf(d, 1e-3f)), dir), -1.0f, 1.0f));
+        float tol = atan2f(18.0f * ClassOf(o.cls).scale, d) + 0.04f;  // the hull's size on screen, plus a little
+        if (ang > tol) continue;
+        if (ang < bestScore) { bestScore = ang; best = id; }
+    }
+    return best;
+}
+
+// Grappling lines: a sagging rope from the bow of the ship that threw it to the other hull.
+void Game::DrawHookLines() {
+    rlDrawRenderBatchActive();
+    rlSetTexture(rlGetTextureIdDefault());
+    rlDisableBackfaceCulling();
+    rlBegin(RL_QUADS);
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        if (!view[id].present) continue;
+        const NetShip& s = view[id].s;
+        int t = s.hooked;
+        if (t < 0 || t >= MAX_SHIPS || !view[t].present) continue;
+        const NetShip& o = view[t].s;
+        Vector3 a = HullToWorld(s.pos, s.rot, {0, 3.0f, hull::halfLength}, ClassOf(s.cls).scale);
+        Vector3 b = HullToWorld(o.pos, o.rot, {0, 3.0f, 0}, ClassOf(o.cls).scale);
+        float len = Vector3Distance(a, b);
+        float slack = Clamp(1.0f - s.hookTimer / tune::hookTime, 0.0f, 1.0f);
+        const int N = 16;
+        Vector3 prev = a;
+        for (int k = 1; k <= N; ++k) {
+            float u = (float)k / N;
+            Vector3 p = Vector3Lerp(a, b, u);
+            p.y -= sinf(u * PI) * (0.03f * len) * (0.4f + 0.6f * slack);  // sag
+            Vector3 dir = Vector3Normalize(Vector3Subtract(p, prev));
+            Vector3 side = Vector3CrossProduct(dir, Vector3Normalize(Vector3Subtract(rv.pos, p)));
+            float w = 0.12f + 0.0015f * Vector3Distance(rv.pos, p);
+            side = Vector3Scale(Vector3Normalize(side), w);
+            rlColor4ub(70, 52, 34, 255);
+            rlVertex3f(prev.x + side.x, prev.y + side.y, prev.z + side.z);
+            rlVertex3f(prev.x - side.x, prev.y - side.y, prev.z - side.z);
+            rlVertex3f(p.x - side.x, p.y - side.y, p.z - side.z);
+            rlVertex3f(p.x + side.x, p.y + side.y, p.z + side.z);
+            prev = p;
+        }
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    rlSetTexture(0);
+    rlEnableBackfaceCulling();
 }
 
 // Where is the reticle pointing? The first thing the camera ray meets: an enemy hull, the sea, or the
@@ -1329,6 +1476,8 @@ void Game::Reconcile() {
     }
     while (!history.empty() && history.front().seq <= ns->ack) {
         ackedFireSeq = history.front().in.fireSeq;
+        ackedDashSeq = history.front().in.dashSeq;
+        ackedHookSeq = history.front().in.hookSeq;
         history.pop_front();
     }
     // start from the authoritative state...
@@ -1347,6 +1496,15 @@ void Game::Reconcile() {
     s.airTime = ns->airTime;
     for (int k = 0; k < 3; ++k) s.reload[k] = ns->reload[k];
     s.cls = ns->cls;
+    s.dashCd = ns->dashCd;
+    s.hookCd = ns->hookCd;
+    if (ns->hooked != s.hooked) {
+        s.hooked = ns->hooked;
+        if (s.hooked >= 0 && s.hooked < MAX_SHIPS && view[s.hooked].present) s.hookRest = Vector3Distance(view[s.hooked].s.pos, ns->pos);
+    }
+    s.hookTimer = ns->hookTimer;
+    s.lastDashSeq = ackedDashSeq;
+    s.lastHookSeq = ackedHookSeq;
     for (int i = 0; i < PU_COUNT; ++i) s.power[i] = ns->power[i];
     s.pirate = (ns->flags & SF_PIRATE) != 0;
     s.maxHp = ns->maxHp;
@@ -1684,6 +1842,25 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::Warning:
             Feed(e.b >= 60 ? "One minute left in the round!" : "Ten seconds!", ui::kGold);
             sfx::PlayFlat(sfx::Chime, 0.5f, e.b >= 60 ? 0.7f : 1.2f);
+            break;
+        case EventType::Dash:
+            if (e.a < MAX_SHIPS && view[e.a].present) {
+                const NetShip& d = view[e.a].s;
+                for (int i = 0; i < 26; ++i) {
+                    Vector3 p = HullToWorld(d.pos, d.rot, {Rnd(-3, 3), 0.0f, Rnd(-14, -4)}, ClassOf(d.cls).scale);
+                    Emit(p, {Rnd(-5, 5), Rnd(4, 10), Rnd(-5, 5)}, Rnd(0.6f, 1.2f), Rnd(0.5f, 1.1f), 0.6f, {235, 245, 250, 220}, 0);
+                }
+                sfx::Play(sfx::Whoosh, d.pos, 0.8f, 1.25f);
+            }
+            break;
+        case EventType::Hook:
+            if (e.a < MAX_SHIPS && e.b < MAX_SHIPS) {
+                sfx::Play(sfx::Hit, view[e.b].present ? view[e.b].s.pos : e.pos, 0.35f, 1.6f);
+                if (e.b == myId) Feed3(NameOf(e.a), "  has a grappling line on you!  (dash to break free)", "", TeamOf(e.a), ui::kGold);
+                else if (e.a == myId) Feed3("Line fast to  ", "", NameOf(e.b), ui::kText, TeamOf(e.b));
+            } else if (e.a == myId && (e.flags & 1)) {
+                Feed("The line is off", ui::kDim);
+            }
             break;
         case EventType::Respawn:
             if (e.a == myId) camInit = false;
@@ -2202,7 +2379,9 @@ void Game::RenderWorld(float dt, bool menu) {
         Vector3 centre = {rv.pos.x + fh.x * 90.0f, 0.0f, rv.pos.z + fh.y * 90.0f};
         renderer.BeginShadow(0, centre, 150.0f, 700.0f);
         shadowPass = true;
+        shipModel.forceLod = 2;
         DrawShips(menu, true, centre, 230.0f);
+        shipModel.forceLod = -1;
         shadowPass = false;
         renderer.EndShadow();
     }
@@ -2243,6 +2422,7 @@ void Game::RenderWorld(float dt, bool menu) {
     DrawLanternReflections();
     DrawLighthouseBeams(cam);
     if (!menu) DrawTracers(cam);
+    if (!menu) DrawHookLines();
     if (!menu && myId >= 0 && view[myId].present && OwnShipGhost() < 0.99f) {
         const NetShip& s = view[myId].s;
         rlDrawRenderBatchActive();
@@ -2720,6 +2900,29 @@ void Game::DrawHUD() {
         DrawCircleV(c, 2.5f, A(kText, 0.6f));
     }
 
+    // ---- skills ----
+    if (me && curSkills && alive) {
+        struct Sk { const char* key; const char* name; float cd, full; bool active; };
+        Sk sk[2] = {{"SHIFT", "DASH", me->dashCd, tune::dashCooldown, false},
+                    {"E", me->hooked >= 0 ? "LET GO" : "HOOK", me->hookCd, tune::hookCooldown, me->hooked >= 0}};
+        int cand = me->hooked < 0 ? HookCandidate(Vector3Normalize(Vector3Subtract(rv.target, rv.pos))) : -1;
+        for (int i = 0; i < 2; ++i) {
+            Rectangle r = {24.0f + 346.0f + i * 112.0f, H - 24 - 58, 104, 58};
+            Panel(r, kPanel, 10);
+            bool ready = sk[i].cd <= 0.0f || sk[i].active;
+            Keycap(sk[i].key, r.x + 10, r.y + 8, 13);
+            Text(sk[i].name, r.x + 10, r.y + 30, 16, ready ? (i == 1 && !sk[i].active && cand < 0 ? kDim : kGold) : kDim, true);
+            if (!ready) {
+                Bar({r.x + 10, r.y + 50, r.width - 20, 3}, 1.0f - sk[i].cd / sk[i].full, kText, {0, 0, 0, 120});
+                Text(TextFormat("%.0f", ceilf(sk[i].cd)), r.x + r.width - 12, r.y + 8, 15, kDim, true, Right);
+            }
+        }
+        if (cand >= 0) {  // the hook would land on this ship: a small anchor mark over it
+            Vector2 sp;
+            if (rv.Project(Vector3Add(view[cand].s.pos, {0, 26.0f * ClassOf(view[cand].s.cls).scale, 0}), sp))
+                Label("E  HOOK", sp.x, sp.y - 30, 10, kGold, Center);
+        }
+    }
     // ---- status card ----
     if (me) {
         Rectangle card = {24, H - 24 - 134, 336, 134};
@@ -2872,7 +3075,7 @@ void Game::DrawHUD() {
     if (showHelp) {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
-                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"TAB", nullptr, "Scores"},
+                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"SHIFT", nullptr, "Dash (skills)"}, {"E", nullptr, "Hook (skills)"}, {"TAB", nullptr, "Scores"},
                           {"F1", nullptr, "Hide"}};
         const int n = sizeof(keys) / sizeof(keys[0]);
         float rowH = 26, pw = 230, ph = n * rowH + 20;
@@ -2949,17 +3152,20 @@ void Game::DrawMenu() {
     const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
     DrawRectangleGradientH(0, 0, (int)(W * 0.55f), (int)H, {6, 12, 20, 210}, {6, 12, 20, 0});
     // layout is ~620 px tall from the title down; centre it in whatever height we have
-    const float x = 88, y0 = fmaxf(30.0f, (H - 80.0f - 700.0f) * 0.45f);
+    // short windows (720p) get a compact layout: smaller title, name and address side by side
+    const bool compact = H < 860.0f;
+    const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 700.0f) * 0.45f);
+    const float ts = compact ? 60.0f : 92.0f, head = compact ? 112.0f : 168.0f;
     float y = y0;
-    DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, 92, 92 * 0.12f, Fade(BLACK, 0.45f));
-    DrawTextEx(F().bold, "BROADSIDE", {x, y}, 92, 92 * 0.12f, {244, 232, 206, 255});
-    DrawRectangle((int)x + 4, (int)(y + 98), 64, 3, kGold);
+    DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, ts, ts * 0.12f, Fade(BLACK, 0.45f));
+    DrawTextEx(F().bold, "BROADSIDE", {x, y}, ts, ts * 0.12f, {244, 232, 206, 255});
+    DrawRectangle((int)x + 4, (int)(y + ts * 1.06f), 64, 3, kGold);
     if (!status.empty() && mode == Mode::Menu)
-        Text(status.c_str(), x + 4, y + 110, 20, {255, 160, 140, 255}, true);
+        Text(status.c_str(), x + 4, y + ts * 1.06f + 12, compact ? 17 : 20, {255, 160, 140, 255}, true);
     else
-        Text("Physics galleon battles on an FFT storm sea", x + 4, y + 110, 20, kDim, false);
+        Text("Physics galleon battles on an FFT storm sea", x + 4, y + ts * 1.06f + 12, compact ? 17 : 20, kDim, false);
 
-    y = y0 + 168;
+    y = y0 + head;
     if (mode == Mode::Connecting) {
         Label("CONNECTING", x + 2, y, 13, kGold);
         Text(server.Running() ? "Starting local server..." : TextFormat("%s : %u", addrBuf.c_str(), opt.port), x, y + 22, 28, kText, true);
@@ -2969,9 +3175,16 @@ void Game::DrawMenu() {
         return;
     }
     const float fw = 400;
-    TextField({x, y + 24, fw, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
-    TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
-    y += 192;
+    if (compact) {
+        float half = (fw - 8) * 0.5f;
+        TextField({x, y + 24, half, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
+        TextField({x + half + 8, y + 24, half, 50}, addrBuf, 1, focus, TextFormat("SERVER  \xC2\xB7  UDP %u", opt.port), 64);
+        y += 100;
+    } else {
+        TextField({x, y + 24, fw, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
+        TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
+        y += 192;
+    }
     if (Button({x, y, fw, 54}, "Join battle", true)) StartSession(false, 0);
     if (Button({x, y + 64, fw - 128, 54}, "Host battle")) StartSession(true, botCount, true);
     // bot stepper
@@ -2995,19 +3208,43 @@ void Game::DrawMenu() {
     Label("SHIPS", x + mw + 10, y + 200, 11, kDim);
     Segmented({x, y + 218, mw, 42}, kModeNames, MODE_COUNT, modeSel);
     Segmented({x + mw + 8, y + 218, 128, 42}, kFleets, 2, fleetSel);
-    if (Button({x, y + 272, fw, 50}, "Quit")) quit = true;
+    // which ships captains may sail, and whether everyone plays from the deck
+    Label("SHIPS ALLOWED", x + 2, y + 272, 11, kDim);
+    Label("CAMERA", x + mw + 10, y + 272, 11, kDim);
+    {
+        float bw = (mw - 2 * 6) / 3.0f;
+        const char* nm[3] = {"Cutter", "Frigate", "Line"};
+        for (int c = 0; c < SC_PLAYABLE; ++c) {
+            bool on = allowSel & (1 << c);
+            if (Button({x + c * (bw + 6), y + 290, bw, 40}, nm[c], on)) {
+                int next = allowSel ^ (1 << c);
+                if (next & SC_ALL) allowSel = next;  // at least one class stays allowed
+                if (!(allowSel & (1 << classSel)))
+                    for (int k : {SC_FRIGATE, SC_CUTTER, SC_LINE})
+                        if (allowSel & (1 << k)) { classSel = k; break; }
+            }
+        }
+        static const char* const kViews[] = {"Free", "Deck"};
+        Segmented({x + mw + 8, y + 290, 128, 40}, kViews, 2, viewSel);
+    }
+    Label("SKILLS  (SHIFT DASH  \xC2\xB7  E HOOK)", x + 2, y + 344, 11, kDim);
+    {
+        static const char* const kSkills[] = {"Off", "On"};
+        Segmented({x, y + 362, mw, 40}, kSkills, 2, skillSel);
+    }
+    if (Button({x + mw + 8, y + 362, 128, 40}, "Quit")) quit = true;
 
     {
-        float cx = x + fw + 36, cwid = fminf(360.0f, W * 0.55f - cx - 20);
+        float cx = x + fw + 36, cwid = fminf(360.0f, W * (compact ? 0.66f : 0.55f) - cx - 20);
         if (cwid > 220) {
-            Label("YOUR SHIP", cx + 2, y0 + 168, 13, kGold);
-            DrawClassCards({cx, y0 + 192, cwid, 3 * 100.0f + 20}, false, false);
+            Label("YOUR SHIP", cx + 2, y0 + head, 13, kGold);
+            DrawClassCards({cx, y0 + head + 24, cwid, 3 * 100.0f + 20}, false, false);
         }
     }
-    Text("Hosting opens a UDP port; friends join with your IP address.", x, H - 66, 16, kDim, false);
+    Text("Hosting opens a UDP port; friends join with your IP address.", x, H - (compact ? 56 : 66), compact ? 14 : 16, kDim, false);
     if (shipModel.HasExternal())
         Text("Ship model \"Age of sail Blender ship\" by NelloF (Fab)  \xC2\xB7  Ocean after Garrett Gunnell's Water (MIT)  \xC2\xB7  Barlow font (OFL)",
-             x, H - 42, 14, A(kDim, 0.8f), false);
+             x, H - (compact ? 34 : 42), compact ? 12 : 14, A(kDim, 0.8f), false);
 }
 
 void Game::Frame() {
@@ -3093,7 +3330,7 @@ void Game::Frame() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills)) return 1;
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();

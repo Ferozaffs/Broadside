@@ -12,6 +12,31 @@ static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateB
 
 int RunSimTest() {
     if (getenv("BS_ONLYDUELS")) goto duels;
+    if (getenv("BS_HOOKTEST")) {  // a frigate hooks a ship of the line (and a cutter) 120 m off; both sit still
+        for (int tc : {SC_LINE, SC_CUTTER}) {
+            World g;
+            g.rounds = false;
+            g.skills = true;
+            g.Init(5);
+            int a = g.AddShip("a", false, SC_FRIGATE), b = g.AddShip("b", false, tc);
+            g.ships[a].pos = {0, g.ocean.Height(0, 0), 0};
+            g.ships[b].pos = {0, g.ocean.Height(0, 120), 120};
+            for (Ship* x : {&g.ships[a], &g.ships[b]}) { x->vel = {0, 0, 0}; x->input.sail = 0; }
+            Vector3 a0 = g.ships[a].pos, b0 = g.ships[b].pos;
+            for (int i = 0; i < 60 * 9; ++i) {
+                if (i == 30) { g.ships[a].input.hookTarget = (uint8_t)b; g.ships[a].input.hookSeq++; }
+                if (i == 60 * 4) { g.ships[a].input.dashSeq++; }
+                g.Step();
+                g.events.clear();
+                if (i % 60 == 0)
+                    printf("  t=%d s: gap %.0f m, hooked %d, line %.0f m, frigate moved %.0f m, %s moved %.0f m\n", i / 60,
+                           Vector2Distance({g.ships[a].pos.x, g.ships[a].pos.z}, {g.ships[b].pos.x, g.ships[b].pos.z}), g.ships[a].hooked,
+                           g.ships[a].hookRest, Vector2Distance({a0.x, a0.z}, {g.ships[a].pos.x, g.ships[a].pos.z}), ClassOf(tc).name,
+                           Vector2Distance({b0.x, b0.z}, {g.ships[b].pos.x, g.ships[b].pos.z}));
+            }
+        }
+        return 0;
+    }
     if (getenv("BS_SHORETEST")) {  // wave height in open water vs at the harbours and close under the cliffs
         World g;
         g.rounds = false;
@@ -306,6 +331,7 @@ int RunSimTest() {
             g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1);
             int id = g.AddShip("t", false, c);
             Ship& S = g.ships[id];
+            S.cls = (uint8_t)c;  // (AddShip only hands out playable classes; the gunboat is an escort)
             float airT = 0, maxAir = 0, maxH = 0, maxV = 0, sumV = 0, turn180 = -1;
             int jumps = 0, n = 0;
             float prevAir = 0, startHd = 0;
@@ -347,8 +373,8 @@ int RunSimTest() {
 duels:
     if (!getenv("BS_NODUELS")) {  // 6e) duels: does each class beat the one it should?
         const int N = getenv("BS_DUELS") ? atoi(getenv("BS_DUELS")) : 24;
-        for (int a = 0; a < SC_COUNT; ++a)
-            for (int b = a + 1; b < SC_COUNT; ++b) {
+        for (int a = 0; a < SC_PLAYABLE; ++a)
+            for (int b = a + 1; b < SC_PLAYABLE; ++b) {
                 if (getenv("BS_DUELPAIR") && atoi(getenv("BS_DUELPAIR")) != a * 3 + b) continue;
                 int winA = 0, winB = 0, draws = 0, rakes = 0, hitsN = 0;
                 float dmgBy[2][4] = {};  // [taken by A/B][balls, raked balls, rams, rocks]
@@ -446,6 +472,8 @@ duels:
         World g;
         g.rounds = false;
         g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true);
+        g.skills = getenv("BS_SKILLS") != nullptr;  // dash and grappling hook on
+        int dashes = 0, hookups = 0;
         int captains = m == MODE_PIRATE ? 5 : 4;
         for (int i = 0; i < captains; ++i) g.AddShip(TextFormat("bot%d", i), true);
         int active = 0;
@@ -465,6 +493,8 @@ duels:
                     if (e.a != e.b && g.ships[e.a].active && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
                 }
                 if (e.type == EventType::Kill) kills++;
+                if (e.type == EventType::Dash) dashes++;
+                if (e.type == EventType::Hook && e.b < MAX_SHIPS) hookups++;
                 if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { aground++; if (e.value > 6.0f) groundings++; }
                 if (e.type == EventType::Resupply) resupply += e.b;
                 if (e.type == EventType::Booty) {
@@ -504,6 +534,7 @@ duels:
             printf(" )");
             (void)pirates;
         }
+        if (g.skills) printf(", skills: %d dashes, %d hooks", dashes, hookups);
         printf("\n");
     }
     return 0;

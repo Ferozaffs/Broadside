@@ -168,7 +168,21 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       your own ship to a ghost (drawn after the water, blended; BS_AIMZOOM=1 for screenshots).
 - Protocol v10.
 
+## v0.9 feedback (2026-11-14)
+- [x] Gunboat (SC_GUNBOAT, escort only): scale 0.5, 35 hp, 2 guns a side, damage 0.55, reload 3 s. Fleet escorts
+      are gunboats (cutter escorts were too strong).
+- [x] Host options, sent in WELCOME: ships allowed (bitmask, World::AllowedClass, bots too), deck-only camera
+      (forced first person), skills. Menu rows SHIPS ALLOWED / CAMERA / SKILLS; --classes, --deck-only, --skills.
+      Compact menu layout below 860 px height; card blurbs wrap.
+- [x] Night darker again: moon {0.055,0.08,0.14}, exposure 1.45, ambient {0.03,0.04,0.07}.
+- [x] Ship LODs: ship_hi (366k tris, <110 m), ship (150k, <320 m), ship_lo (56k, <650 m, also shadows), then
+      procedural. tools/blend_to_game_ship.py takes detail + name; the LODs share ship.glb's textures. BS_LOD pins one.
+- [x] Skills (protocol v12): Shift dash (0.35 s x 55 m/s^2, 8 s cd), E grappling hook (150 m, 7 s, reel 10 m/s,
+      mass-shared pull, parts at 230 m or when the hooked ship dashes, 12 s cd). Server-authoritative; prediction pulls our own end. Bot hunters
+      dash and hook the carrier, the carrier dashes away; --autopilot uses both. BS_HOOKTEST=1, BS_SKILLS=1 (simtest).
+
 ## Known issues / next
+- Deck view: the camera can clip into the quarterdeck structure when the ship pitches hard.
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).
 - Bots still run aground near harbours now and then.
@@ -179,7 +193,6 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - Test flags added: --test-power, --crate-cam, --freecam px py pz tx ty tz, BS_AIMTEST=1 (with --demo).
 - Two-PC network test (never done for real).
 - Sail furling for the imported model; muzzle positions vs the slimmer model.
-- Lighter LOD for distant ships.
 - Lantern light on the water surface; thunder/sound in general (no audio yet).
 
 If the session runs out of tokens, continue when they refresh.

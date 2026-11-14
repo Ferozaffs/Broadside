@@ -6,7 +6,8 @@
 
 static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue"};
 
-bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets) {
+bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets, uint8_t allowedCls,
+                       bool deckOnly, bool skills) {
     Stop();
     if (!NetInit()) return false;
     if (!net.Start(port, 32)) {
@@ -16,6 +17,9 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     for (int& p : peerShip) p = -1;
     if (const char* e = getenv("BS_ROUNDLEN")) world.roundLength = (float)atof(e);  // testing: short rounds
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets);
+    world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
+    world.deckOnly = deckOnly;
+    world.skills = skills;
     for (int i = 0; i < bots; ++i)
         if (world.AddShip(kBotNames[i % 8], true) < 0) break;
     world.events.clear();
@@ -67,7 +71,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         uint16_t ver = r.Get<uint16_t>();
         std::string name = r.GetString();
         uint8_t cls = r.Get<uint8_t>();
-        if (!r.ok || cls >= SC_COUNT) cls = SC_FRIGATE;
+        if (!r.ok || cls >= SC_PLAYABLE) cls = SC_FRIGATE;
         if (name.empty()) name = "Sailor";
         auto reject = [&](const char* why) {
             ByteWriter w;
@@ -91,6 +95,9 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put(world.mode);
         w.Put((uint8_t)(world.fleets ? 1 : 0));
         w.Put(world.time);
+        w.Put(world.allowedCls);
+        w.Put((uint8_t)(world.deckOnly ? 1 : 0));
+        w.Put((uint8_t)(world.skills ? 1 : 0));
         net.Send(peer, w.buf.data(), w.buf.size(), true);
         for (int i = 0; i < MAX_SHIPS; ++i)
             if (world.ships[i].active && announced[i] && i != id) SendPlayerInfo(i, (int)peer);
@@ -99,7 +106,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
     } else if (type == MSG_SET_CLASS) {
         int id = peerShip[peer];
         uint8_t cls = r.Get<uint8_t>();
-        if (id >= 0 && r.ok && cls < SC_COUNT) world.ships[id].nextCls = cls;  // takes effect at the next respawn
+        if (id >= 0 && r.ok && cls < SC_PLAYABLE) world.ships[id].nextCls = (uint8_t)world.AllowedClass(cls);  // takes effect at the next respawn
     } else if (type == MSG_INPUT) {
         int id = peerShip[peer];
         if (id < 0) return;

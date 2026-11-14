@@ -31,6 +31,8 @@ Everyone must run the same version.
 | V | Deck view on / off |
 | M | Sound on / off |
 | 1 / 2 / 3 | Next ship: cutter / frigate / ship of the line |
+| Shift | Dash: a hard shove ahead, also in the air (skills on, 8 s cooldown) |
+| E | Grappling hook on the ship under the reticle (150 m), E again to cut it (skills on, 12 s cooldown) |
 | Tab | Scores |
 | F1 | Hide help |
 
@@ -50,7 +52,10 @@ else next time.
 
 A cutter flies off every swell; a ship of the line barely leaves the water but out-guns a frigate. **Raking fire**:
 a shot that runs along a ship's length (in at the bow or stern) does extra damage, more the longer the deck - so get
-off a big ship's beam and onto its ends. With Fleets, every captain's escorts are cutters.
+off a big ship's beam and onto its ends.
+
+With Fleets, every captain's escorts are **gunboats**: half a frigate's length, 35 hull, two light guns a side.
+They are escorts only, not a ship you can pick.
 
 ### Game modes
 
@@ -68,6 +73,14 @@ Rounds last 8 minutes or until someone reaches the score limit. Then the results
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
 Landlubber for the captain who found the most rocks), and 18 seconds later a fresh round starts.
 
+**Host options** (menu, below the game settings):
+
+- **Ships allowed**: which of cutter / frigate / ship of the line players may pick. Bots keep to them too.
+- **Camera**: Free, or Deck to make everyone play from the quarterdeck (first person).
+- **Skills**: Dash (Shift) and grappling hook (E). A hooked line reels the two ships together for 7 seconds; the
+  pull is shared by weight, so a cutter that hooks a ship of the line is the one that gets dragged. It parts beyond
+  230 m, and the hooked ship can snap it by dashing. Bots hunting a treasure carrier use both.
+
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
 sail into a friendly harbour, which also repairs your hull.
@@ -82,7 +95,8 @@ Windows with Visual Studio 2026 (C++ workload): run `build.bat`. CMake fetches r
 The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
-Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`.
+Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
+(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--time night`, `--weather storm`).
 
 ### Ship model
 
@@ -90,6 +104,11 @@ The galleon model is a third-party asset ("Age of sail Blender ship" by NelloF, 
 is **not** in this repository. Without it the game falls back to a built-in procedural hull. To use your own
 licensed copy, put the `.glb` and `ship.cfg` in `assets/ship/`. Release zips carry it scrambled as
 `ship.pak` (`tools/pack_ship.py`) so the model is not handed out on its own.
+
+Levels of detail come from `tools/blend_to_game_ship.py` (Blender, `-- out_dir hull_length detail name`):
+`ship_hi.glb` (detail 4, ~370k triangles, your own ship close up and on deck), `ship.glb` (detail 1, ~150k) and
+`ship_lo.glb` (detail 0.25, ~56k, distant ships and shadows). The extra levels are optional and share the
+standard model's textures.
 
 ## Credits
 

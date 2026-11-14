@@ -1,6 +1,9 @@
 ﻿# Converts a detailed render-quality ship .blend into a game-ready GLB for Broadside.
 #
-#   blender -b --factory-startup --disable-autoexec ship.blend --python tools/blend_to_game_ship.py -- out_dir [hull_length_m]
+#   blender -b --factory-startup --disable-autoexec ship.blend --python tools/blend_to_game_ship.py -- out_dir [hull_length_m] [detail] [name]
+#
+#   detail scales every triangle budget (1 = the standard ~150k ship); name is the output file (default ship.glb).
+#   The game's levels of detail: ship_hi.glb (detail 4, own ship close up / on deck), ship.glb (1), ship_lo.glb (0.25).
 #
 # - realises modifiers / geometry-node instances into world-space meshes
 # - drops tiny details, interior walls, lights and the preview sea
@@ -15,6 +18,8 @@ import sys
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT_DIR = argv[0] if argv else os.path.join(os.getcwd(), "assets", "ship")
 PHYS_HULL_LENGTH = float(argv[1]) if len(argv) > 1 else 32.0
+DETAIL = float(argv[2]) if len(argv) > 2 else 1.0
+OUT_NAME = argv[3] if len(argv) > 3 else "ship.glb"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 SAIL_MATS = ("sail", "jib", "spanker", "staysail")
@@ -97,6 +102,12 @@ for name, me, is_hull in parts:
         budget = 140
     else:
         budget = min(1500, max(24, md * 30))
+    budget = max(8, budget * DETAIL)
+    # the lowest detail drops small parts that are only a few pixels at that range
+    if DETAIL < 0.5 and not is_hull and not is_sail and md < 1.5:
+        dropped += 1
+        bpy.data.meshes.remove(me)
+        continue
     ob = bpy.data.objects.new(name + "_g", me)
     col.objects.link(ob)
     ratio = min(1.0, budget / max(1, tris))
@@ -186,7 +197,7 @@ for img in bpy.data.images:
     if f < 1.0:
         img.scale(max(4, int(w * f)), max(4, int(h * f)))
 
-out = os.path.join(OUT_DIR, "ship.glb")
+out = os.path.join(OUT_DIR, OUT_NAME)
 import bmesh
 for a in list(me.attributes):
     if a.name.startswith(".sculpt"):

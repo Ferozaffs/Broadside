@@ -352,10 +352,17 @@ struct PakScope {
 //   keel=-3.4      y (hull space) where the lowest point of the model goes
 //   sails=sail,cloth,canvas   material/mesh name fragments that mark sail cloth
 bool ShipModel::LoadExternal(const char* dir, Shader lit) {
-    FilePathList files = LoadDirectoryFilesEx(dir, ".glb;.gltf;.obj;.pak", true);
     std::string path;
-    for (unsigned i = 0; i < files.count && path.empty(); ++i) path = files.paths[i];
-    UnloadDirectoryFiles(files);
+    for (const char* n : {"ship.glb", "ship.pak"})
+        if (path.empty() && FileExists((std::string(dir) + "/" + n).c_str())) path = std::string(dir) + "/" + n;
+    if (path.empty()) {  // any other model dropped in the folder (not one of the extra detail levels)
+        FilePathList files = LoadDirectoryFilesEx(dir, ".glb;.gltf;.obj;.pak", true);
+        for (unsigned i = 0; i < files.count && path.empty(); ++i) {
+            std::string f = GetFileName(files.paths[i]);
+            if (f.find("_hi.") == std::string::npos && f.find("_lo.") == std::string::npos) path = files.paths[i];
+        }
+        UnloadDirectoryFiles(files);
+    }
     if (path.empty()) return false;
     PakScope pak;
     if (IsFileExtension(path.c_str(), ".pak")) {
@@ -438,6 +445,7 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     extIsSail.assign(ext.meshCount, false);
     extIsRope.assign(ext.meshCount, false);
     std::vector<std::string> matNames = ReadGltfMaterialNames(path);
+    extMatNames = matNames;
     int sails = 0, ropes = 0;
     for (int i = 0; i < ext.meshCount; ++i) {
         int mi = ext.meshMaterial[i] - 1;
@@ -478,6 +486,75 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     TraceLog(LOG_WARNING, "Ship model: %s  meshes %d  materials %d  triangles %ld  size %.1f x %.1f x %.1f -> scale %.3f", path.c_str(),
              ext.meshCount, ext.materialCount, tris, size.x, size.y, size.z, s);
     hasExt = true;
+    hasHi = LoadLod(dir, "ship_hi", lit, sailKeys, extHi, hiSail, hiRope);
+    hasLo = LoadLod(dir, "ship_lo", lit, sailKeys, extLo, loSail, loRope);
+    return true;
+}
+
+// An extra level of detail: same hull space as the standard model (both come out of
+// tools/blend_to_game_ship.py), so it takes the same transform. Its own textures are dropped and the
+// standard model's are used by material name, so the levels cost geometry only.
+bool ShipModel::LoadLod(const std::string& dir, const char* base, Shader lit, const std::vector<std::string>& sailKeys, Model& out,
+                        std::vector<bool>& sailOut, std::vector<bool>& ropeOut) {
+    std::string glb = dir + "/" + base + ".glb", pakPath = dir + "/" + base + ".pak";
+    std::string path;
+    bool isPak = false;
+    if (FileExists(glb.c_str())) path = glb;
+    else if (FileExists(pakPath.c_str())) {
+        int n = 0;
+        unsigned char* d = LoadFileData(pakPath.c_str(), &n);
+        bool ok = DecodeShipPak(d, n, g_pakGlb);
+        UnloadFileData(d);
+        if (!ok) return false;
+        g_pakVirtual = glb;
+        SetLoadFileDataCallback(PakFileLoader);
+        isPak = true;
+        path = glb;
+    } else {
+        return false;
+    }
+    Model m = LoadModel(path.c_str());
+    std::vector<std::string> names = ReadGltfMaterialNames(path);
+    if (isPak) {
+        SetLoadFileDataCallback(nullptr);
+        g_pakGlb.clear();
+        g_pakGlb.shrink_to_fit();
+        g_pakVirtual.clear();
+    }
+    if (m.meshCount == 0) return false;
+    const unsigned defTex = rlGetTextureIdDefault();
+    for (int k = 0; k < m.materialCount; ++k) {
+        Material& mt = m.materials[k];
+        mt.shader = lit;
+        if (k == 0) continue;
+        for (int mi = 0; mi < 12; ++mi)  // raylib MAX_MATERIAL_MAPS
+            if (mt.maps[mi].texture.id > 0 && mt.maps[mi].texture.id != defTex) {
+                UnloadTexture(mt.maps[mi].texture);
+                mt.maps[mi].texture = {defTex, 1, 1, 1, 7};
+            }
+        std::string nm = k - 1 < (int)names.size() ? names[k - 1] : "";
+        for (int j = 0; j < (int)extMatNames.size(); ++j)
+            if (extMatNames[j] == nm && j + 1 < ext.materialCount) {
+                mt.maps[MATERIAL_MAP_DIFFUSE].texture = ext.materials[j + 1].maps[MATERIAL_MAP_DIFFUSE].texture;
+                mt.maps[MATERIAL_MAP_DIFFUSE].color = ext.materials[j + 1].maps[MATERIAL_MAP_DIFFUSE].color;
+                break;
+            }
+    }
+    sailOut.assign(m.meshCount, false);
+    ropeOut.assign(m.meshCount, false);
+    long tris = 0;
+    for (int i = 0; i < m.meshCount; ++i) {
+        tris += m.meshes[i].triangleCount;
+        int mi = m.meshMaterial[i] - 1;
+        if (mi < 0 || mi >= (int)names.size()) continue;
+        std::string n = TextToLower(names[mi].c_str());
+        for (const auto& k : sailKeys)
+            if (n.find(k) != std::string::npos) sailOut[i] = true;
+        if (n.rfind("rope", 0) == 0 || n.rfind("ratline", 0) == 0) ropeOut[i] = true;
+        if (sailOut[i]) AddFlutterWeights(m.meshes[i]);
+    }
+    TraceLog(LOG_WARNING, "Ship model: level of detail %s, %ld triangles", base, tris);
+    out = m;
     return true;
 }
 
@@ -501,19 +578,27 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
     // far away (fleets mean up to 32 ships) the 150k-triangle model is a few pixels: use the
     // procedural low-poly galleon instead
     if (hasExt && camDist < 650.0f) {
+        // level of detail: the high model close up (our own ship, on deck), the standard one in the thick
+        // of a fight, the low one further out
+        int lod = forceLod >= 0 ? forceLod : (camDist < 110.0f ? 0 : camDist < 320.0f ? 1 : 2);
+        Model* M = &ext;
+        const std::vector<bool>* isSail = &extIsSail;
+        const std::vector<bool>* isRope = &extIsRope;
+        if (lod == 0 && hasHi) { M = &extHi; isSail = &hiSail; isRope = &hiRope; }
+        if (lod == 2 && hasLo) { M = &extLo; isSail = &loSail; isRope = &loRope; }
         Matrix m = MatrixMultiply(extFix, model);
         rlDisableBackfaceCulling();  // sails and thin rigging are single-sided in most models
         float flutter = 0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f);
-        for (int i = 0; i < ext.meshCount; ++i) {
-            if (extIsRope[i] && camDist > 280.0f) continue;  // sub-pixel rigging only shimmers
-            Material& em = ext.materials[ext.meshMaterial[i]];
+        for (int i = 0; i < M->meshCount; ++i) {
+            if ((*isRope)[i] && camDist > 280.0f) continue;  // sub-pixel rigging only shimmers
+            Material& em = M->materials[M->meshMaterial[i]];
             Color keep = em.maps[MATERIAL_MAP_DIFFUSE].color;
-            Color c = extIsSail[i] ? ColorTint(keep, ColorLerp(WHITE, team, 0.55f)) : ColorTint(keep, tint);
+            Color c = (*isSail)[i] ? ColorTint(keep, ColorLerp(WHITE, team, 0.55f)) : ColorTint(keep, tint);
             c.a = (unsigned char)(c.a * alpha);
             em.maps[MATERIAL_MAP_DIFFUSE].color = c;
-            if (extIsSail[i]) r.SetSail(flutter, phase);
-            DrawMesh(ext.meshes[i], em, m);
-            if (extIsSail[i]) r.SetSail(0.0f, 0.0f);
+            if ((*isSail)[i]) r.SetSail(flutter, phase);
+            DrawMesh(M->meshes[i], em, m);
+            if ((*isSail)[i]) r.SetSail(0.0f, 0.0f);
             em.maps[MATERIAL_MAP_DIFFUSE].color = keep;
         }
         rlEnableBackfaceCulling();

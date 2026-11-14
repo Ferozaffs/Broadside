@@ -34,6 +34,8 @@ static const ShipClass kClasses[SC_COUNT] = {
      30.0f, 22.0f, 1.7f, 0.55f, 1.0f, 4, {-9, -3, 3, 9}, {1.1f, 1.1f, 1.1f, 1.1f}, 3.5f, 95.0f, 1.0f, false, 0.6f},
     {"Ship of the Line", "slow and huge: six heavy guns a side on two decks, lands like a hammer, easy to rake", 1.3f, 160.0f,
      24.0f, 17.0f, 0.9f, 0.32f, 0.75f, 6, {-10, -3, 4, -7, 0, 7}, {0.3f, 0.3f, 0.3f, 2.1f, 2.1f, 2.1f}, 4.5f, 88.0f, 1.1f, false, 0.45f},
+    {"Gunboat", "a small fleet escort: two light guns a side", 0.5f, 35.0f,
+     32.0f, 22.0f, 2.6f, 0.9f, 0.9f, 2, {-4, 4}, {1.1f, 1.1f}, 3.0f, 90.0f, 0.55f, false, 0.6f},
 };
 const ShipClass& ClassOf(int id) { return kClasses[id >= 0 && id < SC_COUNT ? id : SC_FRIGATE]; }
 
@@ -238,7 +240,8 @@ ShipPhys BuildPhys(float S) {
 }
 
 const ShipPhys& Phys(int cls = SC_FRIGATE) {
-    static ShipPhys p[SC_COUNT] = {BuildPhys(ClassOf(0).scale), BuildPhys(ClassOf(1).scale), BuildPhys(ClassOf(2).scale)};
+    static ShipPhys p[SC_COUNT] = {BuildPhys(ClassOf(0).scale), BuildPhys(ClassOf(1).scale), BuildPhys(ClassOf(2).scale),
+                                   BuildPhys(ClassOf(3).scale)};
     return p[cls >= 0 && cls < SC_COUNT ? cls : SC_FRIGATE];
 }
 
@@ -438,7 +441,7 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         ships[i].name = name;
         ships[i].isBot = bot;
         ships[i].fixedCls = cls >= 0;
-        ships[i].nextCls = (uint8_t)(cls >= 0 && cls < SC_COUNT ? cls : SC_FRIGATE);
+        ships[i].nextCls = (uint8_t)AllowedClass(cls >= 0 && cls < SC_PLAYABLE ? cls : SC_FRIGATE);
         if (mode == MODE_TEAMS) {  // join the smaller side
             int n[2] = {0, 0};
             for (const Ship& o : ships)
@@ -472,6 +475,7 @@ void World::Respawn(Ship& s) {
         float u = RandF();
         s.nextCls = (uint8_t)(u < 0.3f ? SC_CUTTER : u < 0.7f ? SC_FRIGATE : SC_LINE);
     }
+    s.nextCls = (uint8_t)AllowedClass(s.nextCls);
     s.cls = s.nextCls;
     float ang = RandF() * 2 * PI;
     float r = 220.0f + RandF() * 200.0f;
@@ -500,6 +504,8 @@ void World::Respawn(Ship& s) {
     s.airSpin = 0;
     for (float& p : s.power) p = 0.0f;
     s.lastAttacker = -1;
+    s.hooked = -1;
+    s.dashTimer = s.dashCd = s.hookCd = 0;
     GameEvent e{EventType::Respawn};
     e.a = s.id;
     e.pos = s.pos;
@@ -568,6 +574,56 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
         }
     }
     for (int i = 0; i < 3; ++i) s.reload[i] = fmaxf(0.0f, s.reload[i] - dt);
+    // skills
+    s.dashCd = fmaxf(0.0f, s.dashCd - dt);
+    s.hookCd = fmaxf(0.0f, s.hookCd - dt);
+    if (in.dashSeq != s.lastDashSeq) {
+        s.lastDashSeq = in.dashSeq;
+        if (skills && s.dashCd <= 0.0f && matchState == 0) {
+            s.dashTimer = tune::dashTime;
+            s.dashCd = tune::dashCooldown;
+            if (authoritative) {
+                GameEvent e{EventType::Dash};
+                e.a = s.id;
+                e.pos = s.pos;
+                events.push_back(e);
+            }
+        }
+    }
+    if (in.hookSeq != s.lastHookSeq) {
+        s.lastHookSeq = in.hookSeq;
+        if (s.hooked >= 0) {  // let go
+            s.hooked = -1;
+            s.hookTimer = 0;
+            if (authoritative) {
+                GameEvent e{EventType::Hook};
+                e.a = s.id;
+                e.b = 255;
+                e.flags = 1;
+                e.pos = s.pos;
+                events.push_back(e);
+            }
+        } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget < MAX_SHIPS && in.hookTarget != s.id) {
+            bool ok = true;
+            if (authoritative) {
+                const Ship& t = ships[in.hookTarget];
+                ok = t.active && !t.stowed && t.alive && Vector3Distance(t.pos, s.pos) < tune::hookRange * 1.15f;
+            }
+            if (ok) {
+                s.hooked = (int8_t)in.hookTarget;
+                s.hookTimer = tune::hookTime;
+                s.hookCd = tune::hookCooldown;
+                s.hookRest = authoritative ? Vector3Distance(ships[in.hookTarget].pos, s.pos) : Vector3Distance(s.hookPos, s.pos);
+                if (authoritative) {
+                    GameEvent e{EventType::Hook};
+                    e.a = s.id;
+                    e.b = in.hookTarget;
+                    e.pos = s.pos;
+                    events.push_back(e);
+                }
+            }
+        }
+    }
     for (auto& p : s.pending) p.delay -= dt;
     for (size_t i = 0; i < s.pending.size();) {
         if (s.pending[i].delay <= 0) {
@@ -785,6 +841,24 @@ void World::StepShip(Ship& s, float dt) {
     float dunked = Clamp(s.depthBelow / 2.0f, 0.0f, 1.0f);  // level out under water so she pops straight up
     alpha = Vector3Add(alpha, Vector3Scale(rightAxis, (up.y < 0.3f ? 2.5f : 0.6f + 2.4f * dunked) * (0.3f + inWater)));
 
+    // dash: a hard shove along the heading, water or air
+    if (s.alive && s.dashTimer > 0.0f) {
+        s.dashTimer = fmaxf(0.0f, s.dashTimer - dt);
+        F = Vector3Add(F, Vector3Scale(Vector3Normalize({fwd.x, fwd.y * 0.3f, fwd.z}), tune::dashAccel * P.mass));
+    }
+    // prediction: our end of a grappling line, towards where the client last saw the other ship
+    if (predicting && s.hooked >= 0 && s.alive) {
+        Vector3 d = Vector3Subtract(s.hookPos, s.pos);
+        float len = Vector3Length(d);
+        float rest = fmaxf(s.hookRest, tune::hookMinLen);
+        if (len > rest && len > 1e-3f) {
+            Vector3 n = Vector3Scale(d, 1.0f / len);
+            float relv = Vector3DotProduct(Vector3Subtract(s.hookVel, s.vel), n);
+            float a = Clamp((len - rest) * tune::hookStiff + relv * 1.5f, 0.0f, tune::hookMaxAccel);
+            float share = s.hookMass > 0.0f ? s.hookMass / (s.hookMass + P.mass) : 0.5f;
+            F = Vector3Add(F, Vector3Scale(n, a * 2.0f * share * P.mass));
+        }
+    }
     // soft arena boundary
     Vector2 hp = {s.pos.x, s.pos.z};
     float dist = Vector2Length(hp);
@@ -1052,6 +1126,12 @@ void World::BotThink(Ship& s, float dt) {
         float sc = (mode == MODE_PIRATE && o.pirate) ? d * 0.2f : d;
         if (sc < score) { score = sc; best = d; target = &o; }
     }
+    if (skills && s.dashCd <= 0.0f) {  // someone has a line on us: dash to snap it
+        bool onLine = false;
+        for (const Ship& o : ships)
+            if (o.active && o.hooked == s.id) onLine = true;
+        if (onLine && RandF() < (s.pirate ? 0.05f : 0.02f)) in.dashSeq++;
+    }
     Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
     float heading = atan2f(fwd.x, fwd.z);
     float desired = heading;
@@ -1112,6 +1192,8 @@ void World::BotThink(Ship& s, float dt) {
             goal = {harbours[cove].x, 0, harbours[cove].z};
             haveGoal = true;
             if (flat(goal, s.pos) < tune::harbourRadius * 0.6f) in.sail = 0.0f;  // heave to and unload
+            if (skills && target && best < 200.0f && s.dashCd <= 0.0f && RandF() < 0.03f) in.dashSeq++;
+            if (skills && s.hooked < 0) {}  // (carriers don't hook)
         }
         fight = false;
     } else if (mode == MODE_PIRATE && s.leader < 0 && !harbours.empty() && [&] {
@@ -1137,6 +1219,13 @@ void World::BotThink(Ship& s, float dt) {
             goal = Vector3Add(car->pos, Vector3Scale({car->vel.x, 0, car->vel.z}, lead));
             haveGoal = true;
             fight = false;
+        }
+        if (skills) {
+            if (dTo > 160.0f && dTo < 450.0f && s.dashCd <= 0.0f && RandF() < 0.02f) in.dashSeq++;
+            if (dTo < tune::hookRange * 0.85f && s.hooked < 0 && s.hookCd <= 0.0f && RandF() < 0.02f) {
+                in.hookTarget = car->id;
+                in.hookSeq++;
+            }
         }
         // alongside: the ordinary fight logic below presents a broadside to it
     } else if (mode == MODE_PIRATE && s.leader < 0) {  // the treasure is adrift: race for it
@@ -1241,8 +1330,16 @@ bool World::FriendlyHarbour(const Ship& s, int h) const {
     return owner < 0 || owner == s.team;
 }
 
+int World::AllowedClass(int want) const {
+    if (want >= 0 && want < SC_PLAYABLE && (allowedCls & (1 << want))) return want;
+    const int pref[SC_PLAYABLE] = {SC_FRIGATE, SC_CUTTER, SC_LINE};
+    for (int c : pref)
+        if (allowedCls & (1 << c)) return c;
+    return SC_FRIGATE;
+}
+
 float World::MaxHpOf(const Ship& s) const {
-    if (s.leader >= 0) return tune::escortHp;
+    if (s.leader >= 0) return ClassOf(s.cls).hp;
     return ClassOf(s.cls).hp + (s.pirate ? tune::pirateHpBonus : 0.0f);
 }
 
@@ -1302,7 +1399,7 @@ void World::SpawnFleet(Ship& c) {
         e.isBot = true;
         e.leader = (int8_t)c.id;
         e.slot = (uint8_t)k;
-        e.cls = e.nextCls = SC_CUTTER;  // fleets screen with cutters
+        e.cls = e.nextCls = SC_GUNBOAT;  // fleets screen with gunboats
         e.fixedCls = true;
         e.name = kEscortNames[(c.id * 3 + k) % 24];
         PlaceEscort(e, c, false, {});
@@ -1325,6 +1422,39 @@ void World::SetPirate(int id) {
     float before = p.maxHp;
     p.maxHp = MaxHpOf(p);
     p.hp = fminf(p.maxHp, p.hp + (p.maxHp - before));
+}
+
+// Grappling lines: a rope (pulls, never pushes) between two ships, reeled in over its life. The pull is
+// shared by mass, so a cutter hooked to a ship of the line gets dragged and the big ship barely notices.
+void World::UpdateHooks(float dt) {
+    for (Ship& s : ships) {
+        if (!s.active || s.hooked < 0) continue;
+        Ship& t = ships[s.hooked];
+        // a dash by the ship on the end of the line snaps it (the hooked ship's way out)
+        bool gone = !s.alive || !t.active || !t.alive || t.stowed || matchState != 0 || t.dashTimer > 0.0f;
+        float len = Vector3Distance(s.pos, t.pos);
+        s.hookTimer -= dt;
+        if (gone || s.hookTimer <= 0.0f || len > tune::hookBreak) {
+            GameEvent e{EventType::Hook};
+            e.a = s.id;
+            e.b = 255;
+            e.flags = 1;
+            e.pos = s.pos;
+            events.push_back(e);
+            s.hooked = -1;
+            continue;
+        }
+        float lens = tune::hookMinLen + hull::halfLength * (ClassOf(s.cls).scale + ClassOf(t.cls).scale);
+        s.hookRest = fmaxf(lens, s.hookRest - tune::hookReel * dt);
+        if (len <= s.hookRest || len < 1e-3f) continue;
+        Vector3 n = Vector3Scale(Vector3Subtract(t.pos, s.pos), 1.0f / len);
+        float relv = Vector3DotProduct(Vector3Subtract(t.vel, s.vel), n);
+        float a = Clamp((len - s.hookRest) * tune::hookStiff + relv * 1.5f, 0.0f, tune::hookMaxAccel);
+        float ms = Phys(s.cls).mass, mt = Phys(t.cls).mass;
+        // equal and opposite: each ship's share of the closing acceleration goes by the other's mass
+        s.vel = Vector3Add(s.vel, Vector3Scale(n, a * 2.0f * mt / (ms + mt) * dt));
+        t.vel = Vector3Subtract(t.vel, Vector3Scale(n, a * 2.0f * ms / (ms + mt) * dt));
+    }
 }
 
 // ---- rounds ----------------------------------------------------------------------
@@ -1597,10 +1727,17 @@ void World::UpdateAirTime(Ship& s, float dt, bool authoritative) {
 
 void World::PredictStep(Ship& s) {
     const float dt = SIM_DT;
+    predicting = true;
     ShipControls(s, dt, false);
     for (int i = 0; i < 2; ++i) StepShip(s, dt / 2);
     RockCollide(s, false);
     UpdateAirTime(s, dt, false);
+    if (s.hooked >= 0) {  // the line reels in and gives out like on the server
+        s.hookTimer -= dt;
+        s.hookRest = fmaxf(tune::hookMinLen, s.hookRest - tune::hookReel * dt);
+        if (s.hookTimer <= 0.0f) s.hooked = -1;
+    }
+    predicting = false;
 }
 
 void World::Step() {
@@ -1625,6 +1762,7 @@ void World::Step() {
             }
         }
     }
+    if (skills) UpdateHooks(dt);
     Collisions();
     UpdateBalls(dt);
     UpdateCrates(dt);

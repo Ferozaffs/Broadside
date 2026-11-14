@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 10;
+constexpr uint16_t PROTOCOL_VERSION = 12;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -78,6 +78,9 @@ inline void WriteInput(ByteWriter& w, const PlayerInput& in) {
     Vector3 a = Vector3Normalize(in.aim);
     w.Put((int16_t)(a.x * 32767)); w.Put((int16_t)(a.y * 32767)); w.Put((int16_t)(a.z * 32767));
     w.Put(in.fireSeq);
+    w.Put(in.dashSeq);
+    w.Put(in.hookSeq);
+    w.Put(in.hookTarget);
 }
 inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     in.seq = r.Get<uint32_t>();
@@ -87,6 +90,9 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     a.x = r.Get<int16_t>() / 32767.0f; a.y = r.Get<int16_t>() / 32767.0f; a.z = r.Get<int16_t>() / 32767.0f;
     in.aim = Vector3Length(a) > 0.1f ? Vector3Normalize(a) : Vector3{0, 0, 1};
     in.fireSeq = r.Get<uint8_t>();
+    in.dashSeq = r.Get<uint8_t>();
+    in.hookSeq = r.Get<uint8_t>();
+    in.hookTarget = r.Get<uint8_t>();
     return r.ok;
 }
 
@@ -98,6 +104,8 @@ struct NetShip {
     float hp = 100, sail = 0, rudder = 0, submerged = 0, depthBelow = 0, airTime = 0, lastAirTime = 0;
     float reload[3] = {0, 0, 0};
     uint8_t cls = SC_FRIGATE;
+    int8_t hooked = -1;
+    float dashCd = 0, hookCd = 0, hookTimer = 0;
     float deadTimer = 0;
     float buoyMul = 1;
     float airSpin = 0;  // local only (own predicted ship), not sent
@@ -166,6 +174,10 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((uint16_t)Clamp(s.lastAirTime * 100.0f, 0.0f, 65000.0f));
         w.Put(s.cls);
         for (int k = 0; k < 3; ++k) w.PutU8f(s.reload[k] / tune::reloadMax);
+        w.Put(s.hooked);
+        w.PutU8f(s.dashCd / tune::dashCooldown);
+        w.PutU8f(s.hookCd / tune::hookCooldown);
+        w.PutU8f(s.hookTimer / tune::hookTime);
         w.PutU8f(s.deadTimer / tune::respawnTime);
         w.Put((uint16_t)(Clamp(s.buoyMul, 0.0f, 6.0f) * 10000.0f));
         for (float p : s.power) w.Put((uint8_t)ceilf(Clamp(p * 4.0f, 0.0f, 255.0f)));
@@ -238,6 +250,10 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.lastAirTime = r.Get<uint16_t>() / 100.0f;
         sh.cls = r.Get<uint8_t>();
         for (int k = 0; k < 3; ++k) sh.reload[k] = r.GetU8f() * tune::reloadMax;
+        sh.hooked = r.Get<int8_t>();
+        sh.dashCd = r.GetU8f() * tune::dashCooldown;
+        sh.hookCd = r.GetU8f() * tune::hookCooldown;
+        sh.hookTimer = r.GetU8f() * tune::hookTime;
         sh.deadTimer = r.GetU8f() * tune::respawnTime;
         sh.buoyMul = r.Get<uint16_t>() / 10000.0f;
         for (float& p : sh.power) p = r.Get<uint8_t>() / 4.0f;
