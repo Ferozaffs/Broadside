@@ -7,6 +7,9 @@
 
 class Renderer;
 
+// Decrypt a model pack (.pak, tools/pack_ship.py) into the .glb bytes; false if it isn't one this build can read
+bool DecodeModelPak(const unsigned char* data, int size, std::vector<unsigned char>& out);
+
 class ShipModel {
 public:
     void Init(Shader lit);
@@ -23,6 +26,17 @@ public:
     float alpha = 1.0f;  // see-through (our own ship while aiming)
     int forceLod = -1;   // 0 high, 1 standard, 2 low (-1: by distance); the shadow pass uses low
     bool HasLod(int i) const { return i == 0 ? hasHi : i == 2 ? hasLo : hasExt; }
+    // Where a crewman can stand (crew mode): the top walkable surface at hull-space (x, z), -99 where there's none,
+    // and whether a wall (bulwark, mast, cabin side) stands across (x, z) at a person's height above feet y.
+    float DeckAt(float x, float z) const;
+    bool WallAt(float x, float z, float y) const;
+    // the deck as a whole (every model has its own heights): the main deck's level, and where the deck runs from aft
+    // to forward. Walking rules and the captain's eye are measured from these.
+    float DeckLevel() const { return deckLevel; }
+    float DeckAft() const { return deckAft; }
+    float DeckFore() const { return deckFore; }
+    bool Walkable(float h) const { return h > deckLevel - 0.9f; }
+    bool HighDeck(float h) const { return h > deckLevel + 0.85f; }
     // iron-framed lanterns at hull-space spots; glow 0..1 drives the glass emissive
     void DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow);
 
@@ -43,4 +57,10 @@ private:
     bool LoadLod(const std::string& dir, const char* base, Shader lit, const std::vector<std::string>& sailKeys, Model& out,
                  std::vector<bool>& sailOut, std::vector<bool>& ropeOut);
     float extTop = 25.0f;
+    // crew mode deck map (hull space grid, built from the standard model's upward faces and walls)
+    static constexpr float kDX = 0.25f, kX0 = -6.0f, kZ0 = -20.0f;
+    static constexpr int kNX = 48, kNZ = 168;
+    std::vector<float> deckH, wallLo, wallHi;
+    float deckLevel = 2.65f, deckAft = -15.0f, deckFore = 15.0f;
+    void BuildDeckMap(const Model& m, const Matrix& fix, const std::vector<bool>& skip);
 };

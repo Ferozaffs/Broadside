@@ -2,6 +2,10 @@ in vec3 vertexPosition;
 in vec2 vertexTexCoord;
 in vec3 vertexNormal;
 in vec4 vertexColor;
+in vec4 vertexBoneIds;      // skinned meshes (the crew): four bones and weights per vertex
+in vec4 vertexBoneWeights;
+uniform mat4 boneMatrices[128];
+uniform float uSkinned;     // 1 while drawing a skinned mesh
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
@@ -16,8 +20,14 @@ out vec3 vObj;  // model-space position: stable noise coordinates for damage
 
 void main() {
     vec3 p = vertexPosition;
-    vObj = vertexPosition;
     vec3 n = vertexNormal;
+    if (uSkinned > 0.5) {
+        mat4 skin = boneMatrices[int(vertexBoneIds.x)] * vertexBoneWeights.x + boneMatrices[int(vertexBoneIds.y)] * vertexBoneWeights.y +
+                    boneMatrices[int(vertexBoneIds.z)] * vertexBoneWeights.z + boneMatrices[int(vertexBoneIds.w)] * vertexBoneWeights.w;
+        p = (skin * vec4(p, 1.0)).xyz;
+        n = normalize((skin * vec4(n, 0.0)).xyz);
+    }
+    vObj = p;
     vec4 col = vertexColor;
     if (uSailWave > 0.0) {
         // vertexColor.a = flutter weight baked at load time (0 where the cloth is pinned)

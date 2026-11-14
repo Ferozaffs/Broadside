@@ -213,11 +213,67 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       in reach. Bots (and --autopilot) grapple a stack further out when inside 215 m, let go once clear, look along
       their drift as well as the bow for rocks, and turn away from a stack rather than "for the middle".
 - [ ] Bots hit the stacks a lot: 35-70 rock hits per 6-min match vs 15-30 on the Isles, mostly fleet escorts.
-- [ ] The chase camera can end up behind a stack (no camera collision with rocks).
+- [x] The chase camera slides in along its line when a rock hides our ship from it, and eases back out after.
 - [ ] Ideas: let it wander, or appear only in storms.
 
+## Crew mode (2026-11-14)
+- [x] Role per player (menu "You sail as: Captain / Crew", --crew; HELLO carries it). The server signs a crewman on
+      aboard the captain's ship with the fewest hands (human captain wins a tie), spawning a bot captain if there is
+      none. World::crew[MAX_CREW], positions in hull space; MSG_CREW_INPUT (60 Hz, client-authoritative feet, server
+      clamps), MSG_CREW_INFO/LEFT, crew + holes at the end of every snapshot. Protocol v14.
+- [x] Guns: GunStation() on the gangway above each gun; E mans it within crewReach (3.2 m), the gun leaves the
+      captain's broadside (Ship::mannedMask), reloads on its own (gunReload) and fires on the crewman's own aim
+      (PendingShot::ownAim; the client lays it with SolveAim(dir, gun)).
+- [x] Holes: on ships with human crew every ball hit leaves a Leak (max 8), 0.35 hp/s each; hold F at its
+      LeakStation for 2.5 s to patch it and get 50% of that hit back (EventType::Repair). Water spurts from open holes.
+- [x] First person: deck map rasterised from the ship model at load (ShipModel::DeckAt/WallAt: highest up-facing
+      face under 6.8 m, walls from steep faces). Steps up to 0.8 m (ladder rungs), up to 1.25 m only onto the high
+      decks; railings block. Camera rides the interpolated ship, a share of its roll in the horizon.
+- [x] Figures: human crewmen in team colours, and the ship's own gun crews (navy jackets, white trousers) at every
+      gun nobody works, on ships near the camera.
+- [x] Crew HUD: gun reload ring, range and elevation, context prompts (work / leave / fire / patch), hole markers
+      on deck, "CREW · <captain>'s <class>". Crew help keys. --autopilot as crew walks to a gun (round by the
+      quarterdeck ladders when it's on the other side), fires, and patches holes. BS_CREWTEST (simtest), BS_CREWLOG.
+- [x] Credit: balls carry the crewman who fired them (Ball/PendingShot::crew); crewmen count hits, sinkings and
+      patches (snapshot), the scoreboard lists them under their captain, and the kill feed names the gunner.
+- [x] Switching without reconnecting (Esc screen): captain -> "Sign on as crew" (the ship and fleet go), crew ->
+      "Change ship" (MoveCrew: the next captain's ship, friends only in teams) or "Take a ship of your own".
+      MSG_SET_ROLE (C->S) / MSG_ROLE (S->C). BS_ROLETEST=1 walks a client through all three on a timer.
+- [x] Overboard: when the ship goes over on her beam ends in the water (up.y < 0.3 for 0.5 s), or slams down after
+      2.5 s+ in the air (25%, 10% if holding a gun). The crewman swims in world space (client-authoritative, the
+      server gets the world position and blocks gun work and patching), carried by the current (the maelstrom
+      too); E at the hull climbs back aboard, otherwise they haul you in after 20 s. Others see a swimmer and a feed line.
+- [x] Sailors have legs and arms that swing as they walk (stride from how fast they cross the deck); swimmers paddle.
+- [x] Crew --autopilot walks a breadth-first path over the deck map (same step rules), to the reachable spot
+      nearest its goal: round the hatch, up the ladders, out to the forecastle.
+- [x] Jobs: E at the wheel (JobStation, aft) or the pin rail by the mainmast: a crewman at the helm makes her turn
+      15% quicker, one tending the sails gives 6% more speed (Ship::helmed/trimmed, SF_HELM/SF_TRIM in snapshots
+      so the captain's prediction matches). Crewman::gun holds JOB_HELM / JOB_SAILS for these.
+- [x] Captain's orders: Z / X / C (MSG_ORDER) -> "man the port guns / starboard guns / patch the holes" banner for
+      the crew aboard; bot captains with human crew give them on their own (holes first, else the side the nearest
+      enemy is on), at most every 8 s and only when it changes.
+- [x] Sailor model: Mixamo character with idle / run / work animations (tools/mixamo_to_game_crew.py), GPU skinning
+      in the lit shader (vertexBoneIds/Weights, boneMatrices, uSkinned); CrewModel draws every figure. Gun crews work
+      or idle, humans run / work / idle by what they're doing. Falls back to the stick figures without the pack.
+- [x] New ship of the line: CGTrader cgt_frigate_001 (tools/fbx_to_game_ship.py -> assets/ship_line, three levels of
+      detail split under 60k vertices for raylib's 16-bit indices; tools/prep_albedo.py bakes its AO into the
+      albedo). Any class can have its own model in assets/ship_<class>/ (Game::ModelOf); ship.cfg gained yscale.
+      Deck walking and the captain's eye now read each model's own deck (DeckLevel / DeckAft / DeckFore, StationSpot).
+- [x] Model packs encrypted: BSPAK2 = ChaCha20 under assets/pak.key (gitignored; CMake bakes it into pak_key.h).
+- [ ] Waiting on formats: "detailed ship" (.mb, Maya) and "Zeven Provincien" (.skp, SketchUp) can't be read here.
+- [x] Sailor: "Pirate" by Bugrimov Maksim (Fab Standard License): Unreal project BroadsideExport (Documents/Unreal
+      Projects) + tools/ue_export_pack.py (full editor, -ExecutePythonScript: skeletal export needs a render scene)
+      -> FBX; tools/ue4char_to_game_crew.py bakes the rig's 0.01 empty into metres, retargets the Mixamo idle / run /
+      work onto the UE4 skeleton (spine/head by rotation change, limbs aimed joint to joint, hands and feet at rest),
+      12k triangles, clothes as the first material (the game tints only that). Not the pack's UE sample mannequins.
+- [x] All three pirate outfits (sailor, sailor_2, sailor_3: Full_01-03 with the pack's other skin and hair albedos);
+      each gun station / crewman keeps one.
+- [ ] The camera can end up inside rigging or sails; on a cutter the scaled-down deck is cramped for a full-size man.
+
 ## Known issues / next
-- Deck view: the camera can clip into the quarterdeck structure when the ship pitches hard.
+- Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;
+  it now stands on the model's quarterdeck (ShipModel::DeckAt) behind the rail. Figures closer than 2.2 m to the
+  camera aren't drawn.
 - Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
   reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).
 - Bots still run aground near harbours now and then.

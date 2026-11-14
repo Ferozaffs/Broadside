@@ -95,6 +95,27 @@ Landlubber for the captain who found the most rocks), and 18 seconds later a fre
   carries you past one sooner or later). Mind them, too: the current will happily smash you into one. Whoever last
   hit a ship, or had a line on it, gets the kill when the maelstrom takes it.
 
+**Crew** (pick "You sail as: Crew" in the menu, or `--crew`): instead of a ship of your own you sign on aboard
+someone else's, as a sailor on deck in first person. You join the captain who needs hands most, a human or a bot,
+and if nobody is sailing a bot takes the helm for you, so it works alone too.
+
+- **W A S D** walk the deck (Shift runs), up the quarterdeck ladders and along the gangways; the deck carries you.
+- **E** at a gun works it: you aim it yourself (it's laid on whatever is under the reticle) and **left mouse**
+  fires it. A gun you're working has its own reload. Guns nobody works are manned by the ship's own gun crew and
+  fire with the captain's broadside as before.
+- **F** (hold) at a shot hole patches it. On a ship with human crew every hit leaves a hole that slowly lets water
+  in (0.35 hull a second each) until someone patches it, which wins back half of what that hit cost.
+- Hold on: when she goes over on her beam ends, or slams down from a big jump, you can go over the side. Swim back
+  (the current carries you) and press **E** at the hull to climb aboard, or wait and they'll haul you in.
+- **E** at the wheel takes the helm (she turns 15% quicker with a helmsman), at the pin rail by the mainmast it
+  tends the sails (6% more speed).
+- The captain gives orders with **Z** (man the port guns), **X** (starboard guns) and **C** (patch the holes); bot
+  captains give them too.
+- **Esc** lets you change ship, take a ship of your own, or (as a captain) sign on as crew, without leaving the game.
+  The scoreboard lists the crew under their captain with their own hits, sinkings and patches.
+
+The ship of the line has its own model now, and the sailors on deck are animated pirates in three outfits.
+
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
 sail into a friendly harbour, which also repairs your hull.
@@ -111,6 +132,7 @@ The game is `build/broadside.exe`.
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
 (also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--arena maelstrom`, `--time night`, `--weather storm`).
+Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model
 

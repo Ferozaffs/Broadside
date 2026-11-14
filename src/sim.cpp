@@ -386,6 +386,23 @@ void CannonShot(int cls, Vector3 comPos, Quaternion rot, Vector3 vel, Vector3 an
     ballVel = Vector3Add(pointVel, Vector3Scale(dir, C.muzzleSpeed));
 }
 
+// Crew stations: at the rail above the gun (the guns themselves are on the deck below)
+Vector3 GunStation(int cls, int side, int index) {
+    const ShipClass& C = ClassOf(cls);
+    float z = C.gunZ[index < C.guns ? index : 0];
+    float s = side == 0 ? 1.0f : -1.0f;
+    return {s * fmaxf(0.5f, hull::HalfWidth(z) - 2.2f), hull::DeckHeight(z), z};
+}
+Vector3 JobStation(int job) {
+    if (job == JOB_HELM) return {0.0f, hull::DeckHeight(-12.0f), -12.0f};
+    return {2.2f, hull::DeckHeight(-1.5f), -1.5f};  // (the starboard pin rail by the mainmast)
+}
+
+Vector3 LeakStation(Vector3 l) {
+    float z = Clamp(l.z, -13.0f, 9.5f);  // (not right up in the bow or the stern, where nobody can stand)
+    return {(l.x >= 0.0f ? 1.0f : -1.0f) * fmaxf(0.5f, hull::HalfWidth(z) - 2.2f), hull::DeckHeight(z), z};
+}
+
 float ReloadTime(const Ship& s, int side) {
     if (side == 2) return tune::chaserReload * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f);
     return ClassOf(s.cls).reload * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f) * (s.pirate ? tune::pirateReload : 1.0f);
@@ -451,6 +468,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     time = 0.0;
     tick = 0;
     for (auto& s : ships) s = Ship{};
+    for (auto& c : crew) c = Crewman{};
     balls.clear();
     events.clear();
     rocks = MakeRocks(seed, arena);
@@ -548,6 +566,8 @@ void World::Respawn(Ship& s) {
     s.lastAttacker = -1;
     s.hooked = -1;
     s.dashTimer = s.dashCd = s.hookCd = 0;
+    for (Leak& l : s.leaks) l = Leak{};
+    for (auto& side : s.gunReload) for (float& g : side) g = 0.0f;
     GameEvent e{EventType::Respawn};
     e.a = s.id;
     e.pos = s.pos;
@@ -607,6 +627,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
             bool barrage = s.power[PU_BARRAGE] > 0.0f;
             int guns = side == 2 ? 1 : ClassOf(s.cls).guns;
             for (int i = 0; i < guns; ++i) {
+                if (side < 2 && (s.mannedMask >> (side * 8 + i) & 1)) continue;  // a crewman lays and fires that one
                 s.pending.push_back({(side == 2 ? 0.0f : 0.07f * i) + 0.01f, side, i});
                 if (barrage) {  // two extra balls per gun, fanned out a little either side
                     s.pending.push_back({0.07f * i + 0.03f, side, i, -0.04f, 0.012f, false});
@@ -695,7 +716,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
 void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     Vector3 muzzle, v;
     int side = shot.side;
-    CannonShot(s.cls, s.pos, s.rot, s.vel, s.angVel, s.input.aim, side, shot.index, muzzle, v, shot.yaw, shot.elev);
+    CannonShot(s.cls, s.pos, s.rot, s.vel, s.angVel, shot.ownAim ? shot.aim : s.input.aim, side, shot.index, muzzle, v, shot.yaw, shot.elev);
     // recoil (yes, you can broadside yourself sideways in mid-air)
     Vector3 dir = Vector3Normalize(Vector3Subtract(v, s.vel));
     if (shot.recoil) ApplyImpulse(s, Vector3Scale(dir, -tune::recoilImpulse * (side == 2 ? 0.5f : ClassOf(s.cls).scale)), muzzle);
@@ -706,6 +727,7 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     b.owner = s.id;
     b.airShot = s.submerged <= 0.0f;
     b.dmgMul = side == 2 ? tune::chaserDamage : ClassOf(s.cls).damage;
+    b.crew = shot.crew;
     b.pos = muzzle;
     b.vel = v;
     balls.push_back(b);
@@ -840,7 +862,7 @@ void World::StepShip(Ship& s, float dt) {
         // speed controller along the keel; still pushes a little in the air (it's that kind of game)
         Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
         float windDot = fh.x * oceanParams.windDir.x + fh.y * oceanParams.windDir.y;
-        float top = C.topSpeed;
+        float top = C.topSpeed * (s.trimmed ? tune::trimSpeed : 1.0f);
         if (s.leader >= 0 && ships[s.leader].active)  // escorts pace their captain, whatever he sails
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
@@ -872,7 +894,7 @@ void World::StepShip(Ship& s, float dt) {
         // takeoff; in the air nothing touches it (angular momentum), which is where 360s come from.
         float steerSign = vf < -1.0f ? -1.0f : 1.0f;  // reversed going astern, like a real rudder
         float spdF = Clamp(fabsf(vf) / 10.0f, 0.0f, 1.0f);
-        float authority = C.turnRateSlow + (C.turnRate - C.turnRateSlow) * spdF;
+        float authority = (C.turnRateSlow + (C.turnRate - C.turnRateSlow) * spdF) * (s.helmed ? tune::helmTurn : 1.0f);
         float wet = Clamp(subVol / P.restVol, 0.0f, 1.0f);
         float bowWet = Clamp(bowVol / P.bowRestVol, 0.0f, 1.0f);
         float sternWet = Clamp(sternVol / P.sternRestVol, 0.0f, 1.0f);
@@ -1188,7 +1210,28 @@ void World::UpdateBalls(float dt) {
             events.push_back(e);
             if (sh.alive && b.owner < MAX_SHIPS && ships[b.owner].active && Enemies(ships[b.owner], sh))
                 ships[CaptainOf(b.owner)].statDamage += fminf(dmg, sh.hp);
+            const bool wasAlive = sh.alive;
+            if (b.crew >= 0 && b.crew < MAX_CREW && crew[b.crew].active && wasAlive && Enemies(ships[b.owner], sh)) crew[b.crew].hits++;
+            if (sh.crewCount > 0 && sh.alive) {  // crew mode: a hole the crew can patch (and that leaks until they do)
+                Vector3 hl = WorldToHull(sh.pos, sh.rot, hitPos, S);
+                Leak* slot = nullptr;
+                for (Leak& l : sh.leaks)
+                    if (!l.active) { slot = &l; break; }
+                if (!slot) {  // all full: it widens the nearest one
+                    float nd = 1e9f;
+                    for (Leak& l : sh.leaks) {
+                        float d = Vector3Distance(l.local, hl);
+                        if (d < nd) { nd = d; slot = &l; }
+                    }
+                    slot->dmg += fminf(dmg, sh.hp);
+                } else *slot = {true, hl, fminf(dmg, sh.hp)};
+            }
             Damage(sh, dmg, b.owner);
+            if (wasAlive && !sh.alive && b.crew >= 0 && b.crew < MAX_CREW && crew[b.crew].active) {  // that crewman's shot sank her
+                crew[b.crew].kills++;
+                for (auto it = events.rbegin(); it != events.rend(); ++it)
+                    if (it->type == EventType::Kill && it->b == sh.id) { it->value = (float)(b.crew + 1); break; }
+            }
             dead = true;
         }
         if (dead) {
@@ -1646,6 +1689,183 @@ void World::UpdateMaelstrom(float dt) {
     }
 }
 
+// ---- crew mode ---------------------------------------------------------------------
+// the captain's ship with the fewest hands (a human captain wins a tie); -1 if there is none
+int World::PickCrewShip() const {
+    int best = -1, bestN = 1 << 20;
+    for (const Ship& s : ships) {
+        if (!s.active || s.leader >= 0) continue;
+        int n = s.crewCount * 2 + (s.isBot ? 1 : 0);
+        if (n < bestN) { bestN = n; best = s.id; }
+    }
+    return best;
+}
+
+static const char* kBotCaptains[] = {"Cpt. Hawkins", "Cpt. Morrow", "Cpt. Vane", "Cpt. Teach", "Cpt. Kidd", "Cpt. Low"};
+
+int World::AddCrew(const std::string& name) {
+    for (int i = 0; i < MAX_CREW; ++i) {
+        if (crew[i].active) continue;
+        int ship = PickCrewShip();
+        if (ship < 0) ship = AddShip(kBotCaptains[i % 6], true);  // nobody to sail with: a bot takes the helm
+        if (ship < 0) return -1;
+        crew[i] = Crewman{};
+        crew[i].active = true;
+        crew[i].name = name;
+        crew[i].ship = (int8_t)ship;
+        crew[i].local = GunStation(ships[ship].cls, (i & 1), 1);  // sign on beside a gun
+        ships[ship].crewCount++;
+        return i;
+    }
+    return -1;
+}
+
+void World::MoveCrew(int id, int ship) {
+    if (id < 0 || id >= MAX_CREW || !crew[id].active) return;
+    Crewman& c = crew[id];
+    if (ship < 0) {  // the next captain's ship round from ours (friends only in teams)
+        for (int k = 1; k <= MAX_SHIPS && ship < 0; ++k) {
+            int n = (c.ship + k + MAX_SHIPS) % MAX_SHIPS;
+            const Ship& s = ships[n];
+            if (!s.active || s.leader >= 0 || n == c.ship) continue;
+            if (mode == MODE_TEAMS && c.ship >= 0 && ships[c.ship].active && s.team != ships[c.ship].team) continue;
+            ship = n;
+        }
+    }
+    if (ship < 0 || !ships[ship].active) return;
+    c.ship = (int8_t)ship;
+    c.gun = c.repair = -1;
+    c.overboard = false;
+    c.local = GunStation(ships[ship].cls, id & 1, 1);
+    c.lastSeq = 0;  // (take our spot until the client places itself aboard)
+}
+
+void World::RemoveCrew(int id) {
+    if (id < 0 || id >= MAX_CREW || !crew[id].active) return;
+    Crewman& c = crew[id];
+    if (c.ship >= 0 && c.ship < MAX_SHIPS) ships[c.ship].crewCount = std::max(0, ships[c.ship].crewCount - 1);
+    c = Crewman{};
+}
+
+void World::UpdateCrew(float dt) {
+    for (Ship& s : ships) s.mannedMask = 0, s.crewCount = 0, s.helmed = s.trimmed = false;
+    for (const Crewman& c : crew)
+        if (c.active && c.ship >= 0 && ships[c.ship].active) ships[c.ship].crewCount++;
+    for (Crewman& c : crew) {
+        if (!c.active) continue;
+        if (c.ship < 0 || !ships[c.ship].active) {  // our ship's gone (its captain left): find another
+            int n = PickCrewShip();
+            if (n < 0) n = AddShip(kBotCaptains[&c - crew], true);
+            if (n < 0) continue;
+            c.ship = (int8_t)n;
+            ships[n].crewCount++;
+            c.gun = c.repair = -1;
+            c.local = GunStation(ships[n].cls, 0, 1);
+        }
+        Ship& s = ships[c.ship];
+        const ShipClass& C = ClassOf(s.cls);
+        const CrewInput& in = c.input;
+        // where we stand: the client walks the deck; keep it on board (and keep where we signed on until it says)
+        c.overboard = c.lastSeq > 0 && in.overboard;
+        if (c.overboard) c.local = {Clamp(in.local.x, -1500.0f, 1500.0f), Clamp(in.local.y, -80.0f, 60.0f), Clamp(in.local.z, -1500.0f, 1500.0f)};
+        else if (c.lastSeq > 0) c.local = {Clamp(in.local.x, -hull::maxHalfBeam, hull::maxHalfBeam), Clamp(in.local.y, -2.0f, 9.0f),
+                   Clamp(in.local.z, -hull::halfLength - 2.0f, hull::halfLength + 2.0f)};
+        c.yaw = in.yaw;
+        auto reach = [&](Vector3 spot) {  // close enough to work it? (world metres, on the deck plane)
+            return Vector2Distance({c.local.x, c.local.z}, {spot.x, spot.z}) * C.scale < tune::crewReach;
+        };
+        // working a gun
+        int g = c.overboard ? -1 : in.gun;
+        if (g == JOB_HELM || g == JOB_SAILS) {  // the wheel or the sails: one hand each
+            bool taken = false;
+            for (const Crewman& o : crew)
+                if (&o != &c && o.active && o.ship == c.ship && o.gun == g) taken = true;
+            if (taken || !reach(JobStation(g))) g = -1;
+            if (g == JOB_HELM) s.helmed = true;
+            if (g == JOB_SAILS) s.trimmed = true;
+        } else if (g >= 0) {
+            int side = g / MAX_GUNS, idx = g % MAX_GUNS;
+            bool taken = false;
+            for (const Crewman& o : crew)
+                if (&o != &c && o.active && o.ship == c.ship && o.gun == g) taken = true;
+            if (side > 1 || idx >= C.guns || taken || !reach(GunStation(s.cls, side, idx))) g = -1;
+        }
+        c.gun = (int8_t)g;
+        if (IsGunJob(c.gun)) s.mannedMask |= (uint16_t)(1u << ((c.gun / MAX_GUNS) * 8 + c.gun % MAX_GUNS));
+        if (in.fireSeq != c.lastFireSeq) {
+            c.lastFireSeq = in.fireSeq;
+            if (IsGunJob(c.gun) && s.alive && matchState == 0) {
+                int side = c.gun / MAX_GUNS, idx = c.gun % MAX_GUNS;
+                if (s.gunReload[side][idx] <= 0.0f) {
+                    s.gunReload[side][idx] = ReloadTime(s, side);
+                    PendingShot p{0.01f, side, idx};
+                    p.crew = (int8_t)(&c - crew);
+                    p.ownAim = true;
+                    p.aim = Vector3Length(in.aim) > 0.1f ? Vector3Normalize(in.aim) : Vector3{0, 0, 1};
+                    s.pending.push_back(p);
+                }
+            }
+        }
+        // patching a hole
+        int h = c.overboard ? -1 : in.repair;
+        if (h >= 0 && (h >= MAX_LEAKS || !s.leaks[h].active || !s.alive || !reach(LeakStation(s.leaks[h].local)))) h = -1;
+        if (h != c.repair) c.repairT = 0.0f;
+        c.repair = (int8_t)h;
+        if (h >= 0) {
+            c.repairT += dt;
+            if (c.repairT >= tune::repairTime) {
+                Leak& l = s.leaks[h];
+                s.hp = fminf(s.maxHp, s.hp + l.dmg * tune::leakRestore);
+                GameEvent e{EventType::Repair};
+                e.a = s.id;
+                e.b = (uint8_t)(&c - crew);
+                e.pos = HullToWorld(s.pos, s.rot, l.local, C.scale);
+                e.value = l.dmg * tune::leakRestore;
+                events.push_back(e);
+                l = Leak{};
+                c.repair = -1;
+                c.repairT = 0.0f;
+                c.patches++;
+            }
+        }
+    }
+    for (Ship& s : ships) {
+        if (!s.active) continue;
+        for (auto& side : s.gunReload)
+            for (float& g : side) g = fmaxf(0.0f, g - dt);
+        if (s.crewCount <= 0) {
+            for (Leak& l : s.leaks) l.active = false;
+            continue;
+        }
+        int open = 0;
+        for (const Leak& l : s.leaks) open += l.active ? 1 : 0;
+        if (open > 0 && s.alive) Damage(s, open * tune::leakDrain * dt, -1);
+        // a bot captain with human hands aboard tells them where they're wanted
+        s.orderTimer -= dt;
+        if (s.isBot && s.leader < 0 && s.alive && s.orderTimer <= 0.0f) {
+            s.orderTimer = tune::orderEvery;
+            int order = -1;
+            if (open >= 2) order = ORDER_PATCH;
+            else {
+                float best = 520.0f;
+                for (const Ship& o : ships)
+                    if (o.active && o.alive && Enemies(s, o) && Vector3Distance(o.pos, s.pos) < best) {
+                        best = Vector3Distance(o.pos, s.pos);
+                        order = AimSide(s.rot, Vector3Subtract(o.pos, s.pos)) == 0 ? ORDER_PORT : ORDER_STARBOARD;
+                    }
+            }
+            if (order >= 0 && order != s.lastOrder) {
+                s.lastOrder = (int8_t)order;
+                GameEvent e{EventType::OrderGiven};
+                e.a = s.id;
+                e.b = (uint8_t)order;
+                e.pos = s.pos;
+                events.push_back(e);
+            }
+        }
+    }
+}
+
 // ---- rounds ----------------------------------------------------------------------
 void World::UpdateMatch(float dt) {
     matchClock -= dt;
@@ -1954,6 +2174,7 @@ void World::Step() {
     }
     if (skills) UpdateHooks(dt);
     if (ocean.Vortex()) UpdateMaelstrom(dt);
+    UpdateCrew(dt);
     Collisions();
     UpdateBalls(dt);
     UpdateCrates(dt);

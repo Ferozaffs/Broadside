@@ -26,5 +26,7 @@ private:
     NetServer net;
     World world;
     int peerShip[64];
+    int peerCrew[64];
+    void SendCrewInfo(int crewId, int toPeer);
     bool announced[MAX_SHIPS] = {};
 };

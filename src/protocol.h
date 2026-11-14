@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 13;
+constexpr uint16_t PROTOCOL_VERSION = 14;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -20,7 +20,14 @@ enum MsgType : uint8_t {
     MSG_EVENT = 7,        // S->C  game event (reliable)
     MSG_REJECT = 8,       // S->C  reason string
     MSG_SET_CLASS = 9,    // C->S  class to sail after the next sinking / round
+    MSG_CREW_INPUT = 10,  // C->S  crewman's input (unreliable)
+    MSG_CREW_INFO = 11,   // S->C  crewman id, name
+    MSG_CREW_LEFT = 12,   // S->C  crewman id
+    MSG_SET_ROLE = 13,    // C->S  role (captain / crew), or 2 = move to the next ship as crew
+    MSG_ROLE = 14,        // S->C  our new crewman id (255: captain), our ship
+    MSG_ORDER = 15,       // C->S  the captain's order to the crew (Order)
 };
+enum Role : uint8_t { ROLE_CAPTAIN = 0, ROLE_CREW = 1 };
 
 struct ByteWriter {
     std::vector<uint8_t> buf;
@@ -98,8 +105,34 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     return r.ok;
 }
 
+inline void WriteCrewInput(ByteWriter& w, const CrewInput& in) {
+    w.Put(MSG_CREW_INPUT);
+    w.Put(in.seq);
+    w.PutVec3(in.local);
+    w.Put(in.yaw);
+    Vector3 a = Vector3Normalize(in.aim);
+    w.Put((int16_t)(a.x * 32767)); w.Put((int16_t)(a.y * 32767)); w.Put((int16_t)(a.z * 32767));
+    w.Put(in.gun);
+    w.Put(in.fireSeq);
+    w.Put(in.repair);
+    w.Put((uint8_t)(in.overboard ? 1 : 0));
+}
+inline bool ReadCrewInput(ByteReader& r, CrewInput& in) {
+    in.seq = r.Get<uint32_t>();
+    in.local = r.GetVec3();
+    in.yaw = r.Get<float>();
+    Vector3 a;
+    a.x = r.Get<int16_t>() / 32767.0f; a.y = r.Get<int16_t>() / 32767.0f; a.z = r.Get<int16_t>() / 32767.0f;
+    in.aim = Vector3Length(a) > 0.1f ? Vector3Normalize(a) : Vector3{0, 0, 1};
+    in.gun = r.Get<int8_t>();
+    in.fireSeq = r.Get<uint8_t>();
+    in.repair = r.Get<int8_t>();
+    in.overboard = r.Get<uint8_t>() != 0;
+    return r.ok;
+}
+
 // ---- snapshot -------------------------------------------------------------------
-enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_BOT = 8 };
+enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_BOT = 8, SF_HELM = 16, SF_TRIM = 32 };  // (helm / sails: crew at the jobs)
 
 struct NetShip {
     uint8_t id = 0, flags = 0;
@@ -134,6 +167,19 @@ struct NetCrate {
     float x = 0, z = 0;
 };
 
+struct NetCrew {
+    uint8_t id = 0;
+    int8_t ship = -1, gun = -1, repair = -1;
+    Vector3 local{};  // hull space, or the world when overboard
+    float yaw = 0, repairT = 0, gunReload = 0;
+    bool overboard = false;
+    uint8_t hits = 0, kills = 0, patches = 0;
+};
+struct NetLeak {
+    uint8_t ship = 0, slot = 0;
+    Vector3 local{};
+};
+
 struct Snapshot {
     double time = 0;
     uint32_t tick = 0;
@@ -141,6 +187,8 @@ struct Snapshot {
     std::vector<NetBall> balls;
     std::vector<NetCrate> crates;
     std::vector<NetCrate> chests;  // pirate booty (type unused)
+    std::vector<NetCrew> crew;
+    std::vector<NetLeak> leaks;
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
     float matchClock = 0;
@@ -162,7 +210,8 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     for (auto& s : world.ships) {
         if (!s.active || s.stowed) continue;  // lost escorts waiting in the wings aren't in the world
         w.Put(s.id);
-        w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0) | (s.pirate ? SF_PIRATE : 0)));
+        w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0) | (s.pirate ? SF_PIRATE : 0) | (s.helmed ? SF_HELM : 0) |
+                        (s.trimmed ? SF_TRIM : 0)));
         w.Put(s.team);
         w.Put(s.leader);
         w.Put((uint8_t)Clamp(roundf(s.maxHp), 1.0f, 255.0f));  // whole points (cutter 55 .. ship of the line + treasure 180)
@@ -223,6 +272,48 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(c.id);
         w.Put(c.x);
         w.Put(c.z);
+    }
+    // crew mode: crewmen and the holes in their ships
+    uint8_t ncr = 0;
+    for (const Crewman& c : world.crew) ncr += c.active ? 1 : 0;
+    w.Put(ncr);
+    for (int i = 0; i < MAX_CREW; ++i) {
+        const Crewman& c = world.crew[i];
+        if (!c.active) continue;
+        w.Put((uint8_t)i);
+        w.Put(c.ship);
+        w.Put((uint8_t)(c.overboard ? 1 : 0));
+        const float q = c.overboard ? 10.0f : 100.0f;  // (in the sea it's a world position: coarser)
+        w.Put((int16_t)Clamp(c.local.x * q, -32000.f, 32000.f));
+        w.Put((int16_t)Clamp(c.local.y * q, -32000.f, 32000.f));
+        w.Put((int16_t)Clamp(c.local.z * q, -32000.f, 32000.f));
+        w.Put((uint8_t)std::min(c.hits, 255));
+        w.Put((uint8_t)std::min(c.kills, 255));
+        w.Put((uint8_t)std::min(c.patches, 255));
+        w.Put((int16_t)(remainderf(c.yaw, 2.0f * PI) * 5000.0f));
+        w.Put(c.gun);
+        w.Put(c.repair);
+        w.PutU8f(c.repairT / tune::repairTime);
+        float rl = 0.0f;
+        if (IsGunJob(c.gun) && c.ship >= 0) rl = world.ships[c.ship].gunReload[c.gun / MAX_GUNS][c.gun % MAX_GUNS];
+        w.PutU8f(rl / tune::reloadMax);
+    }
+    uint8_t nl = 0;
+    for (const Ship& s : world.ships)
+        if (s.active && s.crewCount > 0)
+            for (const Leak& l : s.leaks) nl += l.active ? 1 : 0;
+    w.Put(nl);
+    for (const Ship& s : world.ships) {
+        if (!s.active || s.crewCount <= 0) continue;
+        for (int k = 0; k < MAX_LEAKS; ++k) {
+            const Leak& l = s.leaks[k];
+            if (!l.active) continue;
+            w.Put(s.id);
+            w.Put((uint8_t)k);
+            w.Put((int16_t)Clamp(l.local.x * 100.0f, -32000.f, 32000.f));
+            w.Put((int16_t)Clamp(l.local.y * 100.0f, -32000.f, 32000.f));
+            w.Put((int16_t)Clamp(l.local.z * 100.0f, -32000.f, 32000.f));
+        }
     }
 }
 
@@ -295,6 +386,34 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         c.id = r.Get<uint8_t>();
         c.x = r.Get<float>();
         c.z = r.Get<float>();
+    }
+    uint8_t ncr = r.Get<uint8_t>();
+    s.crew.resize(r.ok ? ncr : 0);
+    for (auto& c : s.crew) {
+        c.id = r.Get<uint8_t>();
+        c.ship = r.Get<int8_t>();
+        c.overboard = r.Get<uint8_t>() != 0;
+        const float q = c.overboard ? 10.0f : 100.0f;
+        c.local.x = r.Get<int16_t>() / q;
+        c.local.y = r.Get<int16_t>() / q;
+        c.local.z = r.Get<int16_t>() / q;
+        c.hits = r.Get<uint8_t>();
+        c.kills = r.Get<uint8_t>();
+        c.patches = r.Get<uint8_t>();
+        c.yaw = r.Get<int16_t>() / 5000.0f;
+        c.gun = r.Get<int8_t>();
+        c.repair = r.Get<int8_t>();
+        c.repairT = r.GetU8f() * tune::repairTime;
+        c.gunReload = r.GetU8f() * tune::reloadMax;
+    }
+    uint8_t nl = r.Get<uint8_t>();
+    s.leaks.resize(r.ok ? nl : 0);
+    for (auto& l : s.leaks) {
+        l.ship = r.Get<uint8_t>();
+        l.slot = r.Get<uint8_t>();
+        l.local.x = r.Get<int16_t>() / 100.0f;
+        l.local.y = r.Get<int16_t>() / 100.0f;
+        l.local.z = r.Get<int16_t>() / 100.0f;
     }
     return r.ok;
 }

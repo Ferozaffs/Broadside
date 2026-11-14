@@ -13,6 +13,8 @@ constexpr int MAX_SHIPS = 32;  // captains plus their fleets
 constexpr float SIM_DT = 1.0f / 60.0f;
 constexpr int CANNONS_PER_SIDE = 4;  // the frigate (and the low-poly stand-in model)
 constexpr int MAX_GUNS = 6;          // per side, any class
+constexpr int MAX_CREW = 24;         // crew mode: human crewmen across all ships
+constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 
 // ---- ship classes ---------------------------------------------------------------
 // Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
@@ -112,6 +114,15 @@ constexpr float hookMinLen = 24.0f;        // m (hull lengths are added on top)
 constexpr float hookStiff = 2.6f;          // m/s^2 per metre of stretch
 constexpr float hookMaxAccel = 26.0f;
 constexpr float hookCooldown = 12.0f;
+// crew mode: players aboard someone else's ship, working guns and patching holes
+constexpr float crewReach = 3.2f;          // m: how close a crewman must stand to a gun or a hole
+constexpr float leakDrain = 0.35f;         // hp per second per open hole (only on ships with human crew)
+constexpr float leakRestore = 0.5f;        // share of a hit's damage a patched hole gives back
+constexpr float repairTime = 2.5f;         // s of work to patch one hole
+constexpr float crewWalk = 4.5f;           // m/s on deck
+constexpr float helmTurn = 1.15f;          // a crewman at the wheel: she answers the helm this much quicker...
+constexpr float trimSpeed = 1.06f;         // ...and one tending the sails gets this much more out of them
+constexpr float orderEvery = 8.0f;         // s between a bot captain's orders to a human crew
 constexpr float hookRockAccel = 30.0f;     // m/s^2 max pull of a line made fast to the rocks (all of it on the ship)...
 constexpr float hookRockSpeed = 22.0f;     // ...easing off as we close on the rock at this speed
 constexpr float rakeBonus = 0.25f;         // raking fire (a ball in at the bow or stern, down the length of the decks):
@@ -206,7 +217,55 @@ struct PendingShot {
     int index;
     float yaw = 0.0f, elev = 0.0f;  // spread for barrage shots (radians)
     bool recoil = true;
+    bool ownAim = false;            // crew mode: a crewman laid this gun himself...
+    Vector3 aim{};                  // ...this way
+    int8_t crew = -1;               // (and gets the credit)
 };
+
+// ---- crew mode ----------------------------------------------------------------
+// A player can sign on as crew instead of captain: a first-person sailor on someone's deck (a human or a bot
+// captain's). They work single guns (aiming them themselves) and patch shot holes. Positions are in the ship's
+// hull space (frigate units: HullToWorld with the class scale), so the deck carries them along.
+struct CrewInput {
+    uint32_t seq = 0;
+    Vector3 local{};        // where we stand (hull space, feet)
+    float yaw = 0.0f;       // look, relative to the ship's heading (for the figure others see)
+    Vector3 aim{0, 0, 1};   // world direction to lay our gun
+    int8_t gun = -1;        // the gun we want to work (side * MAX_GUNS + index), JOB_HELM / JOB_SAILS, -1 none
+    uint8_t fireSeq = 0;
+    int8_t repair = -1;     // the hole we're patching (held key), -1 none
+    bool overboard = false; // in the sea: `local` is then a world position (the client swims)
+};
+struct Crewman {
+    bool active = false;
+    std::string name;
+    int8_t ship = -1;       // the ship we're aboard
+    Vector3 local{};
+    float yaw = 0.0f;
+    int8_t gun = -1;        // gun we're working
+    int8_t repair = -1;     // hole we're patching
+    float repairT = 0.0f;
+    bool overboard = false;
+    int hits = 0, kills = 0, patches = 0;  // this crewman's own work (the scoreboard)
+    uint8_t lastFireSeq = 0;
+    uint32_t lastSeq = 0;
+    CrewInput input;
+};
+struct Leak {
+    bool active = false;
+    Vector3 local{};        // the hole, hull space
+    float dmg = 0.0f;       // what the hit cost (part comes back when it's patched)
+};
+// hull-space spot a crewman works gun `index` on `side` from (on deck at the rail above it), and the spot
+// on deck above a hole in the side
+Vector3 GunStation(int cls, int side, int index);
+Vector3 LeakStation(Vector3 leakLocal);
+// the other jobs: the wheel (aft), and the sheets and halyards by the mainmast
+constexpr int8_t JOB_HELM = 100, JOB_SAILS = 101;
+Vector3 JobStation(int job);
+inline bool IsGunJob(int g) { return g >= 0 && g < 2 * MAX_GUNS; }
+// captain's orders to the crew
+enum Order : uint8_t { ORDER_PORT = 0, ORDER_STARBOARD = 1, ORDER_PATCH = 2, ORDER_COUNT = 3 };
 
 struct Ship {
     bool active = false;
@@ -259,6 +318,14 @@ struct Ship {
     float hookMass = 0;
     uint32_t lastInputSeq = 0;
     PlayerInput input;
+    // crew mode
+    int crewCount = 0;                 // human crewmen aboard
+    uint16_t mannedMask = 0;           // guns worked by a crewman: bit side * 8 + index
+    float gunReload[2][MAX_GUNS] = {};
+    Leak leaks[MAX_LEAKS];
+    bool helmed = false, trimmed = false;  // a crewman at the wheel / tending the sails
+    float orderTimer = 0.0f;               // bot captains: next order to the crew
+    int8_t lastOrder = -1;
     std::vector<PendingShot> pending;
     // bot brain
     float botTimer = 0.0f;
@@ -274,6 +341,7 @@ struct Ball {
     float age = 0.0f;
     float waterTime = 0.0f;
     int skips = 0;
+    int8_t crew = -1;  // crew mode: the crewman who fired it
     Vector3 pos{}, vel{};
 };
 
@@ -290,6 +358,8 @@ enum class EventType : uint8_t {
     Award = 16,      // a = ship, b = award id, value = the stat
     MatchStart = 17, // b = round number
     Warning = 18,    // b = seconds left in the round (60 / 10)
+    Repair = 21,     // a = ship, b = crewman, value = hp the patch gave back
+    OrderGiven = 22, // a = ship, b = Order
 };
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
@@ -364,6 +434,12 @@ public:
     int ScoreLimit() const { return tune::scoreLimit[mode < 3 ? mode : 0]; }
     uint32_t tick = 0;
     Ship ships[MAX_SHIPS];
+    // crew mode
+    Crewman crew[MAX_CREW];
+    int AddCrew(const std::string& name);  // signs on aboard the ship that needs hands most; -1 if full
+    void MoveCrew(int id, int ship);       // to another ship (-1: the next captain's ship round from the current one)
+    void RemoveCrew(int id);
+    int PickCrewShip() const;
     std::vector<Ball> balls;
     std::vector<Rock> rocks;
     Crate crates[tune::crateCount];
@@ -375,6 +451,7 @@ private:
     void FireCannon(Ship& s, const PendingShot& shot, bool authoritative);
     void UpdateAirTime(Ship& s, float dt, bool authoritative);
     void UpdateMaelstrom(float dt);
+    void UpdateCrew(float dt);
     void Collisions();
     void RockCollide(Ship& s, bool authoritative);
     void UpdateCrates(float dt);

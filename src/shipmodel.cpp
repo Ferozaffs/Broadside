@@ -1,4 +1,5 @@
 #include "shipmodel.h"
+#include "pak_key.h"
 #include "render.h"
 #include "rlgl.h"
 #include "sim.h"
@@ -320,7 +321,49 @@ unsigned char* PakFileLoader(const char* fileName, int* dataSize) {
     return out;
 }
 
+// ChaCha20 (RFC 8439) keystream XORed into buf, block counter from 0
+static void ChaCha20Xor(const unsigned char key[32], const unsigned char nonce[12], unsigned char* buf, size_t n) {
+    auto rd = [](const unsigned char* p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; };
+    uint32_t s[16] = {0x61707865u, 0x3320646Eu, 0x79622D32u, 0x6B206574u};
+    for (int i = 0; i < 8; ++i) s[4 + i] = rd(key + 4 * i);
+    s[13] = rd(nonce); s[14] = rd(nonce + 4); s[15] = rd(nonce + 8);
+    auto rotl = [](uint32_t v, int c) { return (v << c) | (v >> (32 - c)); };
+    for (size_t off = 0, blk = 0; off < n; off += 64, ++blk) {
+        s[12] = (uint32_t)blk;
+        uint32_t x[16];
+        memcpy(x, s, sizeof x);
+        auto qr = [&](int a, int b, int c, int d) {
+            x[a] += x[b]; x[d] ^= x[a]; x[d] = rotl(x[d], 16);
+            x[c] += x[d]; x[b] ^= x[c]; x[b] = rotl(x[b], 12);
+            x[a] += x[b]; x[d] ^= x[a]; x[d] = rotl(x[d], 8);
+            x[c] += x[d]; x[b] ^= x[c]; x[b] = rotl(x[b], 7);
+        };
+        for (int r = 0; r < 10; ++r) {
+            qr(0, 4, 8, 12); qr(1, 5, 9, 13); qr(2, 6, 10, 14); qr(3, 7, 11, 15);
+            qr(0, 5, 10, 15); qr(1, 6, 11, 12); qr(2, 7, 8, 13); qr(3, 4, 9, 14);
+        }
+        unsigned char ks[64];
+        for (int i = 0; i < 16; ++i) {
+            uint32_t v = x[i] + s[i];
+            ks[4 * i] = (unsigned char)v; ks[4 * i + 1] = (unsigned char)(v >> 8);
+            ks[4 * i + 2] = (unsigned char)(v >> 16); ks[4 * i + 3] = (unsigned char)(v >> 24);
+        }
+        size_t m = std::min<size_t>(64, n - off);
+        for (size_t i = 0; i < m; ++i) buf[off + i] ^= ks[i];
+    }
+}
+
 bool DecodeShipPak(const unsigned char* d, int size, std::vector<unsigned char>& out) {
+    if (d && size > 20 && memcmp(d, "BSPAK2", 6) == 0) {  // ChaCha20 under the key the build was given (pak_key.h)
+#if BS_PAK_KEY
+        out.assign(d + 20, d + size);
+        ChaCha20Xor(kPakKey, d + 8, out.data(), out.size());
+        return memcmp(out.data(), "glTF", 4) == 0;
+#else
+        TraceLog(LOG_WARNING, "Model pack: this build has no key for encrypted packs (assets/pak.key)");
+        return false;
+#endif
+    }
     if (!d || size < 16 || memcmp(d, "BSPAK1", 6) != 0) return false;
     uint32_t x;
     memcpy(&x, d + 8, 4);
@@ -333,6 +376,10 @@ bool DecodeShipPak(const unsigned char* d, int size, std::vector<unsigned char>&
     return memcmp(out.data(), "glTF", 4) == 0;
 }
 
+struct PakScope;
+}  // namespace
+bool DecodeModelPak(const unsigned char* data, int size, std::vector<unsigned char>& out) { return DecodeShipPak(data, size, out); }
+namespace {
 struct PakScope {
     bool on = false;
     ~PakScope() {
@@ -350,6 +397,7 @@ struct PakScope {
 //   flip=1         model faces backwards: turn it 180 degrees
 //   yaw=90         extra rotation about up, degrees
 //   keel=-3.4      y (hull space) where the lowest point of the model goes
+//   yscale=1.35    extra vertical stretch (a model whose hull is shallower than the physics hull)
 //   sails=sail,cloth,canvas   material/mesh name fragments that mark sail cloth
 bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     std::string path;
@@ -380,7 +428,7 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
         pak.on = true;
     }
 
-    float length = 41.0f, keel = -3.6f, yaw = 0.0f;
+    float length = 41.0f, keel = -3.6f, yaw = 0.0f, yscale = 1.0f;
     bool flip = false, raw = false;
     std::vector<std::string> sailKeys = {"sail", "cloth", "canvas", "fabric"};
     std::string cfgPath = std::string(dir) + "/ship.cfg";
@@ -395,6 +443,7 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
                 if (k == "length") length = (float)atof(v.c_str());
                 else if (k == "keel") keel = (float)atof(v.c_str());
                 else if (k == "yaw") yaw = (float)atof(v.c_str());
+                else if (k == "yscale") yscale = (float)atof(v.c_str());  // stretch a shallow hull to the physics hull's depth
                 else if (k == "flip") flip = atoi(v.c_str()) != 0;
                 else if (k == "raw") raw = atoi(v.c_str()) != 0;  // already in hull space (tools/blend_to_game_ship.py)
                 else if (k == "sails") {
@@ -430,10 +479,10 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     float s = length / fmaxf(size.x, size.z);
     Matrix m = MatrixTranslate(-center.x, -bb.min.y, -center.z);
     m = MatrixMultiply(m, rot);
-    m = MatrixMultiply(m, MatrixScale(s, s, s));
+    m = MatrixMultiply(m, MatrixScale(s, s * yscale, s));
     m = MatrixMultiply(m, MatrixTranslate(0, keel, 0));
     extFix = m;
-    extTop = size.y * s + keel;
+    extTop = size.y * s * yscale + keel;
     if (raw) {
         extFix = MatrixIdentity();
         extTop = bb.max.y;
@@ -486,9 +535,130 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     TraceLog(LOG_WARNING, "Ship model: %s  meshes %d  materials %d  triangles %ld  size %.1f x %.1f x %.1f -> scale %.3f", path.c_str(),
              ext.meshCount, ext.materialCount, tris, size.x, size.y, size.z, s);
     hasExt = true;
+    {
+        std::vector<bool> skip(ext.meshCount);
+        for (int i = 0; i < ext.meshCount; ++i) skip[i] = extIsSail[i] || extIsRope[i];
+        BuildDeckMap(ext, extFix, skip);
+    }
     hasHi = LoadLod(dir, "ship_hi", lit, sailKeys, extHi, hiSail, hiRope);
     hasLo = LoadLod(dir, "ship_lo", lit, sailKeys, extLo, loSail, loRope);
     return true;
+}
+
+// Crew mode: rasterise the model into a walkable deck map. Upward faces below the tops give the floor (the highest
+// one per cell); steep faces give walls, kept as the height range they span over each cell they cross.
+void ShipModel::BuildDeckMap(const Model& m, const Matrix& fix, const std::vector<bool>& skip) {
+    deckH.assign(kNX * kNZ, -99.0f);
+    wallLo.assign(kNX * kNZ, 1e9f);
+    wallHi.assign(kNX * kNZ, -1e9f);
+    const float cap = 6.8f;  // above this it's rigging, tops and yards, not deck
+    auto cell = [&](float x, float z, int& i, int& j) {
+        i = (int)floorf((x - kX0) / kDX);
+        j = (int)floorf((z - kZ0) / kDX);
+        return i >= 0 && j >= 0 && i < kNX && j < kNZ;
+    };
+    for (int mi = 0; mi < m.meshCount; ++mi) {
+        if (mi < (int)skip.size() && skip[mi]) continue;
+        const Mesh& me = m.meshes[mi];
+        if (!me.vertices) continue;
+        for (int t = 0; t < me.triangleCount; ++t) {
+            Vector3 P[3];
+            for (int k = 0; k < 3; ++k) {
+                int vi = me.indices ? me.indices[t * 3 + k] : t * 3 + k;
+                P[k] = Vector3Transform({me.vertices[vi * 3], me.vertices[vi * 3 + 1], me.vertices[vi * 3 + 2]}, fix);
+            }
+            Vector3 n = Vector3CrossProduct(Vector3Subtract(P[1], P[0]), Vector3Subtract(P[2], P[0]));
+            float len = Vector3Length(n);
+            if (len < 1e-8f) continue;
+            float up = n.y / len;
+            float ylo = fminf(P[0].y, fminf(P[1].y, P[2].y)), yhi = fmaxf(P[0].y, fmaxf(P[1].y, P[2].y));
+            if (up > 0.7f && yhi < cap) {  // floor: fill the cells under it with its height
+                float x0 = fminf(P[0].x, fminf(P[1].x, P[2].x)), x1 = fmaxf(P[0].x, fmaxf(P[1].x, P[2].x));
+                float z0 = fminf(P[0].z, fminf(P[1].z, P[2].z)), z1 = fmaxf(P[0].z, fmaxf(P[1].z, P[2].z));
+                int i0, j0, i1, j1;
+                cell(x0, z0, i0, j0);
+                cell(x1, z1, i1, j1);
+                i0 = std::max(i0, 0); j0 = std::max(j0, 0); i1 = std::min(i1, kNX - 1); j1 = std::min(j1, kNZ - 1);
+                float ax = P[1].x - P[0].x, az = P[1].z - P[0].z, bx = P[2].x - P[0].x, bz = P[2].z - P[0].z;
+                float den = ax * bz - bx * az;
+                if (fabsf(den) < 1e-9f) continue;
+                for (int j = j0; j <= j1; ++j)
+                    for (int i = i0; i <= i1; ++i) {
+                        float px = kX0 + (i + 0.5f) * kDX - P[0].x, pz = kZ0 + (j + 0.5f) * kDX - P[0].z;
+                        float u = (px * bz - bx * pz) / den, v = (ax * pz - px * az) / den;
+                        if (u < -1e-3f || v < -1e-3f || u + v > 1.001f) continue;
+                        float y = P[0].y + u * (P[1].y - P[0].y) + v * (P[2].y - P[0].y);
+                        float& h = deckH[j * kNX + i];
+                        if (y > h) h = y;
+                    }
+            } else if (fabsf(up) < 0.35f && ylo < cap) {  // wall: mark the cells along its footprint
+                for (int e = 0; e < 3; ++e) {
+                    Vector3 a = P[e], b = P[(e + 1) % 3];
+                    float L = Vector2Distance({a.x, a.z}, {b.x, b.z});
+                    int steps = (int)(L / (kDX * 0.5f)) + 1;
+                    for (int k = 0; k <= steps; ++k) {
+                        Vector3 q = Vector3Lerp(a, b, (float)k / steps);
+                        int i, j;
+                        if (!cell(q.x, q.z, i, j)) continue;
+                        wallLo[j * kNX + i] = fminf(wallLo[j * kNX + i], ylo);
+                        wallHi[j * kNX + i] = fmaxf(wallHi[j * kNX + i], yhi);
+                    }
+                }
+            }
+        }
+    }
+    int n = 0;
+    for (float h : deckH) n += h > -50.0f;
+    // the main deck: the most common floor height amidships (in 0.1 steps), then how far it runs fore and aft
+    {
+        std::vector<int> hist(120, 0);
+        for (int j = 0; j < kNZ; ++j) {
+            float z = kZ0 + (j + 0.5f) * kDX;
+            if (fabsf(z) > 6.0f) continue;
+            for (int i = 0; i < kNX; ++i) {
+                float h = deckH[j * kNX + i];
+                if (h > 0.5f && h < 12.0f) hist[(int)(h * 10.0f)]++;
+            }
+        }
+        int best = 0;
+        for (int k = 1; k < (int)hist.size(); ++k)
+            if (hist[k] > hist[best]) best = k;
+        if (hist[best] > 20) deckLevel = best * 0.1f + 0.05f;
+        deckAft = 1e9f;
+        deckFore = -1e9f;
+        for (int j = 0; j < kNZ; ++j)
+            for (int i = kNX / 2 - 3; i < kNX / 2 + 3; ++i)  // (along the centre line)
+                if (Walkable(deckH[j * kNX + i])) {
+                    float z = kZ0 + (j + 0.5f) * kDX;
+                    deckAft = fminf(deckAft, z);
+                    deckFore = fmaxf(deckFore, z);
+                }
+        if (deckAft > deckFore) { deckAft = -15.0f; deckFore = 15.0f; }
+    }
+    TraceLog(LOG_WARNING, "Ship model: deck map %d walkable cells, main deck at %.2f, deck from %.1f to %.1f", n, deckLevel, deckAft, deckFore);
+    if (getenv("BS_DECKDUMP"))  // (testing: the floor heights, a row per metre fore and aft)
+        for (int j = 0; j < kNZ; j += 4) {
+            printf("z %6.1f ", kZ0 + (j + 0.5f) * kDX);
+            for (int i = 4; i < kNX - 4; i += 2) printf(deckH[j * kNX + i] < -50 ? "  .  " : "%5.1f", deckH[j * kNX + i]);
+            printf("\n");
+        }
+}
+
+float ShipModel::DeckAt(float x, float z) const {
+    if (deckH.empty()) {  // procedural ship: the hull's own deck
+        if (fabsf(z) > hull::halfLength - 0.5f || fabsf(x) > hull::HalfWidth(z) - 0.4f) return -99.0f;
+        return hull::DeckHeight(z) - 0.25f;
+    }
+    int i = (int)floorf((x - kX0) / kDX), j = (int)floorf((z - kZ0) / kDX);
+    if (i < 0 || j < 0 || i >= kNX || j >= kNZ) return -99.0f;
+    return deckH[j * kNX + i];
+}
+
+bool ShipModel::WallAt(float x, float z, float y) const {
+    if (wallLo.empty()) return false;
+    int i = (int)floorf((x - kX0) / kDX), j = (int)floorf((z - kZ0) / kDX);
+    if (i < 0 || j < 0 || i >= kNX || j >= kNZ) return true;
+    return wallHi[j * kNX + i] > y + 0.6f && wallLo[j * kNX + i] < y + 1.6f;
 }
 
 // An extra level of detail: same hull space as the standard model (both come out of

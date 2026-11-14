@@ -39,6 +39,80 @@ int RunSimTest() {
         }
         return 0;
     }
+    if (getenv("BS_CREWTEST")) {  // crew mode: a crewman aboard a bot captain's frigate, against another bot
+        World g;
+        g.rounds = false;
+        g.Init(3);
+        int a = g.AddShip("Captain bot", true, SC_FRIGATE), b = g.AddShip("Enemy bot", true, SC_FRIGATE);
+        g.AddShip("Enemy 2", true, SC_FRIGATE);
+        g.AddShip("Enemy 3", true, SC_LINE);
+        int c = g.AddCrew("Crewman");
+        printf("crew: crewman %d aboard ship %d (wanted %d), crew counts %d / %d\n", c, g.crew[c].ship, a, g.ships[a].crewCount, g.ships[b].crewCount);
+        int hitsTaken = 0, crewShots = 0, crewHits = 0, captainShots = 0, holes = 0, repairs = 0, prevOpen = 0;
+        float restored = 0.0f, drained = 0.0f;
+        uint8_t fire = 0;
+        for (int i = 0; i < 60 * 180; ++i) {
+            Ship& A = g.ships[a];
+            Crewman& cm = g.crew[c];
+            CrewInput& in = cm.input;
+            cm.lastSeq = in.seq = (uint32_t)i + 1;  // (as if it came from a client)
+            int open = -1;
+            for (int k = 0; k < MAX_LEAKS; ++k) if (A.leaks[k].active) { open = k; break; }
+            if (open >= 0) {  // patch the first hole
+                in.gun = -1;
+                in.local = LeakStation(A.leaks[open].local);
+                in.repair = (int8_t)open;
+            } else {  // work the gun facing the enemy
+                in.repair = -1;
+                const Ship& B = g.ships[b];
+                int side = AimSide(A.rot, Vector3Subtract(B.pos, A.pos));
+                in.gun = (int8_t)(side * MAX_GUNS + 1);
+                in.local = GunStation(A.cls, side, 1);
+                Vector3 d = Vector3Subtract(B.pos, A.pos);
+                float range = sqrtf(d.x * d.x + d.z * d.z);
+                float elev = 0.5f * asinf(Clamp(tune::gravity * range / (95.0f * 95.0f), -1.0f, 1.0f));
+                in.aim = AimForElevation({d.x, d.z}, elev);
+                if (i % 20 == 0 && range < 450.0f) in.fireSeq = ++fire;
+            }
+            float hp0 = A.hp;
+            float r0[2] = {A.gunReload[0][1], A.gunReload[1][1]};
+            g.Step();
+            if (A.gunReload[0][1] > r0[0] + 0.5f || A.gunReload[1][1] > r0[1] + 0.5f) crewShots++;
+            int nowOpen = 0;
+            for (const Leak& l : A.leaks) nowOpen += l.active ? 1 : 0;
+            if (nowOpen > prevOpen) holes += nowOpen - prevOpen;
+            prevOpen = nowOpen;
+            for (const GameEvent& e : g.events) {
+                if (e.type == EventType::Fire && e.a == a) captainShots++;
+                if (e.type == EventType::Hit && e.a == a) crewHits++;
+                if (e.type == EventType::Hit && e.b == a) hitsTaken++;
+                if (e.type == EventType::Repair && e.a == a) { repairs++; restored += e.value; }
+            }
+            if (A.alive && A.hp < hp0 && nowOpen > 0) drained += 0.0f;
+            g.events.clear();
+        }
+        printf("crew: 3 min: guns fired from our ship %d (%d by the crewman), our hits %d, hits taken %d, holes %d, patched %d (+%.0f hp), "
+               "ship hp %.0f/%.0f, kills %d deaths %d\n", captainShots, crewShots, crewHits, hitsTaken, holes, repairs, restored,
+               g.ships[a].hp, g.ships[a].maxHp, g.ships[a].kills, g.ships[a].deaths);
+        {  // the helm and the sails
+            Crewman& cm = g.crew[c];
+            int orders = 0;
+            for (int job : {(int)JOB_HELM, (int)JOB_SAILS}) {
+                cm.input.gun = (int8_t)job;
+                cm.input.local = JobStation(job);
+                cm.input.repair = -1;
+                for (int i = 0; i < 60; ++i) {
+                    cm.lastSeq = cm.input.seq = 100000u + (uint32_t)i;
+                    g.Step();
+                    for (const GameEvent& e : g.events) orders += e.type == EventType::OrderGiven;
+                    g.events.clear();
+                }
+                printf("crew: at the %s: helmed %d, sails tended %d\n", job == JOB_HELM ? "helm" : "sails", (int)g.ships[a].helmed, (int)g.ships[a].trimmed);
+            }
+            printf("crew: bot captain's orders in the last 2 s: %d\n", orders);
+        }
+        return 0;
+    }
     if (getenv("BS_MAELTEST")) {  // the maelstrom: hulls drifting with sails furled, and sailing straight out, from a few radii
         for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
             World g;

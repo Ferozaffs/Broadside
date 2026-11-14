@@ -40,7 +40,18 @@ Copyright (c) 2002-2024 Lee Salzman. https://github.com/lsalzman/enet
 
 Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow). Licence text: `data/fonts/OFL.txt`.
 
-## Ship model
+## Ship and character models
 
-"Age of sail Blender ship" by NelloF, used under the Fab Standard License. Not included in this repository;
-release builds include it only in scrambled form as part of the game.
+None of these are in this repository. Release builds carry them only inside the game, encrypted (ChaCha20, with a
+key that is not published; see tools/pack_ship.py), as their licences require.
+
+- **Frigate and cutter**: "Age of sail Blender ship" by NelloF, used under the Fab Standard License.
+- **Ship of the line**: the "cgt_frigate_001" frigate from CGTrader (free model), used under the CGTrader Royalty
+  Free License, which allows it in a game as long as it is protected from extraction. Converted for the game
+  (reduced, textures baked to albedo, stretched to fit the hull).
+- **Sailors**: "Pirate" by Bugrimov Maksim, used under the Fab Standard License (exported from Unreal with
+  tools/ue_export_pack.py, reduced, textures baked to albedo). Only the pirate's own meshes and textures are used;
+  the Unreal sample mannequins and animations that come with the pack are not.
+- **Sailor animations**: Breathing Idle, Running and Working On Device from Adobe Mixamo (https://www.mixamo.com),
+  used royalty free under Adobe's terms for Mixamo content, retargeted onto the pirate
+  (tools/ue4char_to_game_crew.py).
