@@ -111,8 +111,9 @@ constexpr float hookReel = 10.0f;          // m/s the line is reeled in
 constexpr float hookMinLen = 24.0f;        // m (hull lengths are added on top)
 constexpr float hookStiff = 2.6f;          // m/s^2 per metre of stretch
 constexpr float hookMaxAccel = 26.0f;
-constexpr float hookBreak = 230.0f;        // m: the line parts
 constexpr float hookCooldown = 12.0f;
+constexpr float hookRockAccel = 30.0f;     // m/s^2 max pull of a line made fast to the rocks (all of it on the ship)...
+constexpr float hookRockSpeed = 22.0f;     // ...easing off as we close on the rock at this speed
 constexpr float rakeBonus = 0.25f;         // raking fire (a ball in at the bow or stern, down the length of the decks):
                                            // +0 on a cutter's short deck .. +25% down a ship of the line's
 constexpr float rakeCos = 0.82f;           // how close to the keel line it must travel (~35 deg)
@@ -129,6 +130,7 @@ constexpr float shoreCalmDist = 260.0f;    // m from land over which the sea bui
 constexpr float coveMinDist = 950.0f;      // the treasure always surfaces at least this far from the harbour it must reach
 constexpr float bankTime = 10.0f;          // s the carrier must hold position in the cove to unload
 constexpr float escortCatchUp = 0.8f;      // max extra speed (x top speed) for an escort far off station
+constexpr float vortexHold = 1.15f;        // maelstrom: pull in, as a share of what keeps a hull circling with the current
 }  // namespace tune
 
 // ---- hull shape (hull space: +z bow, +y up, +x port, origin at waterline amidships) ----
@@ -147,6 +149,8 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 
 // ---- game modes and harbours -----------------------------------------------------
 enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_COUNT = 3 };
+// arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h)
+enum Arena : uint8_t { ARENA_ISLES = 0, ARENA_MAELSTROM = 1, ARENA_COUNT = 2 };
 struct Harbour {
     float x, z;  // where ships tie up (the pier runs from here to the island behind it)
     float ang;   // bearing from the arena centre
@@ -174,9 +178,12 @@ struct Rock {
     uint32_t seed;
     bool stack;      // tall narrow sea stack
 };
-std::vector<Rock> MakeRocks(uint32_t seed);
+std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena = ARENA_ISLES);
+// can a grappling hook bite at p (on or just under a rock surface, above the seabed)?
+bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
+constexpr uint8_t HOOK_ROCK = 64;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
 // Wave-height multipliers for OceanCPU::SetDamp: full sea in open water, calm in the lee of the land
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks);
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false);
 float RockCoast(const Rock& k, float ang);       // coastline radius at a bearing from the centre
 float RockHeight(const Rock& k, float x, float z);  // surface height (below 0 = seabed slope)
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z);  // max over all rocks (-1e9 if none near)
@@ -188,7 +195,8 @@ struct PlayerInput {
     uint8_t fireSeq = 0;
     uint8_t dashSeq = 0;      // skills: each new value is one press
     uint8_t hookSeq = 0;
-    uint8_t hookTarget = 255; // the ship the hook is fired at (client picks it from the reticle)
+    uint8_t hookTarget = 255; // the ship the hook is fired at (client picks it from the reticle), or HOOK_ROCK...
+    Vector3 hookPoint{};      // ...and then the spot on the rock
     uint32_t seq = 0;  // client input sequence number (acked back in snapshots for prediction)
 };
 
@@ -245,7 +253,8 @@ struct Ship {
     // skills
     uint8_t lastDashSeq = 0, lastHookSeq = 0;
     float dashTimer = 0, dashCd = 0, hookCd = 0, hookTimer = 0, hookRest = 0;
-    int8_t hooked = -1;              // the ship our line is fast to
+    int8_t hooked = -1;              // the ship our line is fast to (HOOK_ROCK: the rocks, at hookAnchor)
+    Vector3 hookAnchor{};
     Vector3 hookPos{}, hookVel{};    // prediction only: where that ship is (the client fills it in)
     float hookMass = 0;
     uint32_t lastInputSeq = 0;
@@ -313,7 +322,8 @@ bool StepBall(Ball& b, const OceanCPU& ocean, float dt, bool* splashed = nullptr
 
 class World {
 public:
-    void Init(uint32_t seed, uint8_t weather = 0, uint8_t timeOfDay = 0, uint8_t mode = MODE_FFA, bool fleets = false);
+    void Init(uint32_t seed, uint8_t weather = 0, uint8_t timeOfDay = 0, uint8_t mode = MODE_FFA, bool fleets = false,
+              uint8_t arena = ARENA_ISLES);
     void Step();  // one SIM_DT tick
     int AddShip(const std::string& name, bool bot, int cls = -1);  // cls -1: bots pick, players sail a frigate
     void RemoveShip(int id);
@@ -333,6 +343,7 @@ public:
     uint8_t weather = 0, timeOfDay = 0;  // chosen by the host, synced in MSG_WELCOME
     uint8_t mode = MODE_FFA;
     bool fleets = false;
+    uint8_t arena = ARENA_ISLES;
     std::vector<Harbour> harbours;
     Crate chests[tune::chestSlots];  // pirate booty
     uint8_t cove = 0;                // pirate: the harbour the treasure must be delivered to (changes with every treasure)
@@ -363,6 +374,7 @@ private:
     void ShipControls(Ship& s, float dt, bool authoritative);
     void FireCannon(Ship& s, const PendingShot& shot, bool authoritative);
     void UpdateAirTime(Ship& s, float dt, bool authoritative);
+    void UpdateMaelstrom(float dt);
     void Collisions();
     void RockCollide(Ship& s, bool authoritative);
     void UpdateCrates(float dt);

@@ -12,7 +12,7 @@ class Scenery {
 public:
     void Init(Shader lit);
     // (Re)build the island meshes for a rock layout (call when the seed changes)
-    void Build(const std::vector<Rock>& rocks);
+    void Build(const std::vector<Rock>& rocks, bool maelstrom = false);  // (the waterline sits lower in a maelstrom)
     void DrawIslands(Renderer& r, const RenderView& v, bool cull = true);
     // pos = centre of the crate, rot = how the swell tilts it
     void DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, float glow);  // type PU_COUNT = booty chest

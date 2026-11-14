@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 12;
+constexpr uint16_t PROTOCOL_VERSION = 13;
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -81,6 +81,7 @@ inline void WriteInput(ByteWriter& w, const PlayerInput& in) {
     w.Put(in.dashSeq);
     w.Put(in.hookSeq);
     w.Put(in.hookTarget);
+    w.PutVec3(in.hookPoint);
 }
 inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     in.seq = r.Get<uint32_t>();
@@ -93,6 +94,7 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     in.dashSeq = r.Get<uint8_t>();
     in.hookSeq = r.Get<uint8_t>();
     in.hookTarget = r.Get<uint8_t>();
+    in.hookPoint = r.GetVec3();
     return r.ok;
 }
 
@@ -105,6 +107,7 @@ struct NetShip {
     float reload[3] = {0, 0, 0};
     uint8_t cls = SC_FRIGATE;
     int8_t hooked = -1;
+    Vector3 hookAnchor{};  // when hooked == HOOK_ROCK
     float dashCd = 0, hookCd = 0, hookTimer = 0;
     float deadTimer = 0;
     float buoyMul = 1;
@@ -175,6 +178,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(s.cls);
         for (int k = 0; k < 3; ++k) w.PutU8f(s.reload[k] / tune::reloadMax);
         w.Put(s.hooked);
+        if (s.hooked == (int8_t)HOOK_ROCK) w.PutVec3(s.hookAnchor);
         w.PutU8f(s.dashCd / tune::dashCooldown);
         w.PutU8f(s.hookCd / tune::hookCooldown);
         w.PutU8f(s.hookTimer / tune::hookTime);
@@ -251,6 +255,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.cls = r.Get<uint8_t>();
         for (int k = 0; k < 3; ++k) sh.reload[k] = r.GetU8f() * tune::reloadMax;
         sh.hooked = r.Get<int8_t>();
+        if (sh.hooked == (int8_t)HOOK_ROCK) sh.hookAnchor = r.GetVec3();
         sh.dashCd = r.GetU8f() * tune::dashCooldown;
         sh.hookCd = r.GetU8f() * tune::hookCooldown;
         sh.hookTimer = r.GetU8f() * tune::hookTime;

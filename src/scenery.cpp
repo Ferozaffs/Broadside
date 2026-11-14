@@ -1,4 +1,5 @@
 #include "scenery.h"
+#include "maelstrom.h"
 #include "render.h"
 #include "rlgl.h"
 #include <cmath>
@@ -163,7 +164,7 @@ void Scenery::DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, floa
 }
 
 // ---- islands -----------------------------------------------------------------------
-static Mesh BuildIsland(const Rock& k) {
+static Mesh BuildIsland(const Rock& k, bool vortex) {
     static const float Uisle[] = {0.0f, 0.12f, 0.25f, 0.37f, 0.48f, 0.58f, 0.67f, 0.74f, 0.8f, 0.85f, 0.89f,
                                   0.925f, 0.952f, 0.972f, 0.987f, 1.0f, 1.015f, 1.05f, 1.12f, 1.25f, 1.45f};
     static const float Ustack[] = {0.0f, 0.3f, 0.55f, 0.72f, 0.84f, 0.92f, 0.97f, 1.0f, 1.08f, 1.3f, 1.8f, 2.6f};
@@ -232,8 +233,9 @@ static Mesh BuildIsland(const Rock& k) {
         float strata = 0.5f + 0.5f * sinf(p.y * 0.9f + v * 5.0f);
         Color rock = Mix(Mix(Color{96, 88, 80, 255}, Color{158, 144, 122, 255}, v), Color{78, 72, 66, 255}, strata * 0.5f);
         Color c = rock;
-        if (p.y < -1.2f) c = Mix(Color{58, 66, 52, 255}, Color{82, 84, 66, 255}, v);           // weedy seabed rock
-        else if (p.y < 1.4f) c = Mix(Color{46, 44, 40, 255}, Color{60, 62, 46, 255}, v);       // wet, algae
+        float wl = vortex ? maelstrom::Height(sqrtf(p.x * p.x + p.z * p.z)) : 0.0f;  // the local waterline
+        if (p.y < wl - 1.2f) c = Mix(Color{58, 66, 52, 255}, Color{82, 84, 66, 255}, v);           // weedy seabed rock
+        else if (p.y < wl + 1.4f) c = Mix(Color{46, 44, 40, 255}, Color{60, 62, 46, 255}, v);       // wet, algae
         else {
             float v2 = Fbm(p.x * 0.03f + 11.0f, p.y * 0.05f, p.z * 0.03f + so);
             float flat = Clamp((ny - 0.74f) / 0.14f, 0.0f, 1.0f) * Clamp((v2 - 0.32f) / 0.2f, 0.0f, 1.0f);  // grass on the flats, bare outcrops between
@@ -322,12 +324,12 @@ static Mesh BuildIsland(const Rock& k) {
     return m;
 }
 
-void Scenery::Build(const std::vector<Rock>& rocks) {
+void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
     for (Island& is : islands) UnloadMesh(is.mesh);
     islands.clear();
     for (const Rock& k : rocks) {
         Island is;
-        is.mesh = BuildIsland(k);
+        is.mesh = BuildIsland(k, maelstrom);
         is.centre = {k.x, k.h * 0.4f, k.z};
         is.radius = k.r * 1.5f + k.h;
         islands.push_back(is);

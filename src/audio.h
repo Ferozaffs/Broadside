@@ -28,6 +28,7 @@ enum Id {
 
 struct Ambience {  // targets for the live ambience, 0..1 (smoothed on the audio thread)
     float sea = 0.6f, wind = 0.2f, rush = 0.0f, rain = 0.0f, underwater = 0.0f;
+    float roar = 0.0f;  // a maelstrom close by
 };
 
 bool Init();      // needs the audio device; false if there is none (the game runs silent)

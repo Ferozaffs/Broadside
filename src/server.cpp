@@ -7,7 +7,7 @@
 static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue"};
 
 bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets, uint8_t allowedCls,
-                       bool deckOnly, bool skills) {
+                       bool deckOnly, bool skills, int arena) {
     Stop();
     if (!NetInit()) return false;
     if (!net.Start(port, 32)) {
@@ -16,7 +16,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     }
     for (int& p : peerShip) p = -1;
     if (const char* e = getenv("BS_ROUNDLEN")) world.roundLength = (float)atof(e);  // testing: short rounds
-    world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets);
+    world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets, (uint8_t)arena);
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
     world.deckOnly = deckOnly;
     world.skills = skills;
@@ -98,6 +98,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put(world.allowedCls);
         w.Put((uint8_t)(world.deckOnly ? 1 : 0));
         w.Put((uint8_t)(world.skills ? 1 : 0));
+        w.Put(world.arena);
         net.Send(peer, w.buf.data(), w.buf.size(), true);
         for (int i = 0; i < MAX_SHIPS; ++i)
             if (world.ships[i].active && announced[i] && i != id) SendPlayerInfo(i, (int)peer);

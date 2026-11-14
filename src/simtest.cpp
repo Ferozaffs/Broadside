@@ -1,5 +1,6 @@
 // Headless physics test harness: `broadside --simtest`
 #include "sim.h"
+#include "maelstrom.h"
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
@@ -26,6 +27,7 @@ int RunSimTest() {
             for (int i = 0; i < 60 * 9; ++i) {
                 if (i == 30) { g.ships[a].input.hookTarget = (uint8_t)b; g.ships[a].input.hookSeq++; }
                 if (i == 60 * 4) { g.ships[a].input.dashSeq++; }
+                if (i == 60 * 5) { g.ships[b].input.dashSeq++; }  // the hooked ship dashing must not snap the line
                 g.Step();
                 g.events.clear();
                 if (i % 60 == 0)
@@ -34,6 +36,183 @@ int RunSimTest() {
                            g.ships[a].hookRest, Vector2Distance({a0.x, a0.z}, {g.ships[a].pos.x, g.ships[a].pos.z}), ClassOf(tc).name,
                            Vector2Distance({b0.x, b0.z}, {g.ships[b].pos.x, g.ships[b].pos.z}));
             }
+        }
+        return 0;
+    }
+    if (getenv("BS_MAELTEST")) {  // the maelstrom: hulls drifting with sails furled, and sailing straight out, from a few radii
+        for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+            World g;
+            g.rounds = false;
+            g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
+            g.skills = true;  // (the last one dashes whenever it can)
+            const float r0[] = {500, 350, 220, 130, 200, 120, 95, 75, 55, 75};
+            const int K = 10;
+            int id[K];
+            for (int k = 0; k < K; ++k) {
+                id[k] = g.AddShip("m", false, cls);
+                Ship& s = g.ships[id[k]];
+                float a = k * 0.7f;
+                s.pos = {cosf(a) * r0[k], 0, sinf(a) * r0[k]};
+                s.pos.y = g.ocean.Height(s.pos.x, s.pos.z) + 0.5f;
+                float out = atan2f(s.pos.x, s.pos.z);  // heading straight out of the funnel
+                s.rot = QuaternionFromAxisAngle({0, 1, 0}, out);
+                s.vel = {0, 0, 0};
+                s.input.sail = k < 4 ? 0.0f : 1.0f;
+            }
+            printf("maelstrom, %s (drifting from 500/350/220/130 m | full sail out from 200/120/95/75/55 m, and 75 m dashing): r [m] / hp / air\n", ClassOf(cls).name);
+            float air[K] = {}, maxUp[K] = {};
+            int dead[K] = {};
+            const int dbg = getenv("BS_MAELDBG") ? atoi(getenv("BS_MAELDBG")) : -1;
+            for (int i = 0; i <= 60 * 40; ++i) {
+                if (i % (60 * 5) == 0) {
+                    printf("  t=%2d s:", i / 60);
+                    for (int k = 0; k < K; ++k) {
+                        const Ship& s = g.ships[id[k]];
+                        printf(" %4.0f/%3.0f%s", sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z), s.hp, k == 3 ? "  |" : "");
+                    }
+                    printf("\n");
+                }
+                for (int k = 0; k < K; ++k) {
+                    Ship& s = g.ships[id[k]];
+                    if (k == 9 && s.dashCd <= 0.0f && s.alive) s.input.dashSeq++;
+                    float rk = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+                    s.input.sail = (k < 4 || !s.alive || rk > 640.0f) ? 0.0f : 1.0f;  // (and heave to once clear)
+                    if (k == dbg && i % 30 == 0) {
+                        float vt, vr;
+                        maelstrom::Flow(rk, vt, vr);
+                        float nx = s.pos.x / rk, nz = s.pos.z / rk;
+                        printf("    dbg t=%.1f r %.0f  ship vt %.1f vr %.1f vy %.1f | water vt %.1f vr %.1f | air %.1f sub %.2f y-h %.1f\n", i / 60.0f, rk,
+                               s.vel.x * nz - s.vel.z * nx, s.vel.x * nx + s.vel.z * nz, s.vel.y, vt, vr, s.airTime, s.submerged,
+                               s.pos.y - g.ocean.Height(s.pos.x, s.pos.z));
+                    }
+                    // sailing out: keep the bow pointed straight away from the eye
+                    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+                    float want = atan2f(s.pos.x, s.pos.z), hd = atan2f(f.x, f.z), e = want - hd;
+                    while (e > PI) e -= 2 * PI;
+                    while (e < -PI) e += 2 * PI;
+                    s.input.rudder = k < 4 ? 0.0f : Clamp(-e * 2.0f, -1.0f, 1.0f);
+                    if (s.airTime > 0) air[k] += SIM_DT;
+                    if (!s.alive && s.deadTimer > tune::respawnTime - SIM_DT * 1.5f) dead[k]++;
+                    maxUp[k] = fmaxf(maxUp[k], s.pos.y - g.ocean.Height(s.pos.x, s.pos.z));
+                }
+                g.Step();
+                g.events.clear();
+            }
+            printf("  air time [s]:");
+            for (int k = 0; k < K; ++k) printf(" %4.1f", air[k]);
+            printf("\n  sunk:");
+            for (int k = 0; k < K; ++k) printf(" %4d", dead[k]);
+            printf("\n  max height over the water [m]:");
+            for (int k = 0; k < K; ++k) printf(" %4.0f", maxUp[k]);
+            printf("\n");
+        }
+        // grappling a sea stack to get out: three ships 80 m from the eye (past a ship of the line's point of no return),
+        // full sail outwards. A hooks the nearest inner stack at once, B (opposite side) has nothing to hook, C starts
+        // 60 degrees short of the stack and hooks as soon as the swirl brings one within reach.
+        for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+            World g;
+            g.rounds = false;
+            g.skills = true;
+            g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
+            const Rock* st = nullptr;
+            for (const Rock& k : g.rocks)
+                if (k.stack && k.r > 9.0f && k.x * k.x + k.z * k.z < 260.0f * 260.0f) { st = &k; break; }
+            if (!st) { printf("no inner stack!\n"); break; }
+            float sa = atan2f(st->z, st->x);
+            const float ang[3] = {sa, sa + PI, sa + 1.05f};  // (the swirl carries ships towards smaller atan2(z, x))
+            int id[3];
+            for (int k = 0; k < 3; ++k) {
+                id[k] = g.AddShip("h", false, cls);
+                Ship& sh = g.ships[id[k]];
+                sh.pos = {cosf(ang[k]) * 80.0f, 0, sinf(ang[k]) * 80.0f};
+                sh.pos.y = g.ocean.Height(sh.pos.x, sh.pos.z) + 0.5f;
+                sh.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(sh.pos.x, sh.pos.z));
+                sh.vel = {0, 0, 0};
+            }
+            int hookedAt[3] = {-1, -1, -1};
+            bool sunk[3] = {};
+            float rEnd[3] = {};
+            for (int i = 0; i < 60 * 25; ++i) {
+                for (int k = 0; k < 3; ++k) {
+                    Ship& sh = g.ships[id[k]];
+                    if (!sh.alive) { sunk[k] = true; continue; }
+                    float rk = sqrtf(sh.pos.x * sh.pos.x + sh.pos.z * sh.pos.z);
+                    if (!sunk[k]) rEnd[k] = rk;
+                    sh.input.sail = rk < 400.0f ? 1.0f : 0.0f;
+                    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, sh.rot);
+                    float want = atan2f(sh.pos.x, sh.pos.z), hd = atan2f(f.x, f.z), e = want - hd;
+                    if (sh.hooked == (int8_t)HOOK_ROCK) want = atan2f(sh.hookAnchor.x - sh.pos.x, sh.hookAnchor.z - sh.pos.z), e = want - hd;
+                    while (e > PI) e -= 2 * PI;
+                    while (e < -PI) e += 2 * PI;
+                    sh.input.rudder = Clamp(-e * 2.0f, -1.0f, 1.0f);
+                    if (k != 1 && hookedAt[k] < 0 && i > 20 && sh.hookCd <= 0.0f) {
+                        float ax = st->x - (st->x - sh.pos.x) * 0.0f, az = st->z;  // aim at the stack's face towards us
+                        Vector2 to = {sh.pos.x - st->x, sh.pos.z - st->z};
+                        float dk = Vector2Length(to);
+                        ax = st->x + to.x / dk * st->r * 0.75f;
+                        az = st->z + to.y / dk * st->r * 0.75f;
+                        Vector3 hp = {ax, RocksHeight(g.rocks, ax, az) - 1.0f, az};
+                        if (Vector3Distance(hp, sh.pos) < tune::hookRange && RockHookOk(g.rocks, hp)) {
+                            sh.input.hookTarget = HOOK_ROCK;
+                            sh.input.hookPoint = hp;
+                            sh.input.hookSeq++;
+                            hookedAt[k] = i;
+                        }
+                    }
+                }
+                g.Step();
+                g.events.clear();
+            }
+            printf("maelstrom rescue, %s from 80 m (stack at %.0f m): ", ClassOf(cls).name, sqrtf(st->x * st->x + st->z * st->z));
+            const char* nm[3] = {"hooked at once", "no rock", "hooked when in reach"};
+            for (int k = 0; k < 3; ++k)
+                printf("%s%s: %s", k ? ", " : "", nm[k],
+                       sunk[k] ? "SWALLOWED" : TextFormat("out to %.0f m%s", rEnd[k], hookedAt[k] >= 0 ? TextFormat(" (hooked at %.1f s)", hookedAt[k] / 60.0f) : ""));
+            printf("\n");
+        }
+        // sailing straight across the funnel on a line that passes this close to the eye
+        for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+            World g;
+            g.rounds = false;
+            g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
+            const float miss[] = {350, 250, 180, 130, 100};
+            int id[5];
+            for (int k = 0; k < 5; ++k) {
+                id[k] = g.AddShip("x", false, cls);
+                Ship& s = g.ships[id[k]];
+                s.pos = {-560.0f, 0, miss[k]};
+                s.pos.y = g.ocean.Height(s.pos.x, s.pos.z) + 0.5f;
+                s.rot = QuaternionFromAxisAngle({0, 1, 0}, PI * 0.5f);  // heading +x
+                s.vel = {0, 0, 0};
+            }
+            printf("maelstrom crossing, %s, aiming to pass %s m from the eye: closest / where it ended up\n", ClassOf(cls).name, "350/250/180/130/100");
+            float closest[5] = {1e9f, 1e9f, 1e9f, 1e9f, 1e9f};
+            int sunk[5] = {};
+            for (int i = 0; i < 60 * 50; ++i) {
+                for (int k = 0; k < 5; ++k) {
+                    Ship& s = g.ships[id[k]];
+                    // steer for a point straight ahead on the original line (the current sets her off it)
+                    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+                    float want = atan2f(800.0f - s.pos.x, miss[k] - s.pos.z), hd = atan2f(f.x, f.z), e = want - hd;
+                    while (e > PI) e -= 2 * PI;
+                    while (e < -PI) e += 2 * PI;
+                    s.input.rudder = Clamp(-e * 2.0f, -1.0f, 1.0f);
+                    s.input.sail = s.pos.x < 500.0f ? 1.0f : -0.3f;  // (and stop short of the rocks)
+                    if (s.alive) closest[k] = fminf(closest[k], sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z));
+                    if (getenv("BS_CROSSDBG") && k == atoi(getenv("BS_CROSSDBG")) && cls == SC_CUTTER && i % 60 == 0)
+                        printf("    t=%d x %.0f z %.0f r %.0f  v %.1f,%.1f  head %.2f want %.2f air %.1f sub %.2f alive %d\n", i / 60, s.pos.x, s.pos.z,
+                               sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z), s.vel.x, s.vel.z, hd, want, s.airTime, s.submerged, (int)s.alive);
+                    if (!s.alive && s.deadTimer > tune::respawnTime - SIM_DT * 1.5f && s.pos.x * s.pos.x + s.pos.z * s.pos.z < 60.0f * 60.0f) sunk[k]++;
+                }
+                g.Step();
+                g.events.clear();
+            }
+            printf("  ");
+            for (int k = 0; k < 5; ++k) {
+                const Ship& s = g.ships[id[k]];
+                printf(sunk[k] ? "  %4.0f / SWALLOWED" : "  %4.0f / x %4.0f z %4.0f", closest[k], s.pos.x, s.pos.z);
+            }
+            printf("\n");
         }
         return 0;
     }
@@ -471,8 +650,10 @@ duels:
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;
-        g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true);
+        const uint8_t arena = getenv("BS_ARENA") ? (uint8_t)atoi(getenv("BS_ARENA")) : ARENA_ISLES;  // 1: the maelstrom
+        g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true, arena);
         g.skills = getenv("BS_SKILLS") != nullptr;  // dash and grappling hook on
+        int swallowed = 0, fed = 0, inFunnel = 0, samples = 0, rockAt[3] = {}, rockEscort = 0;
         int dashes = 0, hookups = 0;
         int captains = m == MODE_PIRATE ? 5 : 4;
         for (int i = 0; i < captains; ++i) g.AddShip(TextFormat("bot%d", i), true);
@@ -492,10 +673,22 @@ duels:
                     hits++;
                     if (e.a != e.b && g.ships[e.a].active && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
                 }
-                if (e.type == EventType::Kill) kills++;
+                if (e.type == EventType::Kill) {
+                    kills++;
+                    if (arena == ARENA_MAELSTROM && e.pos.x * e.pos.x + e.pos.z * e.pos.z < 40.0f * 40.0f) {
+                        swallowed++;
+                        if (e.a < MAX_SHIPS) fed++;
+                    }
+                }
                 if (e.type == EventType::Dash) dashes++;
                 if (e.type == EventType::Hook && e.b < MAX_SHIPS) hookups++;
-                if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { aground++; if (e.value > 6.0f) groundings++; }
+                if (e.type == EventType::Ram && (e.flags & EF_ROCK)) {
+                    aground++;
+                    if (e.value > 6.0f) groundings++;
+                    float rr = sqrtf(e.pos.x * e.pos.x + e.pos.z * e.pos.z);
+                    rockAt[rr < 260.0f ? 0 : rr < 520.0f ? 1 : 2]++;
+                    if (e.a < MAX_SHIPS && g.ships[e.a].isBot && g.ships[e.a].leader >= 0) rockEscort++;
+                }
                 if (e.type == EventType::Resupply) resupply += e.b;
                 if (e.type == EventType::Booty) {
                     booty++;
@@ -517,6 +710,12 @@ duels:
                 for (const Ship& x : g.ships)
                     if (x.active && x.alive && !x.stowed && g.Enemies(x, g.ships[carrier]))
                         minDist = fminf(minDist, Vector3Distance(x.pos, g.ships[carrier].pos));
+            if (arena == ARENA_MAELSTROM && i % 60 == 0)  // ship-seconds spent inside the funnel's steep part
+                for (const Ship& x : g.ships)
+                    if (x.active && x.alive && !x.stowed) {
+                        samples++;
+                        if (x.pos.x * x.pos.x + x.pos.z * x.pos.z < 150.0f * 150.0f) inFunnel++;
+                    }
             if (i % 60 == 0)  // how well escorts keep station on a living captain
                 for (const Ship& x : g.ships)
                     if (x.active && x.alive && !x.stowed && x.leader >= 0 && g.ships[x.leader].alive) {
@@ -535,6 +734,9 @@ duels:
             (void)pirates;
         }
         if (g.skills) printf(", skills: %d dashes, %d hooks", dashes, hookups);
+        if (arena == ARENA_MAELSTROM)
+            printf(", maelstrom: %d swallowed (%d credited to an enemy), %.1f%% of ship time inside 150 m, rock hits inner/outer stacks/ring %d/%d/%d (%d by escorts)",
+                   swallowed, fed, samples ? 100.0f * inFunnel / samples : 0.0f, rockAt[0], rockAt[1], rockAt[2], rockEscort);
         printf("\n");
     }
     return 0;

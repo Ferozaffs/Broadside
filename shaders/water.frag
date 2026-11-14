@@ -55,19 +55,79 @@ void main() {
 
     vec4 df = vec4(0.0);
     vec2 slopes = vec2(0.0);
+    // The maelstrom's current carries the small waves round (two-phase flow map: two copies of the texture,
+    // each dragged along for a few seconds, then reset while the other one is showing)
+    vec2 flow = VortexFlow(vXZ);
+    bool flowing = dot(flow, flow) > 0.01;
+    const float kFlowT = 3.0;
+    float ph0 = fract(uTime / kFlowT), ph1 = fract(uTime / kFlowT + 0.5);
+    float fw0 = 1.0 - abs(2.0 * ph0 - 1.0);
     for (int c = 0; c < 4; ++c) {
         vec3 uvw = vec3(OceanUV(vXZ, c), float(c));
-        vec4 s = texture(uDisp, uvw);
+        vec4 s;
+        vec2 sl;
+        if (flowing && c >= 2) {
+            vec3 u0 = vec3(OceanUV(vXZ - flow * (ph0 - 0.5) * kFlowT, c), float(c));
+            vec3 u1 = vec3(OceanUV(vXZ - flow * (ph1 - 0.5) * kFlowT, c), float(c));
+            s = texture(uDisp, u0) * fw0 + texture(uDisp, u1) * (1.0 - fw0);
+            sl = texture(uSlope, u0).xy * fw0 + texture(uSlope, u1).xy * (1.0 - fw0);
+        } else {
+            s = texture(uDisp, uvw);
+            sl = texture(uSlope, uvw).xy;
+        }
         s.a += kFoamSubtract[c];
         df += s;
-        slopes += texture(uSlope, uvw).xy * ShoreDamp(vXZ);
+        slopes += sl * ShoreDamp(vXZ);
     }
     float atten = exp(-vDist * 0.0007);
     float foam = clamp(df.a, 0.0, 1.0) * atten;
 
-    vec3 macroNormal = vec3(0, 1, 0);
-    vec3 N = normalize(vec3(-slopes.x, 1.0, -slopes.y));
+    // the funnel's own slope is part of the big shape: it doesn't fade with distance like the waves do
+    vec2 vg = VortexGrad(vXZ);
+    vec3 macroNormal = normalize(vec3(-vg.x, 1.0, -vg.y));
+    vec3 N = normalize(vec3(-slopes.x - vg.x, 1.0, -slopes.y - vg.y));
     N = normalize(mix(macroNormal, N, atten));
+
+    // maelstrom foam: streaks wound round the funnel, spiralling in, and white water churning in the throat
+    float vortexChurn = 0.0, eyeDark = 0.0;
+    if (uVortex.z > 0.0) {
+        vec2 p = vXZ - uVortex.xy;
+        float r = length(p);
+        if (r < kVortexR) {
+            float th = atan(p.y, p.x), lr = log(max(r, 1.0));
+            // angular / log-radial speed of the water here (the pattern is advected in those coordinates)
+            vec2 n = p / max(r, 1e-3);
+            float om = dot(flow, vec2(-n.y, n.x)) / max(r, 4.0), lv = dot(flow, n) / max(r, 4.0);
+            float st = 0.0;
+            for (int k = 0; k < 2; ++k) {
+                float ph = k == 0 ? ph0 : ph1, w = k == 0 ? fw0 : 1.0 - fw0;
+                float dtp = (ph - 0.5) * kFlowT;
+                float a = th - om * dtp, l = lr - lv * dtp;
+                // u wraps exactly 3 times round the circle and v by a whole number of texture repeats (no seam);
+                // v changes with the angle too, which is what winds the streaks into a spiral. Stretched along the flow.
+                vec2 uv = vec2(a * (2.0 / (2.0 * PI)), l * 4.0 + a * (2.0 / (2.0 * PI)));
+                // (screen derivatives from an angle with its seam on the far side, so the seam gets no mip line)
+                float th2 = atan(-p.y, -p.x) + PI;
+                vec2 uv2 = vec2(th2 * (2.0 / (2.0 * PI)), l * 4.0 + th2 * (2.0 / (2.0 * PI)));
+                vec2 gx = dFdx(uv), gy = dFdy(uv), gx2 = dFdx(uv2), gy2 = dFdy(uv2);
+                if (dot(gx2, gx2) + dot(gy2, gy2) < dot(gx, gx) + dot(gy, gy)) { gx = gx2; gy = gy2; }
+                // warp the rings with a slow noise so they break up into separate streaks
+                vec4 wp = textureGrad(uNoise, uv * vec2(2.0, 0.25) + 0.61, gx * vec2(2.0, 0.25), gy * vec2(2.0, 0.25));
+                uv.y += (wp.b - 0.5) * 0.3;
+                vec4 nz = textureGrad(uNoise, uv, gx, gy);
+                vec4 nz2 = textureGrad(uNoise, uv * vec2(1.0, 3.0) + 0.37, gx * vec2(1.0, 3.0), gy * vec2(1.0, 3.0));
+                st += (nz.r * 0.55 + nz2.g * 0.45) * w;
+            }
+            // dense near the eye, a few long streaks out towards the rim
+            float band = smoothstep(20.0, 60.0, r) * (1.0 - smoothstep(300.0, 560.0, r));
+            float thr = mix(0.5, 0.72, smoothstep(60.0, 420.0, r));
+            float streak = smoothstep(thr, thr + 0.12, st) * band;
+            foam = max(foam, streak * mix(0.45, 0.92, 1.0 - smoothstep(60.0, 320.0, r)));
+            vortexChurn = (1.0 - smoothstep(22.0, 60.0, r)) * smoothstep(8.0, 24.0, r);
+            foam = max(foam, vortexChurn * smoothstep(0.4, 0.62, st) * 0.95);
+            eyeDark = 1.0 - smoothstep(8.0, 42.0, r);
+        }
+    }
 
     // ---- ship wakes ----
     vec2 wuv = vWorld.xz / (2.0 * uWakeExtent) + 0.5;
@@ -91,6 +151,7 @@ void main() {
         N = normalize(N + vec3(-hx / (2.0 * e) * 0.9 + chop.x, 0.0, -hz / (2.0 * e) * 0.9 + chop.y));
     }
 
+    churn = max(churn, vortexChurn * 0.8);
     vec2 suv = gl_FragCoord.xy / uScreenSize;
     float waterLin = LinearDepth(gl_FragCoord.z);
     vec3 outCol;
@@ -143,6 +204,7 @@ void main() {
         outCol = (1.0 - F) * body + specular + F * envReflection;
         outCol = max(outCol, vec3(0.0));
         outCol = mix(outCol, kFoamColor * (0.35 + 0.65 * uSunColor.g) * mix(0.55, 1.0, sh), clamp(foam, 0.0, 1.0));
+        outCol *= 1.0 - 0.85 * eyeDark * eyeDark;  // looking down the throat
     } else {
         // ---------------- seen from below: Snell's window ----------------
         vec3 n = -N;               // faces the viewer, pointing down into the water

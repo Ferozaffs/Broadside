@@ -56,6 +56,7 @@ struct Options {
     int allowedCls = SC_ALL;     // host: --classes cutter,frigate,line
     bool deckOnly = false;       // host: --deck-only
     bool skills = false;         // host: --skills (dash + grappling hook)
+    int arena = ARENA_ISLES;     // host: --arena isles|maelstrom
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
     float recordSec = 0, recordStart = 0;  // --record <sec> <file.mp4> [--record-start <sec>]: video via ffmpeg
     std::string recordPath;
@@ -95,6 +96,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--autopilot") o.autopilot = true;
         else if (a == "--deck-only") o.deckOnly = true;
         else if (a == "--skills") o.skills = true;
+        else if (a == "--arena") o.arena = next("isles") == "maelstrom" ? ARENA_MAELSTROM : ARENA_ISLES;
         else if (a == "--classes") {
             std::string c = next("cutter,frigate,line");
             o.allowedCls = (c.find("cutter") != std::string::npos ? 1 : 0) | (c.find("frigate") != std::string::npos ? 2 : 0) |
@@ -259,8 +261,13 @@ public:
     bool curDeckOnly = false;
     int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
     bool curSkills = false;
+    int arenaSel = ARENA_ISLES;      // host's choice of arena
+    int curArena = ARENA_ISLES, oceanArena = -1, menuArena = -1;
+    bool InEye(Vector3 p) const { return curArena == ARENA_MAELSTROM && p.x * p.x + p.z * p.z < 45.0f * 45.0f; }
     uint8_t dashSeq = 0, hookSeq = 0, hookAim = 255;
+    Vector3 hookPoint{};
     int HookCandidate(Vector3 dir) const;
+    bool RockCandidate(Vector3 dir, Vector3& at) const;  // a rock face under the reticle within hook range
     void DrawHookLines();
     void PickClass(int c);
     void DrawClassCards(Rectangle area, bool keys, bool row);
@@ -349,7 +356,7 @@ public:
     void Shutdown();
 
 private:
-    void SetOcean(uint32_t seed, int weather);
+    void SetOcean(uint32_t seed, int weather, int arena);
     void StartSession(bool host, int bots, bool open = false);  // open: ask the router to forward the port (real hosting)
     bool portOpened = false;
     void Disconnect(const std::string& why);
@@ -480,6 +487,7 @@ void Game::Init() {
     allowSel = opt.allowedCls;
     viewSel = opt.deckOnly ? 1 : 0;
     skillSel = opt.skills ? 1 : 0;
+    arenaSel = opt.arena;
     if (const char* e = getenv("BS_LOD")) shipModel.forceLod = atoi(e);  // (testing: pin a level of detail)
     if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
     switch (opt.start) {
@@ -500,11 +508,14 @@ void Game::Shutdown() {
     if (soundOn) sfx::Shutdown();
 }
 
-void Game::SetOcean(uint32_t seed, int weather) {
-    if (seed == oceanSeed && weather == oceanWeather && pred.ocean.Ready()) return;
+void Game::SetOcean(uint32_t seed, int weather, int arena) {
+    if (seed == oceanSeed && weather == oceanWeather && arena == oceanArena && pred.ocean.Ready()) return;
     oceanSeed = seed;
     oceanWeather = weather;
-    pred.Init(seed, (uint8_t)weather);
+    oceanArena = arena;
+    pred.Init(seed, (uint8_t)weather, 0, MODE_FFA, false, (uint8_t)arena);
+    renderer.vortex = {0.0f, 0.0f, arena == ARENA_MAELSTROM ? 1.0f : 0.0f, 0.0f};
+    sceneryKey = 0xFFFFFFFFu;
     wind = {pred.oceanParams.windDir.x * 3.0f, 0.0f, pred.oceanParams.windDir.y * 3.0f};
     oceanGpu.Init(pred.oceanParams);
     renderer.SetShoreDamp(pred.ocean.Damp(), OceanCPU::DAMP_N, OceanCPU::DAMP_EXTENT);
@@ -514,7 +525,9 @@ void Game::StartSession(bool host, int bots, bool open) {
     status.clear();
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-        if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0)) {
+        if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
+        if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
+                          arenaSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -628,12 +641,14 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             if (!curAllowed) curAllowed = SC_ALL;
             curDeckOnly = r.Get<uint8_t>() != 0;
             curSkills = r.Get<uint8_t>() != 0;
+            curArena = r.Get<uint8_t>();
+            if (curArena >= ARENA_COUNT) curArena = ARENA_ISLES;
             if (!(curAllowed & (1 << classSel))) {  // our pick isn't allowed here: the server gave us another
                 for (int c : {SC_FRIGATE, SC_CUTTER, SC_LINE})
                     if (curAllowed & (1 << c)) { classSel = c; break; }
             }
             if (curDeckOnly) camDist = 0.0f;
-            SetOcean(seed, curWeather);
+            SetOcean(seed, curWeather, curArena);
             predTime = t;
             predValid = false;
             history.clear();
@@ -650,6 +665,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                                           : "Welcome aboard. Sink them all!",
                  ui::kText);
             if (curFleets) Feed("Your fleet follows you. Lost ships come back at a friendly harbour.", ui::kDim);
+            if (curArena == ARENA_MAELSTROM) Feed("A maelstrom turns in the middle of the bay. Its eye pulls ships under.", ui::kGold);
             break;
         }
         case MSG_SNAPSHOT: {
@@ -797,9 +813,12 @@ void Game::UpdateInput(float dt) {
         if (curSkills && IsKeyPressed(KEY_E) && myId >= 0 && view[myId].present) {
             if (view[myId].s.hooked >= 0) { hookAim = 255; hookSeq++; }  // cut the line
             else {
-                int t = HookCandidate(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
+                Vector3 dir = Vector3Normalize(Vector3Subtract(rv.target, rv.pos)), at;
+                int t = HookCandidate(dir);
+                bool rock = t < 0 && RockCandidate(dir, at);
                 if (t >= 0 && view[myId].s.hookCd <= 0.0f) { hookAim = (uint8_t)t; hookSeq++; }
-                else if (t < 0) Feed("Nothing to hook: put the reticle on a ship within 150 m", ui::kDim);
+                else if (rock && view[myId].s.hookCd <= 0.0f) { hookAim = HOOK_ROCK; hookPoint = at; hookSeq++; }
+                else if (t < 0 && !rock) Feed("Nothing to hook: put the reticle on a ship or a rock within 150 m", ui::kDim);
             }
         }
     }
@@ -836,6 +855,7 @@ void Game::UpdateInput(float dt) {
     in.dashSeq = dashSeq;
     in.hookSeq = hookSeq;
     in.hookTarget = hookAim;
+    in.hookPoint = hookPoint;
     in.aim = SolveAim(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
     curInput = in;
 
@@ -909,9 +929,27 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     Ship& me = pred.ships[myId];
     if (predValid) { me.pos = predShip.pos; me.vel = predShip.vel; me.rot = predShip.rot; }
     me.input = PlayerInput{};
+    pred.skills = curSkills;
+    me.hooked = view[myId].s.hooked;
+    me.hookAnchor = view[myId].s.hookAnchor;
+    me.hookCd = view[myId].s.hookCd;
+    me.dashCd = view[myId].s.dashCd;
     pred.AutopilotThink(me, dt);
     sailTarget = me.input.sail;
     in.rudder = me.input.rudder;
+    // the brain's own way out of a maelstrom: grapple a stack (or let go of it), dash clear
+    static double lastBrainSkill = 0;
+    if (curSkills && GetTime() - lastBrainSkill > 0.5) {
+        if (me.input.hookSeq != 0 && (me.input.hookTarget == HOOK_ROCK || me.hooked == (int8_t)HOOK_ROCK)) {
+            hookAim = me.hooked == (int8_t)HOOK_ROCK ? 255 : HOOK_ROCK;
+            hookPoint = me.input.hookPoint;
+            hookSeq++;
+            lastBrainSkill = GetTime();
+        } else if (me.input.dashSeq != 0 && curArena == ARENA_MAELSTROM) {
+            dashSeq++;
+            lastBrainSkill = GetTime();
+        }
+    }
 
     // the camera looks at the enemy we'd shoot at (the treasure carrier first in pirate mode)
     const NetShip& my = view[myId].s;
@@ -927,10 +965,6 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     // skills through the player path: hook the target when it's in reach, dash when it's a little further
     if (curSkills && tgt >= 0) {
         static double lastSkill = 0;
-        bool onLine = false;  // someone has a line on us: dash to snap it
-        for (int id = 0; id < MAX_SHIPS; ++id)
-            if (view[id].present && view[id].s.hooked == myId && view[id].s.hookTimer < tune::hookTime - 2.0f) onLine = true;
-        if (onLine && my.dashCd <= 0.0f && GetTime() - lastSkill > 0.4) { dashSeq++; lastSkill = GetTime(); }
         if (GetTime() - lastSkill > 1.0) {
             if (my.hooked < 0 && my.hookCd <= 0.0f && best < tune::hookRange * 0.8f) { hookAim = (uint8_t)tgt; hookSeq++; lastSkill = GetTime(); }
             else if (my.dashCd <= 0.0f && best > 180.0f && best < 400.0f) { dashSeq++; lastSkill = GetTime(); }
@@ -1150,6 +1184,11 @@ void Game::UpdateSound(float dt, bool menu) {
     a.wind = w == 1 ? 0.75f : (w == 2 ? 0.08f : 0.2f);
     a.rain = renderer.atm.rain > 0.0f ? 0.8f : 0.0f;
     a.underwater = rv.pos.y < Ocean().Height(rv.pos.x, rv.pos.z) ? 1.0f : 0.0f;
+    if ((menu ? arenaSel : curArena) == ARENA_MAELSTROM) {  // the maelstrom roars, louder the closer we are
+        float d = Vector3Length({rv.pos.x, rv.pos.y + 30.0f, rv.pos.z});
+        float k = Clamp(1.0f - (d - 80.0f) / 800.0f, 0.0f, 1.0f);
+        a.roar = k * k;
+    }
     if (!menu && myId >= 0 && view[myId].present) {
         const NetShip& me = view[myId].s;
         float spd = Vector3Length(me.vel);
@@ -1235,6 +1274,23 @@ void Game::DrawClassCards(Rectangle area, bool keys, bool row) {
 }
 
 // The ship under the reticle (or nearest to it) that a grappling line would reach.
+// March the camera ray out to the first rock it meets; it's a hook point if it's within reach of our ship
+bool Game::RockCandidate(Vector3 dir, Vector3& at) const {
+    if (myId < 0 || !view[myId].present) return false;
+    const Vector3 me = view[myId].s.pos;
+    float far = Vector3Distance(rv.pos, me) + tune::hookRange + 10.0f;
+    const OceanCPU& oc = mode == Mode::Playing ? pred.ocean : menuWorld.ocean;
+    for (float d = 2.0f; d < far; d += 1.5f) {
+        Vector3 p = Vector3Add(rv.pos, Vector3Scale(dir, d));
+        if (p.y < oc.Height(p.x, p.z) - 2.0f) return false;  // into the sea first
+        if (RocksHeight(pred.rocks, p.x, p.z) >= p.y) {
+            at = p;
+            return Vector3Distance(p, me) <= tune::hookRange && RockHookOk(pred.rocks, p);
+        }
+    }
+    return false;
+}
+
 int Game::HookCandidate(Vector3 dir) const {
     if (myId < 0 || !view[myId].present) return -1;
     const NetShip& me = view[myId].s;
@@ -1265,10 +1321,10 @@ void Game::DrawHookLines() {
         if (!view[id].present) continue;
         const NetShip& s = view[id].s;
         int t = s.hooked;
-        if (t < 0 || t >= MAX_SHIPS || !view[t].present) continue;
-        const NetShip& o = view[t].s;
+        bool rock = t == (int8_t)HOOK_ROCK;
+        if (!rock && (t < 0 || t >= MAX_SHIPS || !view[t].present)) continue;
         Vector3 a = HullToWorld(s.pos, s.rot, {0, 3.0f, hull::halfLength}, ClassOf(s.cls).scale);
-        Vector3 b = HullToWorld(o.pos, o.rot, {0, 3.0f, 0}, ClassOf(o.cls).scale);
+        Vector3 b = rock ? s.hookAnchor : HullToWorld(view[t].s.pos, view[t].s.rot, {0, 3.0f, 0}, ClassOf(view[t].s.cls).scale);
         float len = Vector3Distance(a, b);
         float slack = Clamp(1.0f - s.hookTimer / tune::hookTime, 0.0f, 1.0f);
         const int N = 16;
@@ -1503,7 +1559,9 @@ void Game::Reconcile() {
     if (ns->hooked != s.hooked) {
         s.hooked = ns->hooked;
         if (s.hooked >= 0 && s.hooked < MAX_SHIPS && view[s.hooked].present) s.hookRest = Vector3Distance(view[s.hooked].s.pos, ns->pos);
+        if (s.hooked == (int8_t)HOOK_ROCK) s.hookRest = Vector3Distance(ns->hookAnchor, ns->pos);
     }
+    s.hookAnchor = ns->hookAnchor;
     s.hookTimer = ns->hookTimer;
     s.lastDashSeq = ackedDashSeq;
     s.lastHookSeq = ackedHookSeq;
@@ -1706,7 +1764,10 @@ void Game::PlayEvent(const GameEvent& e) {
                 sfx::PlayFlat(sfx::Confirm, 0.85f, 0.6f);
                 floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("SUNK %s", TextToUpper(NameOf(e.b).c_str())), ui::kGold, 2.6f});
             }
-            if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
+            if (InEye(e.pos)) {  // the maelstrom took it
+                if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  was swallowed by the maelstrom", "", TeamOf(e.b), ui::kText);
+                else Feed3(NameOf(e.a), "  fed the maelstrom  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
+            } else if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
             else Feed3(NameOf(e.a), "  sank  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
             if (e.b == myId) flash = fmaxf(flash, 0.5f);
             break;
@@ -1858,8 +1919,11 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::Hook:
             if (e.a < MAX_SHIPS && e.b < MAX_SHIPS) {
                 sfx::Play(sfx::Hit, view[e.b].present ? view[e.b].s.pos : e.pos, 0.35f, 1.6f);
-                if (e.b == myId) Feed3(NameOf(e.a), "  has a grappling line on you!  (dash to break free)", "", TeamOf(e.a), ui::kGold);
+                if (e.b == myId) Feed3(NameOf(e.a), "  has a grappling line on you!", "", TeamOf(e.a), ui::kGold);
                 else if (e.a == myId) Feed3("Line fast to  ", "", NameOf(e.b), ui::kText, TeamOf(e.b));
+            } else if (e.a < MAX_SHIPS && e.b == HOOK_ROCK) {  // made fast to the rocks
+                sfx::Play(sfx::RockHit, e.dir, 0.35f, 1.5f);
+                if (e.a == myId) Feed("Line fast to the rocks: haul away!", ui::kText);
             } else if (e.a == myId && (e.flags & 1)) {
                 Feed("The line is off", ui::kDim);
             }
@@ -1872,6 +1936,19 @@ void Game::PlayEvent(const GameEvent& e) {
 }
 
 void Game::SpawnShipFx(float dt) {
+    // the maelstrom throws spray up round its throat, carried round with the water
+    if (curArena == ARENA_MAELSTROM && Vector3Length(rv.pos) < 1400.0f) {
+        static float acc = 0.0f;
+        acc += dt * 45.0f;
+        const OceanCPU& oc = Ocean();
+        for (; acc >= 1.0f; acc -= 1.0f) {
+            float a = Rnd(0.0f, 2.0f * PI), r = Rnd(12.0f, 58.0f);
+            float x = cosf(a) * r, z = sinf(a) * r;
+            float sp = Rnd(8.0f, 18.0f);
+            Vector3 v = {-sinf(a) * -sp, Rnd(5.0f, 15.0f), cosf(a) * -sp};  // round with the swirl (counter-clockwise from above)
+            Emit({x, oc.Height(x, z) + 0.5f, z}, v, Rnd(1.6f, 3.0f), Rnd(4.0f, 9.0f), 2.2f, {232, 240, 244, 150}, 0);
+        }
+    }
     if (opt.testDamage >= 0.0f && myId >= 0 && view[myId].present) {
         view[myId].s.hp = opt.testDamage;
         if (hullHits[myId].empty()) {
@@ -2354,9 +2431,10 @@ void Game::RenderWorld(float dt, bool menu) {
     oceanGpu.Update(t, dt);
 
     const std::vector<Rock>& rocks = menu ? menuWorld.rocks : pred.rocks;
-    uint32_t key = menu ? 0x80000007u : oceanSeed;
+    const bool whirl = (menu ? arenaSel : curArena) == ARENA_MAELSTROM;
+    uint32_t key = (menu ? 0x80000007u : oceanSeed) + (whirl ? 0x01000000u : 0u);
     if (key != sceneryKey) {
-        scenery.Build(rocks);
+        scenery.Build(rocks, whirl);
         scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
         sceneryKey = key;
     }
@@ -2907,13 +2985,15 @@ void Game::DrawHUD() {
         struct Sk { const char* key; const char* name; float cd, full; bool active; };
         Sk sk[2] = {{"SHIFT", "DASH", me->dashCd, tune::dashCooldown, false},
                     {"E", me->hooked >= 0 ? "LET GO" : "HOOK", me->hookCd, tune::hookCooldown, me->hooked >= 0}};
-        int cand = me->hooked < 0 ? HookCandidate(Vector3Normalize(Vector3Subtract(rv.target, rv.pos))) : -1;
+        Vector3 hookDir = Vector3Normalize(Vector3Subtract(rv.target, rv.pos)), rockAt{};
+        int cand = me->hooked < 0 ? HookCandidate(hookDir) : -1;
+        bool rockCand = me->hooked < 0 && cand < 0 && RockCandidate(hookDir, rockAt);
         for (int i = 0; i < 2; ++i) {
             Rectangle r = {24.0f + 346.0f + i * 112.0f, H - 24 - 58, 104, 58};
             Panel(r, kPanel, 10);
             bool ready = sk[i].cd <= 0.0f || sk[i].active;
             Keycap(sk[i].key, r.x + 10, r.y + 8, 13);
-            Text(sk[i].name, r.x + 10, r.y + 30, 16, ready ? (i == 1 && !sk[i].active && cand < 0 ? kDim : kGold) : kDim, true);
+            Text(sk[i].name, r.x + 10, r.y + 30, 16, ready ? (i == 1 && !sk[i].active && cand < 0 && !rockCand ? kDim : kGold) : kDim, true);
             if (!ready) {
                 Bar({r.x + 10, r.y + 50, r.width - 20, 3}, 1.0f - sk[i].cd / sk[i].full, kText, {0, 0, 0, 120});
                 Text(TextFormat("%.0f", ceilf(sk[i].cd)), r.x + r.width - 12, r.y + 8, 15, kDim, true, Right);
@@ -2923,6 +3003,13 @@ void Game::DrawHUD() {
             Vector2 sp;
             if (rv.Project(Vector3Add(view[cand].s.pos, {0, 26.0f * ClassOf(view[cand].s.cls).scale, 0}), sp))
                 Label("E  HOOK", sp.x, sp.y - 30, 10, kGold, Center);
+        }
+        if (rockCand) {  // or onto this rock
+            Vector2 sp;
+            if (rv.Project(rockAt, sp)) {
+                DrawCircleLinesV(sp, 7.0f, kGold);
+                Label("E  HOOK ROCK", sp.x, sp.y - 26, 10, kGold, Center);
+            }
         }
     }
     // ---- status card ----
@@ -3229,10 +3316,13 @@ void Game::DrawMenu() {
         static const char* const kViews[] = {"Free", "Deck"};
         Segmented({x + mw + 8, y + 290, 128, 40}, kViews, 2, viewSel);
     }
-    Label("SKILLS  (SHIFT DASH  \xC2\xB7  E HOOK)", x + 2, y + 344, 11, kDim);
+    Label("SKILLS", x + 2, y + 344, 11, kDim);
+    Label("ARENA", x + 118, y + 344, 11, kDim);
     {
         static const char* const kSkills[] = {"Off", "On"};
-        Segmented({x, y + 362, mw, 40}, kSkills, 2, skillSel);
+        static const char* const kArenas[] = {"Isles", "Maelstrom"};
+        Segmented({x, y + 362, 108, 40}, kSkills, 2, skillSel);
+        Segmented({x + 116, y + 362, mw - 116, 40}, kArenas, 2, arenaSel);
     }
     if (Button({x + mw + 8, y + 362, 128, 40}, "Quit")) quit = true;
 
@@ -3257,10 +3347,11 @@ void Game::Frame() {
             PollNet();
             if (mode == Mode::Connecting && GetTime() - connectStart > 6.0) Disconnect("Connection timed out");
         }
-        if (menuWeather != weatherSel) {  // rebuild the backdrop battle on the chosen sea
+        if (menuWeather != weatherSel || menuArena != arenaSel) {  // rebuild the backdrop battle on the chosen sea
             menuWeather = weatherSel;
+            menuArena = arenaSel;
             menuWorld.rounds = false;
-            menuWorld.Init(7, (uint8_t)weatherSel);
+            menuWorld.Init(7, (uint8_t)weatherSel, 0, MODE_FFA, false, (uint8_t)arenaSel);
             for (int i = 0; i < 3; ++i) menuWorld.AddShip("bot", true);
             for (int i = 0; i < 600; ++i) menuWorld.Step();
             menuWorld.events.clear();
@@ -3276,9 +3367,14 @@ void Game::Frame() {
         float a = (float)GetTime() * 0.05f;
         rv.target = Vector3Add(s.pos, {0, 6, 0});
         rv.pos = Vector3Add(rv.target, {sinf(a) * 90.0f, 22.0f, cosf(a) * 90.0f});
+        if (arenaSel == ARENA_MAELSTROM) {  // preview the arena: circle the whirlpool instead
+            rv.pos = {sinf(a) * 300.0f, 40.0f, cosf(a) * 300.0f};
+            Vector3 right = {cosf(a), 0.0f, -sinf(a)};  // aim left of the eye, so it sits clear of the menu
+            rv.target = Vector3Add({0.0f, -45.0f, 0.0f}, Vector3Scale(right, -150.0f));
+        }
         rv.fovy = 55;
         if (mode != Mode::Menu && mode != Mode::Connecting) { EndDrawing(); return; }
-        SetOcean(7, weatherSel);
+        SetOcean(7, weatherSel, arenaSel);
         UpdateAtmosphere(dt, true);
         UpdateSound(dt, true);
         RenderWorld(dt, true);
@@ -3332,7 +3428,7 @@ void Game::Frame() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena)) return 1;
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();

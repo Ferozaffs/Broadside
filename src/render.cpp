@@ -396,6 +396,7 @@ void Renderer::SetCommonUniforms(unsigned int p) {
     Uniform1f(GetUniformLocation(p, "uCloud"), atm.cloud);
     Uniform1f(GetUniformLocation(p, "uNight"), atm.night);
     Uniform1f(GetUniformLocation(p, "uLightning"), atm.lightning);
+    Uniform4f(GetUniformLocation(p, "uVortex"), vortex.x, vortex.y, vortex.z, vortex.w);
     Uniform1i(GetUniformLocation(p, "uShoreDamp"), 12);
     Uniform1f(GetUniformLocation(p, "uShoreExtent"), shoreTex ? shoreExtent : 0.0f);
     ActiveTexture(TEXTURE0 + 12);
@@ -469,6 +470,7 @@ void Renderer::Begin(const RenderView& v, const OceanGPU& oc, double t) {
     SetShaderValue(litShader, GetShaderLocation(litShader, "uCloud"), &atm.cloud, SHADER_UNIFORM_FLOAT);
     SetShaderValue(litShader, GetShaderLocation(litShader, "uNight"), &atm.night, SHADER_UNIFORM_FLOAT);
     SetShaderValue(litShader, GetShaderLocation(litShader, "uLightning"), &atm.lightning, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litShader, GetShaderLocation(litShader, "uVortex"), &vortex, SHADER_UNIFORM_VEC4);
     SetShaderValue(litShader, GetShaderLocation(litShader, "uDisp"), &u5, SHADER_UNIFORM_INT);
     SetShaderValue(litShader, GetShaderLocation(litShader, "uSlope"), &u6, SHADER_UNIFORM_INT);
     SetLitParams(0.0f, 0.0f);

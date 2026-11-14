@@ -1,4 +1,5 @@
 #include "ocean.h"
+#include "maelstrom.h"
 #include <cmath>
 #include <complex>
 
@@ -317,7 +318,17 @@ WaterSample OceanCPU::Sample(float x, float z) const {
         pz = z - s[1];
     }
     SampleRaw(px, pz, s);
-    return {s[2], {s[4], s[3], s[5]}};
+    WaterSample w = {s[2], {s[4], s[3], s[5]}};
+    if (vortex) {
+        float r = sqrtf(x * x + z * z);
+        if (r < maelstrom::radius) {
+            float v[3];
+            maelstrom::Velocity(x, z, v);
+            w.height += maelstrom::Height(r);
+            w.velocity = {w.velocity.x + v[0], w.velocity.y + v[1], w.velocity.z + v[2]};
+        }
+    }
+    return w;
 }
 
 float OceanCPU::Height(float x, float z) const { return Sample(x, z).height; }

@@ -1,4 +1,5 @@
 #include "sim.h"
+#include "maelstrom.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -67,7 +68,7 @@ int HarbourOwner(int mode, int i) {
     return -1;
 }
 
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks) {
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vortex) {
     const int N = OceanCPU::DAMP_N;
     const float E = OceanCPU::DAMP_EXTENT, cell = 2.0f * E / N;
     // distance to land on the grid (two-pass chamfer), land = anything near or above the waterline
@@ -103,12 +104,16 @@ std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks) {
         float t = Clamp(d[k] / tune::shoreCalmDist, 0.0f, 1.0f);
         t = t * t * (3.0f - 2.0f * t);
         float m = tune::shoreCalm + (1.0f - tune::shoreCalm) * t;
+        if (vortex) {  // the waves die down in the funnel
+            float x = (k % N + 0.5f) * cell - E, z = (k / N + 0.5f) * cell - E;
+            m *= maelstrom::WaveCalm(sqrtf(x * x + z * z));
+        }
         out[k] = (unsigned char)(m * 255.0f + 0.5f);
     }
     return out;
 }
 
-std::vector<Rock> MakeRocks(uint32_t seed) {
+std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena) {
     std::vector<Rock> out;
     const std::vector<Harbour> ports = MakeHarbours(seed);
     auto nearPort = [&](float x, float z, float r) {
@@ -154,7 +159,39 @@ std::vector<Rock> MakeRocks(uint32_t seed) {
             if (!clear) add(kx, kz, kr, kh, true);
         }
     }
+    if (arena == ARENA_MAELSTROM) {
+        // Sea stacks standing in the maelstrom: something to grapple and drag yourself out by. Three in close, spaced
+        // round the eye so the swirl carries a ship in trouble past one of them, and three a step further out between
+        // them (stepping stones). The outer ring, where the fighting is, stays open water.
+        // (Their own generator, so the island ring is the same as on the Isles.)
+        Lcg m{seed * 2246822519u + 3266489917u};
+        m.F();
+        auto addM = [&](float x, float z, float r, float h) {
+            Rock k;
+            k.x = x; k.z = z; k.r = r; k.h = h; k.stack = true;
+            k.p = m.R(5.0f, 8.0f);
+            k.q = m.R(0.2f, 0.35f);
+            for (float& a : k.ph) a = m.R(0.0f, 2.0f * PI);
+            k.seed = (uint32_t)(m.F() * 4.0e9f);
+            out.push_back(k);
+        };
+        float base = m.R(0.0f, 2.0f * PI);
+        for (int i = 0; i < 6; ++i) {
+            bool inner = i < 3;
+            float ang = base + (i % 3) * (2.0f * PI / 3.0f) + (inner ? 0.0f : PI / 3.0f) + m.R(-0.25f, 0.25f);
+            float rr = inner ? m.R(180.0f, 210.0f) : m.R(245.0f, 295.0f);
+            float x = cosf(ang) * rr, z = sinf(ang) * rr;
+            addM(x, z, m.R(11.0f, 16.0f), m.R(34.0f, 52.0f));
+            int kids = (int)m.R(1.0f, 3.0f);
+            for (int j = 0; j < kids; ++j) addM(x + m.R(-30.0f, 30.0f), z + m.R(-30.0f, 30.0f), m.R(4.0f, 7.0f), m.R(8.0f, 18.0f));
+        }
+    }
     return out;
+}
+
+bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p) {
+    float H = RocksHeight(rocks, p.x, p.z);
+    return H >= p.y - 3.0f && H > -40.0f;
 }
 
 float RockCoast(const Rock& k, float a) {
@@ -397,8 +434,9 @@ float World::RandF() {
     return ((rng >> 8) & 0xFFFFFF) / 16777216.0f;
 }
 
-void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mode_, bool fleets_) {
+void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mode_, bool fleets_, uint8_t arena_) {
     weather = weather_;
+    arena = arena_ < ARENA_COUNT ? arena_ : ARENA_ISLES;
     timeOfDay = timeOfDay_;
     mode = mode_ < MODE_COUNT ? mode_ : MODE_FFA;
     fleets = fleets_;
@@ -408,14 +446,15 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     round = 1;
     oceanParams = MakeOceanParams(seed, weather);
     ocean.Init(oceanParams);
+    ocean.SetVortex(arena == ARENA_MAELSTROM);
     rng = seed * 2654435761u + 1;
     time = 0.0;
     tick = 0;
     for (auto& s : ships) s = Ship{};
     balls.clear();
     events.clear();
-    rocks = MakeRocks(seed);
-    ocean.SetDamp(MakeShoreDamp(rocks));
+    rocks = MakeRocks(seed, arena);
+    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM));
     harbours = MakeHarbours(seed);
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
@@ -478,11 +517,14 @@ void World::Respawn(Ship& s) {
     s.nextCls = (uint8_t)AllowedClass(s.nextCls);
     s.cls = s.nextCls;
     float ang = RandF() * 2 * PI;
-    float r = 220.0f + RandF() * 200.0f;
+    const bool whirl = arena == ARENA_MAELSTROM;  // (start well clear of the funnel)
+    float r = whirl ? maelstrom::spawnMin + RandF() * 200.0f : 220.0f + RandF() * 200.0f;
     if (!harbours.empty() && mode == MODE_TEAMS && s.team >= 0) {  // each side starts off its own harbour
         ang = harbours[s.team == 0 ? 0 : 2].ang + (RandF() - 0.5f) * 1.2f;
-        r = 280.0f + RandF() * 180.0f;
+        r = whirl ? maelstrom::spawnMin + RandF() * 180.0f : 280.0f + RandF() * 180.0f;
     }
+    for (int tries = 0; tries < 20 && RocksHeight(rocks, cosf(ang) * r, sinf(ang) * r) > -25.0f; ++tries) ang += 0.25f;  // not on a stack
+    if (!s.isBot && getenv("BS_SPAWNR")) r = (float)atof(getenv("BS_SPAWNR"));  // (testing: put the player this far out)
     float x = cosf(ang) * r, z = sinf(ang) * r;
     s.pos = {x, ocean.Height(x, z) + 1.0f, z};
     // face along the tangent so we start sailing around the arena
@@ -603,6 +645,23 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
                 e.pos = s.pos;
                 events.push_back(e);
             }
+        } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget == HOOK_ROCK) {
+            // made fast to the rocks: the whole pull is on us
+            if (!authoritative || (Vector3Distance(in.hookPoint, s.pos) < tune::hookRange * 1.15f && RockHookOk(rocks, in.hookPoint))) {
+                s.hooked = (int8_t)HOOK_ROCK;
+                s.hookAnchor = in.hookPoint;
+                s.hookTimer = tune::hookTime;
+                s.hookCd = tune::hookCooldown;
+                s.hookRest = Vector3Distance(in.hookPoint, s.pos);
+                if (authoritative) {
+                    GameEvent e{EventType::Hook};
+                    e.a = s.id;
+                    e.b = HOOK_ROCK;
+                    e.pos = s.pos;
+                    e.dir = in.hookPoint;
+                    events.push_back(e);
+                }
+            }
         } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget < MAX_SHIPS && in.hookTarget != s.id) {
             bool ok = true;
             if (authoritative) {
@@ -670,6 +729,11 @@ void World::StepShip(Ship& s, float dt) {
     const float g = tune::gravity * tune::shipGravityScale;
 
     float targetBuoy = s.alive ? 1.0f : 0.55f;  // wrecks sink slowly
+    if (ocean.Vortex()) {  // the maelstrom's eye: the water there won't hold a hull up
+        float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+        float k = Clamp((maelstrom::eye * 1.4f - r) / (maelstrom::eye * 0.8f), 0.0f, 1.0f);
+        targetBuoy *= 1.0f - 0.7f * k;
+    }
     s.buoyMul += (targetBuoy - s.buoyMul) * fminf(1.0f, dt * 1.5f);
 
     Vector3 F = {0, -P.mass * g, 0};
@@ -795,7 +859,13 @@ void World::StepShip(Ship& s, float dt) {
         // keel grip: kill sideways slip and hand most of it back as forward speed, so turns carve
         float grip = vl * tune::keelGrip * P.mass * inWater;
         F = Vector3Add(F, Vector3Scale(right, -grip));
-        F = Vector3Add(F, Vector3Scale(fwdH, fabsf(grip) * kSlide * (vf >= 0.0f ? 1.0f : -1.0f)));
+        // (in a maelstrom only the slip the hull makes itself carves: a current pushing on the beam isn't a sail)
+        float carry = fabsf(grip);
+        if (ocean.Vortex()) {
+            float vlG = Vector3DotProduct(s.vel, right);
+            carry = vl * vlG > 0.0f ? fminf(fabsf(vl), fabsf(vlG)) * tune::keelGrip * P.mass * inWater : 0.0f;
+        }
+        F = Vector3Add(F, Vector3Scale(fwdH, carry * kSlide * (vf >= 0.0f ? 1.0f : -1.0f)));
         // Rudder: a torque at the stern, fighting yaw resistance from however much hull is wet.
         // Floating level the two balance at tune::turnRate. When the bow lifts off a crest mid-carve
         // the rudder still bites but the resistance is gone, so the yaw rate whips up right at
@@ -846,8 +916,17 @@ void World::StepShip(Ship& s, float dt) {
         s.dashTimer = fmaxf(0.0f, s.dashTimer - dt);
         F = Vector3Add(F, Vector3Scale(Vector3Normalize({fwd.x, fwd.y * 0.3f, fwd.z}), tune::dashAccel * P.mass));
     }
-    // prediction: our end of a grappling line, towards where the client last saw the other ship
-    if (predicting && s.hooked >= 0 && s.alive) {
+    // prediction: a line to the rocks (same pull as UpdateHooks), or our end of one to another ship
+    if (predicting && s.hooked == (int8_t)HOOK_ROCK && s.alive) {
+        Vector3 d = Vector3Subtract(s.hookAnchor, s.pos);
+        float len = Vector3Length(d);
+        if (len > s.hookRest && len > 1e-3f) {
+            Vector3 n = Vector3Scale(d, 1.0f / len);
+            float vin = Vector3DotProduct(s.vel, n);
+            float a = Clamp((len - s.hookRest) * tune::hookStiff - vin * 1.5f, 0.0f, tune::hookRockAccel) * Clamp((tune::hookRockSpeed - vin) / 6.0f, 0.0f, 1.0f);
+            F = Vector3Add(F, Vector3Scale(n, a * P.mass));
+        }
+    } else if (predicting && s.hooked >= 0 && s.hooked < MAX_SHIPS && s.alive) {
         Vector3 d = Vector3Subtract(s.hookPos, s.pos);
         float len = Vector3Length(d);
         float rest = fmaxf(s.hookRest, tune::hookMinLen);
@@ -857,6 +936,18 @@ void World::StepShip(Ship& s, float dt) {
             float a = Clamp((len - rest) * tune::hookStiff + relv * 1.5f, 0.0f, tune::hookMaxAccel);
             float share = s.hookMass > 0.0f ? s.hookMass / (s.hookMass + P.mass) : 0.5f;
             F = Vector3Add(F, Vector3Scale(n, a * 2.0f * share * P.mass));
+        }
+    }
+    // The maelstrom: buoyancy here only pushes straight up, so on its own a hull carried round by the current
+    // would fly off the tangent. In the real thing the tilted surface (the pressure in the water) holds it on its
+    // circle, like the water itself: the same pull in, a little more so that the funnel slowly draws hulls down.
+    if (ocean.Vortex() && inWater > 0.0f) {
+        float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+        if (r < maelstrom::radius && r > 1.0f) {
+            float vt, vr;
+            maelstrom::Flow(r, vt, vr);
+            float a = fminf(vt * vt / r * tune::vortexHold, 14.0f) * inWater;
+            F = Vector3Add(F, {-s.pos.x / r * a * P.mass, 0.0f, -s.pos.z / r * a * P.mass});
         }
     }
     // soft arena boundary
@@ -988,7 +1079,7 @@ void World::RockCollide(Ship& s, bool authoritative) {
 
 void World::PlaceCrate(Crate& c) {
     for (int tries = 0; tries < 40; ++tries) {
-        float ang = RandF() * 2.0f * PI, r = 60.0f + RandF() * 560.0f;
+        float ang = RandF() * 2.0f * PI, r = arena == ARENA_MAELSTROM ? 130.0f + RandF() * 490.0f : 60.0f + RandF() * 560.0f;  // (some down the funnel: worth the risk?)
         float x = cosf(ang) * r, z = sinf(ang) * r;
         if (RocksHeight(rocks, x, z) > -8.0f) continue;
         bool crowded = false;
@@ -1110,6 +1201,7 @@ void World::UpdateBalls(float dt) {
 void World::BotThink(Ship& s, float dt) {
     PlayerInput& in = s.input;
     if (!s.alive) return;
+    const uint8_t dashBefore = in.dashSeq;
     s.botTimer -= dt;
     auto wrap = [](float a) {
         while (a > PI) a -= 2 * PI;
@@ -1125,13 +1217,6 @@ void World::BotThink(Ship& s, float dt) {
         float d = Vector3Distance(o.pos, s.pos);
         float sc = (mode == MODE_PIRATE && o.pirate) ? d * 0.2f : d;
         if (sc < score) { score = sc; best = d; target = &o; }
-    }
-    if (skills && s.dashCd <= 0.0f) {  // someone has had a line on us for a while: dash to snap it
-        const float wait = s.pirate ? 0.3f : 1.5f;  // (a human needs a moment to notice; the carrier is watching for it)
-        bool onLine = false;
-        for (const Ship& o : ships)
-            if (o.active && o.hooked == s.id && o.hookTimer < tune::hookTime - wait) onLine = true;
-        if (onLine && RandF() < (s.pirate ? 0.05f : 0.008f)) in.dashSeq++;
     }
     Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
     float heading = atan2f(fwd.x, fwd.z);
@@ -1275,7 +1360,8 @@ void World::BotThink(Ship& s, float dt) {
             if (best < 120.0f) desired += (s.botSide == 0 ? -0.5f : 0.5f);  // open the range
         }
     } else if (!cap) {
-        desired = atan2f(-s.pos.x, -s.pos.z) + 1.2f;  // circle the arena
+        float wide = arena == ARENA_MAELSTROM && s.pos.x * s.pos.x + s.pos.z * s.pos.z < 300.0f * 300.0f ? 1.9f : 1.2f;  // (out of the deep part)
+        desired = atan2f(-s.pos.x, -s.pos.z) + wide;  // circle the arena
     }
     // shoot whatever enemy is in reach, whatever we're doing
     const ShipClass& MC = ClassOf(s.cls);
@@ -1300,16 +1386,86 @@ void World::BotThink(Ship& s, float dt) {
             if (c.active && d < cb && (!target || d < best * 0.8f)) { cb = d; desired = atan2f(c.x - s.pos.x, c.z - s.pos.z); }
         }
     }
+    float dc = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+    if (ocean.Vortex()) {
+        // where a heading leads in the next `look` metres: the closest it comes to the eye
+        auto closestOnRay = [&](float hdg, float look) {
+            Vector2 d = {sinf(hdg), cosf(hdg)}, p = {s.pos.x, s.pos.z};
+            float t = Clamp(-(p.x * d.x + p.y * d.y), 0.0f, look);
+            return Vector2Length({p.x + d.x * t, p.y + d.y * t});
+        };
+        // a course across the deep part: go round it instead, along the circle, on the side the course was heading
+        float look = haveGoal ? fminf(goalDist, 450.0f) : 300.0f;
+        if (dc > maelstrom::botKeepOut && closestOnRay(desired, look) < maelstrom::botRoute) {
+            Vector2 d = {sinf(desired), cosf(desired)}, t = {s.pos.z / dc, -s.pos.x / dc};  // t: tangent (with the swirl)
+            if (d.x * t.x + d.y * t.y < 0.0f) t = {-t.x, -t.y};
+            float round = atan2f(t.x, t.y);
+            float outward = atan2f(s.pos.x, s.pos.z);
+            desired = round + wrap(outward - round) * Clamp((maelstrom::botRoute + 40.0f - dc) / 120.0f, 0.0f, 0.5f);
+        }
+        // no dashing towards the eye
+        if (in.dashSeq != dashBefore && closestOnRay(heading, 250.0f) < maelstrom::botKeepOut) in.dashSeq = dashBefore;
+        // hauled clear on a line to a stack: let go rather than sit tied to the rock in the current
+        if (s.hooked == (int8_t)HOOK_ROCK && dc > maelstrom::botKeepOut - 30.0f &&
+            Vector3Distance(s.pos, s.hookAnchor) < tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale + 15.0f)
+            in.hookSeq++;
+        // keep out of the funnel: from the rim in, steer out across the current, more the deeper we are
+        float kv = Clamp((maelstrom::botKeepOut - dc) / 90.0f, 0.0f, 1.0f);
+        if (kv > 0.0f) {
+            float out = atan2f(s.pos.x, s.pos.z), along = atan2f(s.pos.z, -s.pos.x);  // away from the eye / with the swirl
+            float esc = out + wrap(along - out) * 0.3f;
+            desired = heading + wrap(desired - heading) * (1.0f - kv) + wrap(esc - heading) * kv;
+            in.sail = fmaxf(in.sail, kv);
+            if (skills && dc < maelstrom::eye * 3.0f && s.dashCd <= 0.0f && fabsf(wrap(esc - heading)) < 0.6f) in.dashSeq++;
+            if (skills && s.hooked < 0 && s.hookCd <= 0.0f) {  // a stack further out within reach: grapple it and haul out
+                for (const Rock& k : rocks) {
+                    if (!k.stack || k.r < 8.0f || k.x * k.x + k.z * k.z < (dc + 40.0f) * (dc + 40.0f)) continue;
+                    Vector2 to = {s.pos.x - k.x, s.pos.z - k.z};
+                    float dk = Vector2Length(to);
+                    if (dk - k.r > tune::hookRange * 0.85f || dk < 1.0f) continue;
+                    float ax = k.x + to.x / dk * k.r * 0.75f, az = k.z + to.y / dk * k.r * 0.75f;
+                    Vector3 p = {ax, RocksHeight(rocks, ax, az) - 1.0f, az};
+                    if (!RockHookOk(rocks, p) || Vector3Distance(p, s.pos) > tune::hookRange) continue;
+                    in.hookTarget = HOOK_ROCK;
+                    in.hookPoint = p;
+                    in.hookSeq++;
+                    break;
+                }
+            }
+        }
+    }
     // stay off the rocks: turn for the middle near the wall, or when something solid is dead ahead
     // (harbours sit close to the wall, so heading for one is allowed in)
-    float dc = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
     float home = atan2f(-s.pos.x, -s.pos.z);
     // (escorts always have a goal, their slot, but only a captain heading for a harbour may go near the wall)
     bool harbourRun = haveGoal && !cap;
     float k = Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
     Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
     Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
-    if (RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f) k = 1.0f;
+    bool rockAhead = RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f;
+    if (ocean.Vortex() && !rockAhead)  // in a maelstrom the current sets us sideways: look where we're actually going too
+        for (float t : {1.5f, 3.0f, 4.5f}) {
+            Vector3 q = Vector3Add(s.pos, Vector3Scale({s.vel.x, 0.0f, s.vel.z}, t));
+            if (RocksHeight(rocks, q.x, q.z) > -6.0f) rockAhead = true;
+        }
+    if (rockAhead) {
+        k = 1.0f;
+        if (ocean.Vortex()) in.sail = fmaxf(in.sail, 0.85f);  // way on, or the current has the helm
+        // a stack out in the maelstrom: "turn for the middle" would be into the whirlpool and back onto the rock.
+        // Turn away from the rock instead, leaning out of the funnel.
+        if (ocean.Vortex() && dc < maelstrom::radius) {
+            const Rock* nr = nullptr;
+            float nd = 1e9f;
+            for (const Rock& r : rocks) {
+                float d = Vector2Distance({r.x, r.z}, {close.x, close.z}) - r.r;
+                if (r.x * r.x + r.z * r.z < 620.0f * 620.0f && d < nd) { nd = d; nr = &r; }
+            }
+            if (nr && nd < 120.0f) {
+                float away = atan2f(s.pos.x - nr->x, s.pos.z - nr->z), out = atan2f(s.pos.x, s.pos.z);
+                home = away + wrap(out - away) * 0.4f;
+            }
+        }
+    }
     desired = heading + wrap(desired - heading) * (1.0f - k) + wrap(home - heading) * k;
     float err = wrap(desired - heading);
     in.rudder = Clamp(-err * 2.0f, -1.0f, 1.0f);  // positive rudder turns to starboard (-x)
@@ -1430,12 +1586,34 @@ void World::SetPirate(int id) {
 void World::UpdateHooks(float dt) {
     for (Ship& s : ships) {
         if (!s.active || s.hooked < 0) continue;
+        if (s.hooked == (int8_t)HOOK_ROCK) {  // made fast to the rocks: reel ourselves in
+            s.hookTimer -= dt;
+            if (!s.alive || matchState != 0 || s.hookTimer <= 0.0f) {
+                GameEvent e{EventType::Hook};
+                e.a = s.id;
+                e.b = 255;
+                e.flags = 1;
+                e.pos = s.pos;
+                events.push_back(e);
+                s.hooked = -1;
+                continue;
+            }
+            float len = Vector3Distance(s.pos, s.hookAnchor);
+            s.hookRest = fmaxf(tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale, s.hookRest - tune::hookReel * dt);
+            if (len <= s.hookRest || len < 1e-3f) continue;
+            Vector3 n = Vector3Scale(Vector3Subtract(s.hookAnchor, s.pos), 1.0f / len);
+            float vin = Vector3DotProduct(s.vel, n);  // (hauls at most hookRockSpeed: a winch, not a catapult)
+            float a = Clamp((len - s.hookRest) * tune::hookStiff - vin * 1.5f, 0.0f, tune::hookRockAccel) * Clamp((tune::hookRockSpeed - vin) / 6.0f, 0.0f, 1.0f);
+            s.vel = Vector3Add(s.vel, Vector3Scale(n, a * dt));
+            continue;
+        }
+        if (s.hooked >= MAX_SHIPS) { s.hooked = -1; continue; }
         Ship& t = ships[s.hooked];
-        // a dash by the ship on the end of the line snaps it (the hooked ship's way out)
-        bool gone = !s.alive || !t.active || !t.alive || t.stowed || matchState != 0 || t.dashTimer > 0.0f;
+        // the line holds for its full time: only a sinking, a stowed ship or the round's end lets go early
+        bool gone = !s.alive || !t.active || !t.alive || t.stowed || matchState != 0;
         float len = Vector3Distance(s.pos, t.pos);
         s.hookTimer -= dt;
-        if (gone || s.hookTimer <= 0.0f || len > tune::hookBreak) {
+        if (gone || s.hookTimer <= 0.0f) {
             GameEvent e{EventType::Hook};
             e.a = s.id;
             e.b = 255;
@@ -1445,6 +1623,7 @@ void World::UpdateHooks(float dt) {
             s.hooked = -1;
             continue;
         }
+        if (Enemies(s, t)) t.lastAttacker = s.id;  // (drag them into the maelstrom or onto the rocks: your kill)
         float lens = tune::hookMinLen + hull::halfLength * (ClassOf(s.cls).scale + ClassOf(t.cls).scale);
         s.hookRest = fmaxf(lens, s.hookRest - tune::hookReel * dt);
         if (len <= s.hookRest || len < 1e-3f) continue;
@@ -1455,6 +1634,15 @@ void World::UpdateHooks(float dt) {
         // equal and opposite: each ship's share of the closing acceleration goes by the other's mass
         s.vel = Vector3Add(s.vel, Vector3Scale(n, a * 2.0f * mt / (ms + mt) * dt));
         t.vel = Vector3Subtract(t.vel, Vector3Scale(n, a * 2.0f * ms / (ms + mt) * dt));
+    }
+}
+
+// The maelstrom's eye grinds up whatever it holds (whoever last hit it, or had a line on it, gets the kill)
+void World::UpdateMaelstrom(float dt) {
+    for (Ship& s : ships) {
+        if (!s.active || s.stowed || !s.alive) continue;
+        float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
+        if (r < maelstrom::eye) Damage(s, maelstrom::eyeDamage * dt, -1);
     }
 }
 
@@ -1615,7 +1803,7 @@ void World::PlaceChest(Crate& c, bool random, float x, float z) {
         cove = (uint8_t)((prev + 1 + (int)(RandF() * (harbours.size() - 1))) % harbours.size());
         bool found = false;
         for (int tries = 0; tries < 120 && !found; ++tries) {
-            float ang = RandF() * 2.0f * PI, r = 60.0f + RandF() * 520.0f;
+            float ang = RandF() * 2.0f * PI, r = arena == ARENA_MAELSTROM ? 200.0f + RandF() * 380.0f : 60.0f + RandF() * 520.0f;
             x = cosf(ang) * r;
             z = sinf(ang) * r;
             found = RocksHeight(rocks, x, z) < -8.0f && toCove(x, z) >= tune::coveMinDist;
@@ -1735,7 +1923,8 @@ void World::PredictStep(Ship& s) {
     UpdateAirTime(s, dt, false);
     if (s.hooked >= 0) {  // the line reels in and gives out like on the server
         s.hookTimer -= dt;
-        s.hookRest = fmaxf(tune::hookMinLen, s.hookRest - tune::hookReel * dt);
+        float minLen = s.hooked == (int8_t)HOOK_ROCK ? tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale : tune::hookMinLen;
+        s.hookRest = fmaxf(minLen, s.hookRest - tune::hookReel * dt);
         if (s.hookTimer <= 0.0f) s.hooked = -1;
     }
     predicting = false;
@@ -1764,6 +1953,7 @@ void World::Step() {
         }
     }
     if (skills) UpdateHooks(dt);
+    if (ocean.Vortex()) UpdateMaelstrom(dt);
     Collisions();
     UpdateBalls(dt);
     UpdateCrates(dt);

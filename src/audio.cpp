@@ -418,10 +418,10 @@ const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash"
 // ---- live ambience (audio thread) ------------------------------------------------------------
 struct AmbienceGen {
     Rng r{12345};
-    OnePole seaLp[2], brown[2], surfHp[2], surfLp[2], rainHp, rainLp, master[2], under[2];
-    Biquad windBp[2], whistle, rushBp[2];
-    Wander swell[2], gust, whistleF, rushMod, surfMod[2];
-    float sea = 0, wind = 0, rush = 0, rain = 0, uw = 0;  // smoothed
+    OnePole seaLp[2], brown[2], surfHp[2], surfLp[2], rainHp, rainLp, master[2], under[2], roarLp[2], roarBrown[2];
+    Biquad windBp[2], whistle, rushBp[2], churnBp[2];
+    Wander swell[2], gust, whistleF, rushMod, surfMod[2], roarMod[2];
+    float sea = 0, wind = 0, rush = 0, rain = 0, uw = 0, roar = 0;  // smoothed
     float gustNow = 0.5f, rushNow = 0.5f;
     int ctr = 0;
     AmbienceGen() {
@@ -431,6 +431,9 @@ struct AmbienceGen {
             surfHp[c].Set(1800);
             surfLp[c].Set(6000);
             under[c].Set(350);
+            roarBrown[c].Set(18);
+            roarLp[c].Set(160);
+            churnBp[c].Band(260 + 60 * c, 0.6f);
         }
         rainHp.Set(2500);
         rainLp.Set(9000);
@@ -444,6 +447,7 @@ struct AmbienceGen {
                 rush += (tgt.rush - rush) * k * 2.0f;
                 rain += (tgt.rain - rain) * k;
                 uw += (tgt.underwater - uw) * k * 6.0f;
+                roar += (tgt.roar - roar) * k;
                 for (int c = 0; c < 2; ++c) windBp[c].Band(220 + 700 * gustNow * (0.8f + 0.2f * c), 1.3f);
                 whistle.Band(800 + 700 * whistleF.Next(r, 64 * 0.08f), 30);
                 for (int c = 0; c < 2; ++c) rushBp[c].Band(500 + 600 * rushNow, 0.8f);
@@ -468,7 +472,13 @@ struct AmbienceGen {
                 // rain
                 float rn = rainLp.Lp(rainHp.Hp(r.W())) * rain * 0.4f;
                 if (r.F() < rain * 0.002f) rn += r.W() * 0.6f * rain;  // big drops on the deck
-                float x = s + wn + rs + rn;
+                // the maelstrom: a deep throbbing rumble and the churn of water pouring down the throat
+                float ro = 0.0f;
+                if (roar > 0.001f) {
+                    float rmo = roarMod[c].Next(r, 0.5f);
+                    ro = (roarLp[c].Lp(roarBrown[c].Lp(r.W()) * 14.0f) * (0.55f + 0.6f * rmo) * 2.2f + churnBp[c].Run(r.W()) * 0.5f * rmo) * roar;
+                }
+                float x = s + wn + rs + rn + ro;
                 // under water everything goes dull and close
                 x = x + (under[c].Lp(x) * 1.6f - x) * uw;
                 out[i * 2 + c] = tanhf(x * 0.9f);
@@ -489,7 +499,7 @@ float volume = 1.0f;
 Vector3 lisPos{}, lisFwd{0, 0, 1};
 AudioStream ambStream{};
 AmbienceGen* amb = nullptr;
-std::atomic<float> aSea{0.6f}, aWind{0.2f}, aRush{0}, aRain{0}, aUnder{0};
+std::atomic<float> aSea{0.6f}, aWind{0.2f}, aRush{0}, aRain{0}, aUnder{0}, aRoar{0};
 struct Pending { double t; Id id; Vector3 pos; float vol, pitch; bool flat; };
 std::vector<Pending> pending;
 Rng prng(99);
@@ -499,6 +509,7 @@ void AmbCallback(void* buffer, unsigned int frames) {
     t.sea = aSea.load();
     t.wind = aWind.load();
     t.rush = aRush.load();
+    t.roar = aRoar.load();
     t.rain = aRain.load();
     t.underwater = aUnder.load();
     if (amb) amb->Render((float*)buffer, (int)frames, t);
@@ -603,6 +614,7 @@ void SetAmbience(const Ambience& a) {
     aSea = a.sea;
     aWind = a.wind;
     aRush = a.rush;
+    aRoar = a.roar;
     aRain = a.rain;
     aUnder = a.underwater;
 }

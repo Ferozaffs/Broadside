@@ -82,8 +82,18 @@ Landlubber for the captain who found the most rocks), and 18 seconds later a fre
 - **Ships allowed**: which of cutter / frigate / ship of the line players may pick. Bots keep to them too.
 - **Camera**: Free, or Deck to make everyone play from the quarterdeck (first person).
 - **Skills**: Dash (Shift) and grappling hook (E). A hooked line reels the two ships together for 7 seconds; the
-  pull is shared by weight, so a cutter that hooks a ship of the line is the one that gets dragged. It parts beyond
-  230 m, and the hooked ship can snap it by dashing. Bots hunting a treasure carrier use both.
+  pull is shared by weight, so a cutter that hooks a ship of the line is the one that gets dragged. Once it's on, the
+  line holds until its time is up (the ship holding it can let go early with E). Bots hunting a treasure carrier use both.
+  The hook also bites on rock: put the reticle on a cliff or a sea stack within 150 m ("E HOOK ROCK") and the line
+  hauls your own ship in towards it.
+- **Arena**: Isles (the open bay inside the island ring), or Maelstrom: a whirlpool that fills the bay, 1.2 km
+  across, falling away into a funnel 75 m deep. The outer half is a carousel: the water carries everyone round and
+  you can fight in it or sail straight across it. Further in, the pull gets stronger the deeper you go, until it
+  runs faster than you can sail: a ship of the line can't get out from inside ~100 m, a frigate ~80 m, a cutter
+  ~60 m (a dash buys a little more). The eye pulls a hull under and grinds it up. Six sea stacks stand round the deep
+  part, 180-300 m out: with skills on, grapple one and haul yourself out from where sailing alone can't (the swirl
+  carries you past one sooner or later). Mind them, too: the current will happily smash you into one. Whoever last
+  hit a ship, or had a line on it, gets the kill when the maelstrom takes it.
 
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
@@ -100,7 +110,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--time night`, `--weather storm`).
+(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--arena maelstrom`, `--time night`, `--weather storm`).
 
 ### Ship model
 

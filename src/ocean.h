@@ -67,6 +67,9 @@ public:
     const std::vector<unsigned char>& Damp() const { return damp; }
     float DampAt(float x, float z) const;
     bool Ready() const { return ready; }
+    // the maelstrom arena: a whirlpool's funnel and current on top of the waves (see maelstrom.h)
+    void SetVortex(bool on) { vortex = on; }
+    bool Vortex() const { return vortex; }
 
 private:
     void SampleRaw(float x, float z, float out[6]) const;
@@ -80,4 +83,5 @@ private:
     // spatial fields: dx, dz, h, ht, dxt, dzt (6 floats per cell)
     std::vector<float> field;
     std::vector<unsigned char> damp;
+    bool vortex = false;
 };

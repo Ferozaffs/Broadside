@@ -180,10 +180,41 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Skills (protocol v12): Shift dash (0.35 s x 55 m/s^2, 8 s cd), E grappling hook (150 m, 7 s, reel 10 m/s,
       mass-shared pull, parts at 230 m or when the hooked ship dashes, 12 s cd). Server-authoritative; prediction pulls our own end. Bot hunters
       dash and hook the carrier, the carrier dashes away; --autopilot uses both. BS_HOOKTEST=1, BS_SKILLS=1 (simtest).
-      Bots dash free of a line after 1.5 s (carriers 0.3 s). Pirate banking over 6 seeds: 46% with skills, 55% without.
+      A line holds for its full 7 s: no dash break, no distance break (only the hooker's E, a sinking or round end).
 - [x] Hit flash: was added before exposure, so at night one hit turned the screen white for ~0.2 s. Now a warm flare
       from the screen edges after tone mapping. Particles fade as the camera closes on them. Rope: pale hemp, wider.
 - [x] Deck-only is enforced under --autopilot too.
+
+## Maelstrom arena (2026-11-14)
+- [x] Host option ARENA: Isles / Maelstrom (protocol v13, arena byte in WELCOME; --arena maelstrom). Same island ring,
+      whirlpool filling the bay (600 m radius). src/maelstrom.h holds the shape and current (shaders/common.glsl
+      mirrors it): funnel 55 m bowl + 20 m throat, swirl 28 m/s peak at 70 m (~1/r outside), inflow 44/(1+(r/95)^2)
+      m/s (grows all the way in), fading out from 420 to 600 m. First version was 340 m: too small to fight in.
+      OceanCPU::Sample adds height and current, so ships, balls and particles all feel it; the waves calm to 30% in
+      the funnel via the shore-damp grid.
+- [x] Physics: the current drags hulls through the existing water-relative drag. Added an inward pull of 1.15x what
+      keeps a hull circling with the water (buoyancy is vertical only, so without it ships flew off the tangent), and
+      keel "slide carry" only counts slip the hull makes itself (otherwise the current on the beam became thrust).
+      Eye (26 m): buoyancy down to 30%, 22 hp/s; kill to the last attacker, and a hook now marks its target too.
+- [x] BS_MAELTEST: drifting at 350-500 m just circles (fight there); from 220 m swallowed in ~30 s, 130 m ~13 s.
+      Sailing straight out escapes from: cutter 75 m (not 55), frigate 95 m (not 75, but 75 with dashes), ship of
+      the line 120 m (not 95). Sailing across on a line aimed 100-350 m from the eye: every class gets through.
+- [x] Bots: route round the deep part (botRoute 235 m) instead of across it, steer out inside 215 m, never dash
+      towards the eye; spawns 400-600 m, crates 130+ m, treasure 200+ m. Bot matches (BS_ARENA=1, skills, 2 seeds):
+      0-2 swallowed per 6 min. Teams see fewer sinkings (the sides start on opposite rims and sail round).
+- [x] Look: funnel normal in the macro shape, flow-mapped small waves, spiral foam streaks advected in polar
+      coordinates, a dark throat, spray thrown round the rim, a roar in the ambience. Menu backdrop circles it.
+- [x] Rock hook (any arena): E with the reticle on rock within 150 m makes the line fast there (HOOK_ROCK = 64 in
+      hookTarget/hooked, the point in PlayerInput::hookPoint and Ship::hookAnchor, sent in snapshots only when set).
+      All the pull is on the ship (up to 30 m/s^2, easing off as it closes at 22 m/s); server and prediction alike.
+- [x] Maelstrom stacks: 3 at 180-210 m spaced round the eye + 3 at 245-295 m between them (own Lcg, the island ring
+      is unchanged). Rock colours follow the funnel's waterline. Rescue test (BS_MAELTEST): from 80 m a frigate or
+      ship of the line is swallowed alone, and gets out hooking the nearest stack, at once or when the swirl brings it
+      in reach. Bots (and --autopilot) grapple a stack further out when inside 215 m, let go once clear, look along
+      their drift as well as the bow for rocks, and turn away from a stack rather than "for the middle".
+- [ ] Bots hit the stacks a lot: 35-70 rock hits per 6-min match vs 15-30 on the Isles, mostly fleet escorts.
+- [ ] The chase camera can end up behind a stack (no camera collision with rocks).
+- [ ] Ideas: let it wander, or appear only in storms.
 
 ## Known issues / next
 - Deck view: the camera can clip into the quarterdeck structure when the ship pitches hard.
