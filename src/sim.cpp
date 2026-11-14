@@ -1277,6 +1277,17 @@ void World::BotThink(Ship& s, float dt) {
         // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
         wallLimit = Clamp(sqrtf(cap->pos.x * cap->pos.x + cap->pos.z * cap->pos.z) + 20.0f, 600.0f, 650.0f);
         if (gr > wallLimit) goal = Vector3Scale(goal, wallLimit / gr);
+        // the captain going into a harbour: follow him in line astern down the middle of the mouth
+        // (abreast, the outer slots are among the stacks either side of it)
+        for (const Harbour& h : harbours) {
+            Vector2 axis = {h.x / 730.0f, h.z / 730.0f};
+            float rad = cap->pos.x * axis.x + cap->pos.z * axis.y, lat = fabsf(cap->pos.x * axis.y - cap->pos.z * axis.x);
+            if (rad < 520.0f || lat > 90.0f) continue;
+            float back = rad - 55.0f * (float)(s.slot + 1);
+            goal = {axis.x * back, 0.0f, axis.y * back};
+            wallLimit = fmaxf(wallLimit, rad + 20.0f);
+            break;
+        }
         float ds = flat(goal, s.pos);
         s.catchUp = Clamp((ds - 15.0f) / 60.0f, 0.0f, 1.0f) * tune::escortCatchUp;
         // Hopelessly far off (thrown by a jump, stuck on a rock, left behind by a speed power-up):
@@ -1381,7 +1392,17 @@ void World::BotThink(Ship& s, float dt) {
 
     float goalDist = 1e9f;
     if (haveGoal) {
-        desired = atan2f(goal.x - s.pos.x, goal.z - s.pos.z);
+        // Bound for a harbour: the stacks either side of its mouth are left standing, so line up on it from the
+        // open water inside first and come in straight, instead of cutting the corner along the rim.
+        Vector3 aim = goal;
+        for (const Harbour& h : harbours) {
+            if (Vector2Distance({h.x, h.z}, {goal.x, goal.z}) > 40.0f) continue;
+            Vector2 axis = {h.x / 730.0f, h.z / 730.0f};  // (harbours sit 730 m out)
+            float rad = s.pos.x * axis.x + s.pos.z * axis.y, lat = fabsf(s.pos.x * axis.y - s.pos.z * axis.x);
+            if (lat > 45.0f + fmaxf(0.0f, 600.0f - rad) * 0.6f) aim = {axis.x * 540.0f, 0.0f, axis.y * 540.0f};
+            break;
+        }
+        desired = atan2f(aim.x - s.pos.x, aim.z - s.pos.z);
         goalDist = flat(goal, s.pos);
         bool nearWall = sqrtf(goal.x * goal.x + goal.z * goal.z) > 650.0f;
         if (s.leader < 0 && nearWall) in.sail = fminf(in.sail, Clamp(goalDist / 160.0f, 0.15f, 1.0f));  // ease into harbour
@@ -1491,9 +1512,15 @@ void World::BotThink(Ship& s, float dt) {
             Vector3 q = Vector3Add(s.pos, Vector3Scale({s.vel.x, 0.0f, s.vel.z}, t));
             if (RocksHeight(rocks, q.x, q.z) > -6.0f) rockAhead = true;
         }
+    // escorts out by the wall: no sprinting to catch up, it carries them past the captain's turn and into the rocks
+    if (cap) s.catchUp *= 1.0f - k;
     if (rockAhead) {
         k = 1.0f;
         if (ocean.Vortex()) in.sail = fmaxf(in.sail, 0.85f);  // way on, or the current has the helm
+        else {  // ease off so the turn is tighter (but keep steerage way)
+            in.sail = fminf(in.sail, 0.55f);
+            s.catchUp *= 0.3f;
+        }
         // a stack out in the maelstrom: "turn for the middle" would be into the whirlpool and back onto the rock.
         // Turn away from the rock instead, leaning out of the funnel.
         if (ocean.Vortex() && dc < maelstrom::radius) {

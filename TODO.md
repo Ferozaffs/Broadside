@@ -268,15 +268,51 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       12k triangles, clothes as the first material (the game tints only that). Not the pack's UE sample mannequins.
 - [x] All three pirate outfits (sailor, sailor_2, sailor_3: Full_01-03 with the pack's other skin and hair albedos);
       each gun station / crewman keeps one.
-- [ ] The camera can end up inside rigging or sails; on a cutter the scaled-down deck is cramped for a full-size man.
+- [x] The camera inside rigging or sails: the lit shader dithers away anything within 0.8 m of the eye (Bayer 4x4, not
+      in the shadow pass). On a cutter the scaled-down deck is still cramped for a full-size man.
+
+## After v0.11 (2026-11-14, "check 3, 6 and 7, then playtests and a gameplay review")
+- [x] Performance (GTX 1060, 1600x900, 25-32 ships): chase camera 60 fps (vsync), deck views 52-60. BS_PERFLOG prints
+      fps every 5 s and [hitch] lines (per-section times, and the swap). The cost up close is overdraw, not LOD.
+      CrewModel caches the last pose; bot gunners beyond 140 m aren't drawn; figures beyond 50 m share timing.
+- [x] Footsteps (sfx::Step, six synthesised boots on planking): yours a stride apart, a creak on a ladder or step,
+      other crewmen's within 30 m from their gait.
+- [x] Escorts after hard turns: tried following the captain's wake (a trail of where he sailed) and full sail through
+      the turn. Neither beat the fixed slots in simtest (slot error / distance from the captain), so both reverted.
+- [x] Bots aground by harbours: a ship bound for a harbour lines up on it from the open water inside and comes in
+      straight (the stacks either side of the mouth are left standing); escorts follow the captain into a harbour in
+      line astern; a ship with rocks dead ahead eases to half sail, and escorts out by the wall stop sprinting to catch
+      up (that carried them past the captain's turn and into the rocks behind the harbour). Over 3 seeds x 3 modes:
+      rock hits 196 -> 104, by harbours 50 -> 36 (the rest: badly damaged ships scraping as they go down).
+      simtest prints "rock hits (n by harbours), stuck by a harbour"; BS_ROCKLOG / BS_ESCTRACE=name for detail.
+- [x] v0.8.0 release zip: README.txt carried an older copy of itself; trimmed and re-uploaded.
+- [x] New trailer (playtest/make_trailer_v11.py, from the QA footage) and README GIF.
+- [x] QA (playtest/qa_v11.sh: crew, captain, pirate, storm teams, maelstrom, night, deck view, two-copy network crew):
+  - Crew autopilot stuck for 20-40 s: in a well in the deck it couldn't climb out of (0.87 > the 0.8 step), or
+    pushing at a hole it had no path to. Now: a scramble out of anything below the main deck (up to 1.25), the
+    nearest hole first and one it makes no headway on for 4 s skipped for 20 s, and a rescue (onto the nearest open
+    main deck) when boxed in (fewer than 160 reachable cells) or, on autopilot, getting nowhere for 5 s.
+  - Gunner's eye stood right behind the breech (the line's dark gun filled half the screen): now beside the gun,
+    whichever side is clear of posts (ShipModel::WallAt).
+  - The captain's order banner sat on top of the AIRBORNE pill; the holes warning under it. Moved.
+  - Overboard / back-aboard feed lines piled up: once per 20 s (the big banner still shows), and 5 s to find your
+    feet after climbing back aboard before a heel can throw you off again.
+  - Sunk crewmen were offered the class cards (the captain chooses the ship). Hidden for crew.
+  - The crew tag ("CREW · CPT. X'S SHIP OF THE LINE") overflowed its panel: tracked labels measured as plain text
+    (ui::MeasureLabel).
 
 ## Known issues / next
 - Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;
   it now stands on the model's quarterdeck (ShipModel::DeckAt) behind the rail. Figures closer than 2.2 m to the
   camera aren't drawn.
-- Escorts: ~50-70 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
-  reform. In bot matches they average ~200 m from an erratic bot captain (fighting, chasing crates).
-- Bots still run aground near harbours now and then.
+- Escorts: ~70-90 m off their slot behind a straight-sailing captain; after a hard U-turn they take ~10-15 s to
+  reform (they keep way on and swing wide). Behind a lone bot captain ~125-160 m off their slots (out by the wall they
+  no longer sprint to catch up: the price of fewer groundings). In bot matches ~150-180 m from the captain.
+- Crew view under water: a ship of the line landing a 4-5 s jump (power-ups) goes 6-13 m under; a cutter in a storm
+  dunks every few seconds. The physics is as intended for captains, but crew spend a lot of time looking at the sea
+  from below. Options: shallower landings for crewed ships, or a quicker pop-up.
+- Captain's deck view on the ship of the line looking abeam: the eye is only just above its high bulwark and the gun
+  crews stand on the raised carriage cells by the rail.
 - Two-PC network test still never done (one-PC host + client works).
 
 ## Later / ideas

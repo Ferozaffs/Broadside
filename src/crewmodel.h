@@ -23,6 +23,7 @@ private:
     float unit = 1.0f;  // to metres
     int locSkinned = -1;
     int bodyMesh = 0;
+    int lastAnim = -1, lastFrame = -1;  // the pose the bone matrices hold (sailors in step share it)
     bool textured = false;
     Shader shader{};
 };

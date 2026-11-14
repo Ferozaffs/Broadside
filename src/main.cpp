@@ -285,6 +285,13 @@ public:
     Vector3 crewLocal{};
     float crewFoot = 3.0f, crewYaw = 0.0f, crewPitch = 0.0f;
     bool crewPlaced = false;
+    float stepAcc = 0.0f;
+    double lastLadder = 0.0;
+    double aboardTime = -100.0, overboardFeed = -100.0;
+    // crew autopilot: the hole we're heading for, the closest we've got and when; holes we couldn't reach
+    int apLeakGoal = -1;
+    float apLeakClosest = 0.0f;
+    double apLeakSince = 0.0, apLeakSkip[MAX_LEAKS] = {};  // when we last came back aboard / last told the feed we went over
     int8_t crewGun = -1, crewRepair = -1;
     double crewGunAsked = -10.0;
     uint8_t crewFire = 0;
@@ -309,6 +316,10 @@ public:
     int pathGoal = -1;
     double pathTime = -10.0;
     bool DeckStep(float fromFoot, float x, float z) const;
+    int DeckReach(int cap) const;  // how many deck cells we can walk to from here (stops counting at cap)
+    void CrewRescue();             // boxed in: scramble out onto the nearest open main deck
+    Vector3 stuckAnchor{};         // where we were when we last made headway, and since when
+    double stuckSince = 0.0;
     Vector3 StationSpot(const ShipModel& M, Vector3 st) const;
     Vector3 PathNext(Vector3 goal);
     Material figMat{};
@@ -3451,7 +3462,7 @@ void Game::DrawHUD() {
     }
 
     if (matchState == 1) DrawResults(W, H);
-    if (me && (!(me->flags & SF_ALIVE) || matchState == 1)) {
+    if (me && crewId < 0 && (!(me->flags & SF_ALIVE) || matchState == 1)) {
         float cw = fminf(860.0f, W - 80);
         Rectangle area = {W * 0.5f - cw * 0.5f, H - (matchState == 1 ? 210.0f : 250.0f), cw, 84};
         Label(matchState == 1 ? "NEXT ROUND YOU SAIL  (1 / 2 / 3)" : "CHOOSE YOUR NEXT SHIP  (1 / 2 / 3)", W * 0.5f, area.y - 22, 12, kGold, Center);
@@ -3654,7 +3665,8 @@ void Game::GoOverboard(const char* why) {
     swimVel = Vector3Add(Vector3Add(S.vel, Vector3Scale(Vector3Normalize({out.x, 0.0f, out.z}), 6.0f)), {0, 4.0f, 0});
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, S.rot);
     swimYaw = atan2f(f.x, f.z) + crewYaw;
-    Feed(TextFormat("MAN OVERBOARD! %s", why), ui::kRed);
+    if (GetTime() - overboardFeed > 20.0) Feed(TextFormat("MAN OVERBOARD! %s", why), ui::kRed);  // (the big banner says it anyway)
+    overboardFeed = GetTime();
     shake = fmaxf(shake, 0.8f);
 }
 
@@ -3666,7 +3678,8 @@ void Game::ComeAboard(Vector3 local, const char* msg) {
     crewFoot = DeckModel().Walkable(h) ? h : DeckModel().DeckLevel();
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, S.rot);
     crewYaw = remainderf(swimYaw - atan2f(f.x, f.z), 2.0f * PI);
-    if (msg) Feed(msg, ui::kGreen);
+    if (msg && GetTime() - aboardTime > 20.0) Feed(msg, ui::kGreen);
+    aboardTime = GetTime();
 }
 
 // can a crewman with feet at fromFoot step onto (x, z)? (rungs and steps; the big step only onto the high decks; railings block)
@@ -3685,7 +3698,49 @@ bool Game::DeckStep(float fromFoot, float x, float z) const {
     const ShipModel& M = DeckModel();
     float h = M.DeckAt(x, z);
     float up = h - fromFoot;
-    return M.Walkable(h) && (up < 0.8f || (up < 1.25f && M.HighDeck(h))) && !M.WallAt(x, z, fmaxf(fromFoot, h));
+    bool scramble = up < 1.25f && (M.HighDeck(h) || fromFoot < M.DeckLevel() - 0.5f);
+    return M.Walkable(h) && (up < 0.8f || scramble) && !M.WallAt(x, z, fmaxf(fromFoot, h));
+}
+
+int Game::DeckReach(int cap) const {
+    const float D = 0.25f, X0 = -6.0f, Z0 = -20.0f;
+    const int NX = 48, NZ = 168;
+    int i0 = (int)floorf((crewLocal.x - X0) / D), j0 = (int)floorf((crewLocal.z - Z0) / D);
+    if (i0 < 0 || j0 < 0 || i0 >= NX || j0 >= NZ) return cap;
+    std::vector<char> seen(NX * NZ, 0);
+    std::vector<std::pair<int, float>> q{{j0 * NX + i0, crewFoot}};
+    seen[j0 * NX + i0] = 1;
+    for (size_t h = 0; h < q.size() && (int)q.size() < cap; ++h) {
+        int c = q[h].first;
+        const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+        for (int k = 0; k < 4; ++k) {
+            int i = c % NX + di[k], j = c / NX + dj[k];
+            if (i < 0 || j < 0 || i >= NX || j >= NZ || seen[j * NX + i]) continue;
+            float x = X0 + (i + 0.5f) * D, z = Z0 + (j + 0.5f) * D;
+            if (!DeckStep(q[h].second, x, z)) continue;
+            seen[j * NX + i] = 1;
+            q.push_back({j * NX + i, DeckModel().DeckAt(x, z)});
+        }
+    }
+    return (int)q.size();
+}
+
+void Game::CrewRescue() {
+    const ShipModel& M = DeckModel();
+    float best = 1e9f;
+    Vector3 to = crewLocal;
+    for (float x = -5.0f; x <= 5.0f; x += 0.25f)
+        for (float z = -18.0f; z <= 20.0f; z += 0.25f) {
+            float h = M.DeckAt(x, z);
+            if (!M.Walkable(h) || fabsf(h - M.DeckLevel()) > 0.4f || M.WallAt(x, z, h)) continue;
+            float d = (x - crewLocal.x) * (x - crewLocal.x) + (z - crewLocal.z) * (z - crewLocal.z);
+            if (d > 0.5f && d < best) { best = d; to = {x, h, z}; }
+        }
+    if (best > 1e8f) return;
+    crewLocal = to;
+    crewFoot = to.y;
+    pathGoal = -1;  // (a fresh path from here)
+    sfx::PlayFlat(sfx::Creak, 0.3f, 1.2f);
 }
 
 // The next spot to walk to on the way to `goal`: a breadth-first search over the deck grid from where we stand
@@ -3798,7 +3853,7 @@ void Game::CrewInputUpdate(float dt) {
     if (!crewOverboard && (S.flags & SF_ALIVE)) {
         Vector3 up = Vector3RotateByQuaternion({0, 1, 0}, S.rot);
         heelT = up.y < 0.3f && S.airTime <= 0.0f ? heelT + dt : 0.0f;  // knocked down in the water, not a flip in the air
-        if (heelT > 0.5f) GoOverboard("She went over on her beam ends and you went with her.");
+        if (heelT > 0.5f && GetTime() - aboardTime > 5.0) GoOverboard("She went over on her beam ends and you went with her.");
         else if (prevShipAir > 2.5f && S.airTime <= 0.0f && GetRandomValue(0, 99) < (crewGun >= 0 ? 10 : 25))
             GoOverboard("That landing threw you clean off the deck.");
     }
@@ -3887,15 +3942,37 @@ void Game::CrewInputUpdate(float dt) {
         float step = tune::crewWalk * (run ? 1.5f : 1.0f) / C.scale * dt;
         if (l > 1e-4f) {
             // in small steps, so a fast frame can't skip through a wall
+            Vector3 before = crewLocal;
             int n = (int)ceilf(step / 0.1f);
             for (int k = 0; k < n; ++k) CrewWalk(dx / l * step / n, dz / l * step / n);
+            // footsteps: one a stride; a creak going up or down a ladder
+            stepAcc += Vector2Distance({before.x, before.z}, {crewLocal.x, crewLocal.z}) * C.scale;
+            // Getting nowhere: boxed in a corner of the deck the walk can't climb out of (or, on autopilot, can't find
+            // a way round). Scramble out onto the open main deck.
+            if (Vector2Distance({stuckAnchor.x, stuckAnchor.z}, {crewLocal.x, crewLocal.z}) * C.scale > 0.4f) {
+                stuckAnchor = crewLocal;
+                stuckSince = GetTime();
+            } else if (GetTime() - stuckSince > 3.0 && (DeckReach(160) < 160 || (opt.autopilot && GetTime() - stuckSince > 5.0))) {
+                CrewRescue();
+                stuckAnchor = crewLocal;
+                stuckSince = GetTime();
+            }
+            if (stepAcc > (run ? 1.05f : 0.8f)) {
+                stepAcc = 0.0f;
+                sfx::PlayFlat(sfx::Step, run ? 0.5f : 0.35f, 0.9f + 0.2f * GetRandomValue(0, 100) / 100.0f);
+            }
         }
     }
+    else stuckSince = GetTime();  // (standing still on purpose)
     if (crewGun >= 0) {  // at the gun (or the wheel, the sails): stand at its station
         Vector3 st = StationSpot(DeckModel(), IsGunJob(crewGun) ? GunStation(S.cls, crewGun / MAX_GUNS, crewGun % MAX_GUNS) : JobStation(crewGun));
         if (DeckModel().Walkable(st.y)) { crewLocal.x = st.x; crewLocal.z = st.z; }
     }
     float h = DeckModel().DeckAt(crewLocal.x, crewLocal.z);
+    if (h > -50.0f && fabsf(h - crewFoot) * C.scale > 0.35f && GetTime() - lastLadder > 0.6) {  // a step or a ladder rung
+        lastLadder = GetTime();
+        sfx::PlayFlat(sfx::Creak, 0.25f, 1.3f);
+    }
     if (h > -50.0f) crewFoot += (h - crewFoot) * fminf(1.0f, dt * 14.0f);
     crewLocal.y = crewFoot;
 
@@ -3940,8 +4017,17 @@ void Game::CrewAutopilot(float dt, float& mx, float& mz) {
     Vector3 goal{};
     bool haveGoal = false;
     int leak = -1;
-    for (const NetLeak& l : leakView)
-        if (l.ship == myId) { leak = l.slot; goal = StationSpot(DeckModel(), LeakStation(l.local)); haveGoal = true; break; }
+    float leakBest = 1e9f;
+    for (const NetLeak& l : leakView) {
+        if (l.ship != myId || l.slot >= MAX_LEAKS || GetTime() < apLeakSkip[l.slot]) continue;
+        Vector3 st = StationSpot(DeckModel(), LeakStation(l.local));
+        float d = Vector2Distance({st.x, st.z}, {crewLocal.x, crewLocal.z});
+        if (d < leakBest) { leakBest = d; leak = l.slot; goal = st; haveGoal = true; }
+    }
+    if (haveGoal && leakBest * C.scale > tune::crewReach) {  // headway towards it?
+        if (leak != apLeakGoal || leakBest < apLeakClosest - 0.3f) { apLeakGoal = leak; apLeakClosest = leakBest; apLeakSince = GetTime(); }
+        else if (GetTime() - apLeakSince > 4.0) { apLeakSkip[leak] = GetTime() + 20.0; apLeakGoal = -1; }
+    } else apLeakGoal = -1;
     int tgt = -1;
     float best = 900.0f;
     for (int id = 0; id < MAX_SHIPS; ++id) {
@@ -3998,7 +4084,22 @@ void Game::CrewCamera(float dt) {
     float sc = ClassOf(S.cls).scale;
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, S.rot);
     float yw = atan2f(f.x, f.z) + crewYaw;
-    Vector3 eye = HullToWorld(S.pos, S.rot, {crewLocal.x, crewFoot + 1.65f / sc, crewLocal.z}, sc);
+    // working a gun we stand beside it, not right behind the breech (where it fills half the view): ahead of it or
+    // astern, or a step inboard, whichever side is clear of the model's posts and bulkheads
+    float gunSide = 0.0f, gunIn = 0.0f, gunUp = 0.0f;
+    if (IsGunJob(crewGun)) {
+        gunUp = 0.15f;
+        const ShipModel& M = DeckModel();
+        const float in = crewLocal.x > 0.0f ? -1.0f : 1.0f;
+        const Vector2 tries[] = {{0.75f, 0.0f}, {-0.75f, 0.0f}, {0.5f, 0.4f}, {-0.5f, 0.4f}, {0.0f, 0.5f}};
+        for (Vector2 t : tries) {
+            bool clear = true;
+            for (float f : {0.5f, 1.0f})  // (the way there too)
+                clear = clear && !M.WallAt(crewLocal.x + in * t.y * f / sc, crewLocal.z + t.x * f / sc, crewFoot);
+            if (clear) { gunSide = t.x; gunIn = in * t.y; break; }
+        }
+    }
+    Vector3 eye = HullToWorld(S.pos, S.rot, {crewLocal.x + gunIn / sc, crewFoot + (1.65f + gunUp) / sc, crewLocal.z + gunSide / sc}, sc);
     if (crewOverboard) {  // head just above the waves
         yw = swimYaw;
         eye = Vector3Add(swimPos, {0, 1.65f, 0});
@@ -4040,8 +4141,10 @@ void Game::DrawFigures() {
         float camD = Vector3Distance(Vector3Add(foot, {0, 1.0f, 0}), rv.pos);
         if (camD > 260.0f || camD < 2.2f) return;  // (not one standing in the camera)
         if (crewOutfits > 0) {  // the animated sailor: running while they move, working at a gun or a hole, else idling
+            if (bot && camD > 140.0f) return;  // (a gun crew that far off is a few pixels)
             int anim = swing > 0.25f ? CrewModel::RUN : (figWork ? CrewModel::WORK : CrewModel::IDLE);
-            float t = anim == CrewModel::RUN ? phase / 6.2832f * 0.32f : (float)GetTime() + figOffset;
+            // far off, everyone keeps the same time, so a crowd shares one pose per outfit
+            float t = anim == CrewModel::RUN ? phase / 6.2832f * 0.32f : (float)GetTime() + (camD < 50.0f ? figOffset : 0.0f);
             crewModels[figOutfit % crewOutfits].Draw(foot, q, anim, t, shirt, bot ? Color{214, 208, 192, 255} : Color{46, 52, 70, 255});
             return;
         }
@@ -4113,7 +4216,12 @@ void Game::DrawFigures() {
         g.last = c.local;
         float v = dt > 1e-4f ? moved / dt : 0.0f;
         g.speed += (Clamp(v / tune::crewWalk, 0.0f, 1.0f) - g.speed) * fminf(1.0f, dt * 8.0f);
+        float before = g.phase;
         g.phase += v * dt * 3.2f;
+        if (floorf(g.phase / PI) != floorf(before / PI) && g.speed > 0.2f) {  // a foot down: heard close by
+            Vector3 at = HullToWorld(S.pos, S.rot, c.local, ClassOf(S.cls).scale);
+            if (Vector3Distance(at, rv.pos) < 30.0f) sfx::Play(sfx::Step, at, 0.3f, 0.95f);
+        }
         Quaternion q = QuaternionMultiply(S.rot, QuaternionFromAxisAngle({0, 1, 0}, c.yaw));
         figWork = c.gun >= 0 || c.repair >= 0;
         figOffset = (float)i * 3.0f;
@@ -4166,7 +4274,7 @@ void Game::DrawCrewHUD(float W, float H) {
     }
     if (holes > 0 && alive) {
         const char* t = TextFormat("%d HOLE%s TAKING WATER   \xC2\xB7   HOLD F AT A HOLE TO PATCH IT", holes, holes > 1 ? "S" : "");
-        Text(t, W * 0.5f, H * 0.2f, 17, A(kRed, 0.9f), true, Center);
+        Text(t, W * 0.5f, fmaxf(H * 0.2f, 162.0f), 17, A(kRed, 0.9f), true, Center);  // (below the order banner)
     }
     if (IsGunJob(crewGun) && alive && matchState == 0) {  // working a gun: its reload, the range we're laying it for
         float rl = mine && mine->c.gun == crewGun ? mine->c.gunReload : 0.0f;
@@ -4244,7 +4352,7 @@ void Game::DrawCrewHUD(float W, float H) {
         float pulse = GetTime() - crewOrderTime < 3.0 ? 0.6f + 0.4f * sinf((float)GetTime() * 8.0f) : 1.0f;
         std::string t = std::string("CAPTAIN'S ORDER:  ") + kOrderText[crewOrder];
         Vector2 m = Measure(t.c_str(), 18, true);
-        Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 40, m.x + 32, 30};
+        Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 114, m.x + 32, 30};
         Panel(r, A(kPanel, a), 8);
         Text(t.c_str(), W * 0.5f, r.y + 5, 18, A(kGold, a * pulse), true, Center);
     }
@@ -4252,7 +4360,7 @@ void Game::DrawCrewHUD(float W, float H) {
     {
         std::string who = TextToUpper(NameOf(myId).c_str()), cls = TextToUpper(C.name);  // (TextToUpper shares one buffer)
         std::string t = TextFormat("CREW   \xC2\xB7   %s'S %s", who.c_str(), cls.c_str());
-        Vector2 m = Measure(t.c_str(), 13, false);
+        Vector2 m = MeasureLabel(t.c_str(), 13);  // (labels are tracked out: wider than the plain text)
         Rectangle r = {24, 46, m.x + 28, 26};
         Panel(r, kPanel, 8);
         Label(t.c_str(), r.x + 14, r.y + 7, 13, kDim);
@@ -4261,6 +4369,29 @@ void Game::DrawCrewHUD(float W, float H) {
 
 void Game::Frame() {
     float dt = fminf(GetFrameTime(), 0.1f);
+    if (getenv("BS_PERFLOG") && mode == Mode::Playing) {  // (testing: frame times every 5 s)
+        static double since = GetTime();
+        static int frames = 0;
+        static float worst = 0.0f, sum = 0.0f;
+        float ft = GetFrameTime();
+        ++frames;
+        sum += ft;
+        worst = fmaxf(worst, ft);
+        if (GetTime() - since > 5.0) {
+            int ships = 0, near = 0;
+            for (int i = 0; i < MAX_SHIPS; ++i)
+                if (view[i].present) {
+                    ++ships;
+                    if (Vector3Distance(view[i].s.pos, rv.pos) < 220.0f) ++near;
+                }
+            printf("[perf] %.0f fps avg, worst frame %.1f ms, %d ships (%d within 220 m), %zu particles\n", frames / sum, worst * 1000.0f,
+                   ships, near, fx.Count());
+            fflush(stdout);
+            since = GetTime();
+            frames = 0;
+            sum = worst = 0.0f;
+        }
+    }
     BeginDrawing();
     if (mode == Mode::Menu || mode == Mode::Connecting) {
         if (mode == Mode::Connecting) {
@@ -4301,9 +4432,14 @@ void Game::Frame() {
         DrawLanternHalos(true);
         DrawMenu();
     } else {
+        // (BS_PERFLOG: where a slow frame went)
+        static double mark[8];
+        const bool prof = getenv("BS_PERFLOG") != nullptr;
+        if (prof) mark[0] = GetTime();
         PollNet();
         if (mode != Mode::Playing) { EndDrawing(); return; }
         Interpolate();
+        if (prof) mark[1] = GetTime();
         if (getenv("BS_ROLETEST")) {  // (test: sign on as crew at 8 s, change ship at 18 s, back to a ship of our own at 28 s)
             static int step = 0;
             double t = GetTime() - sessionStart;
@@ -4318,6 +4454,7 @@ void Game::Frame() {
         }
         ApplyPrediction(dt);
         PlayEvents();
+        if (prof) mark[2] = GetTime();
         Vector3 focus = (myId >= 0 && view[myId].present) ? view[myId].s.pos : Vector3{0, 0, 0};
         if (IsCrew()) CrewCamera(dt);
         else UpdateCamera(dt, focus);
@@ -4334,13 +4471,27 @@ void Game::Frame() {
             rv.pos = Vector3Add(rv.target, {16.0f, 7.0f, 16.0f});
             rv.fovy = 55;
         }
+        if (prof) mark[3] = GetTime();
         SpawnShipFx(dt);
         UpdateParticles(dt);
+        if (prof) mark[4] = GetTime();
         UpdateAtmosphere(dt, false);
         UpdateSound(dt, false);
+        if (prof) mark[5] = GetTime();
         RenderWorld(dt, false);
         DrawLanternHalos(false);
+        if (prof) mark[6] = GetTime();
         DrawHUD();
+        if (prof) {
+            mark[7] = GetTime();
+            static double lastEnd = 0.0;
+            if (GetFrameTime() > 0.05f && lastEnd > 0.0)
+                printf("[hitch] %.0f ms frame: gap before %.1f, net %.1f, input %.1f, camera %.1f, fx %.1f, sound %.1f, render %.1f, hud %.1f ms\n",
+                       GetFrameTime() * 1000.0f, (mark[0] - lastEnd) * 1000.0, (mark[1] - mark[0]) * 1000.0, (mark[2] - mark[1]) * 1000.0,
+                       (mark[3] - mark[2]) * 1000.0, (mark[4] - mark[3]) * 1000.0, (mark[5] - mark[4]) * 1000.0, (mark[6] - mark[5]) * 1000.0,
+                       (mark[7] - mark[6]) * 1000.0);
+            lastEnd = mark[7];
+        }
     }
     // automated screenshots: in a match, time since joining; in the menu, time since launch
     double shotClock = mode == Mode::Playing ? GetTime() - sessionStart : (opt.start == Options::Menu ? GetTime() : -1.0);
@@ -4352,7 +4503,16 @@ void Game::Frame() {
         quit = true;
     }
     if (!opt.recordPath.empty() && mode == Mode::Playing) RecordFrame();
+    const double swapFrom = GetTime();
     EndDrawing();
+    if (getenv("BS_PERFLOG") && mode == Mode::Playing && GetTime() - sessionStart > 3.0) {  // (where a slow frame went)
+        static double frameStart = 0.0;
+        double now = GetTime(), swap = now - swapFrom, total = now - frameStart;
+        if (frameStart > 0.0 && total > 0.05)
+            printf("[hitch] %.0f ms frame: %.1f ms of it in the swap (EndDrawing), %.1f ms before it\n", total * 1000.0, swap * 1000.0,
+                   (swapFrom - frameStart) * 1000.0);
+        frameStart = now;
+    }
 }
 
 // ============================================================================

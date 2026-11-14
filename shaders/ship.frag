@@ -100,9 +100,23 @@ vec3 IslandSurface(vec3 p, inout vec3 n) {
     return col;
 }
 
+// 4x4 ordered dither threshold in 0..1
+float Bayer4(vec2 p) {
+    ivec2 i = ivec2(mod(p, 4.0));
+    int k = i.x + i.y * 4;
+    const float m[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    return (m[k] + 0.5) / 16.0;
+}
+
 void main() {
     vec4 tex = texture(texture0, vUV);
     if (tex.a < 0.4) discard;  // alpha-tested rigging / ropes
+    // anything right up against the eye (a rope, a sail, a mast you're standing in on deck) dithers away
+    // instead of filling the screen
+    if (uShadowPass < 0.5) {
+        float cd = distance(vWorld, uCamPos);
+        if (cd < 0.8 && Bayer4(gl_FragCoord.xy) > clamp((cd - 0.3) / 0.5, 0.0, 1.0)) discard;
+    }
     vec3 base = pow(colDiffuse.rgb * vColor.rgb * tex.rgb, vec3(2.2));
 
     // ---- battle damage ----

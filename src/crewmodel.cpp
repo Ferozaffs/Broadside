@@ -61,6 +61,8 @@ bool CrewModel::Load(const char* dir, Shader lit, const char* name) {
     locSkinned = GetShaderLocation(lit, "uSkinned");
     // bind-pose height tells the units (Mixamo can come through in centimetres)
     UpdateModelAnimationBones(model, anims[animIdx[IDLE]], 0);
+    lastAnim = IDLE;
+    lastFrame = 0;
     BoundingBox bb = GetModelBoundingBox(model);
     float h = bb.max.y - bb.min.y;
     unit = h > 10.0f ? 1.8f / h : 1.0f;
@@ -80,7 +82,12 @@ void CrewModel::Draw(Vector3 foot, Quaternion q, int anim, float t, Color shirt,
     const ModelAnimation& A = anims[animIdx[anim < 0 || anim >= ANIM_COUNT ? 0 : anim]];
     int frame = (int)(t * 60.0f) % (A.frameCount > 0 ? A.frameCount : 1);
     if (frame < 0) frame += A.frameCount;
-    UpdateModelAnimationBones(model, A, frame);
+    int a = anim < 0 || anim >= ANIM_COUNT ? 0 : anim;
+    if (a != lastAnim || frame != lastFrame) {  // (a crowd in step costs one pose)
+        UpdateModelAnimationBones(model, A, frame);
+        lastAnim = a;
+        lastFrame = frame;
+    }
     Matrix world = MatrixMultiply(MatrixMultiply(MatrixScale(unit, unit, unit), QuaternionToMatrix(q)), MatrixTranslate(foot.x, foot.y, foot.z));
     world = MatrixMultiply(model.transform, world);
     float on = 1.0f, off = 0.0f;

@@ -43,6 +43,10 @@ inline void Text(const char* t, float x, float y, float size, Color c, bool bold
     DrawTextEx(f, t, {x, y}, size, sp, c);
 }
 // Small caps-style label: uppercase, tracked out
+inline Vector2 MeasureLabel(const char* t, float size) {
+    size += 1.5f;
+    return MeasureTextEx(F().bold, t, size, size * 0.14f);
+}
 inline void Label(const char* t, float x, float y, float size, Color c, Align al = Left) {
     Font& f = F().bold;
     size += 1.5f;  // tracked caps read small; keep them legible at 720p

@@ -261,6 +261,28 @@ Buf SynthWhoosh(uint32_t seed) {
     return b;
 }
 
+// a boot coming down on planking: a dull thud of the deck and the click of the heel
+Buf SynthStep(uint32_t seed) {
+    Rng r(seed);
+    Buf b = Make(0.22f);
+    float ph = 0, f0 = r.R(85, 125);
+    Biquad click;
+    click.Band(r.R(900, 1700), r.R(2, 4));
+    Biquad board;
+    board.Band(r.R(220, 320), r.R(5, 9));
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR;
+        ph += TAU * f0 * (1.0f + 0.4f * expf(-t / 0.01f)) / SR;
+        float thud = sinf(ph) * Env(t, 0.002f, 0.045f);
+        float n = r.W();
+        b[i] = thud * 1.1f + click.Run(n) * expf(-t / 0.008f) * 2.2f + board.Run(n) * expf(-t / 0.05f) * 1.4f;
+    }
+    Reverb(b, 0.12f, 0.5f, 0.06f, seed + 1);
+    FadeOut(b, 0.06f);
+    Normalize(b, 0.8f);
+    return b;
+}
+
 Buf SynthCreak(uint32_t seed) {
     // stick-slip: a train of tiny impulses at a wandering rate, ringing two wood resonances
     Rng r(seed);
@@ -408,12 +430,13 @@ std::vector<Buf> Variants(Id id) {
         case Treasure: v.push_back(SynthTreasure()); break;
         case Sink: for (uint32_t s = 1; s <= 2; ++s) v.push_back(SynthSink(s * 41)); break;
         case Confirm: v.push_back(SynthConfirm()); break;
+        case Step: for (uint32_t s = 1; s <= 6; ++s) v.push_back(SynthStep(s * 43)); break;
         default: break;
     }
     return v;
 }
 
-const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm"};
+const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm", "step"};
 
 // ---- live ambience (audio thread) ------------------------------------------------------------
 struct AmbienceGen {
