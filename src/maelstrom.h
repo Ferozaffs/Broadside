@@ -13,20 +13,20 @@
 
 namespace maelstrom {
 constexpr float radius = 600.0f;       // m: the outer edge, where the water starts to turn (the island ring is ~660 m)
-constexpr float depth = 55.0f;         // m: how far the bowl falls
-constexpr float bowl = 110.0f;         // m: bowl width (the walls are steepest about here)
-constexpr float throatDepth = 20.0f;   // m: the narrow pit in the middle, on top of the bowl
-constexpr float throat = 22.0f;        // m
+constexpr float depth = 90.0f;         // m: how far the bowl falls
+constexpr float bowl = 190.0f;         // m: bowl width (the walls are steepest about here)
+constexpr float throatDepth = 30.0f;   // m: the narrow pit in the middle, on top of the bowl
+constexpr float throat = 38.0f;        // m
 constexpr float swirl = 28.0f;         // m/s peak current round the funnel...
-constexpr float swirlCore = 70.0f;     // ...at this radius (falls off ~1/r outside it)
+constexpr float swirlCore = 120.0f;    // ...at this radius (falls off ~1/r outside it)
 constexpr float inflow = 44.0f;        // m/s current in towards the eye, at the eye...
-constexpr float inflowCore = 95.0f;    // ...halving by this radius, and dying away fast beyond it
-constexpr float eye = 30.0f;           // m: inside this the eye drags a hull under
+constexpr float inflowCore = 165.0f;   // ...halving by this radius, and dying away fast beyond it
+constexpr float eye = 50.0f;           // m: inside this the eye drags a hull under
 constexpr float eyeDamage = 22.0f;     // hp per second in the eye
 constexpr float calm = 0.3f;           // wave height down in the funnel (share of the open sea)
 constexpr float spawnMin = 400.0f;     // ships (re)appear at least this far out
-constexpr float botKeepOut = 215.0f;   // bots steer out when they get inside this...
-constexpr float botRoute = 235.0f;     // ...and sail round the deep part rather than across it
+constexpr float botKeepOut = 330.0f;   // bots steer out when they get inside this...
+constexpr float botRoute = 360.0f;     // ...and sail round the deep part rather than across it
 
 inline float Bowl(float r) { return 1.0f / (1.0f + (r / bowl) * (r / bowl)); }
 // surface offset (negative: down) at distance r from the centre

@@ -50,16 +50,16 @@ inline Atmos MakeAtmos(int tod, int weather, Vector2 windDir) {
             break;
         case TOD_NIGHT:
             a.sunDir = dirAt(0.6f);           // the moon
-            a.sunColor = {0.055f, 0.08f, 0.14f};  // a thin moon: night is for lanterns and tracers
-            a.zenith = {0.0015f, 0.003f, 0.009f};
-            a.horizon = {0.007f, 0.011f, 0.021f};
-            a.fogColor = {0.014f, 0.02f, 0.03f};
+            a.sunColor = {0.012f, 0.017f, 0.03f};  // a sliver of moon: night is for lanterns, flashes and tracers
+            a.zenith = {0.0005f, 0.001f, 0.003f};
+            a.horizon = {0.002f, 0.0032f, 0.006f};
+            a.fogColor = {0.003f, 0.0045f, 0.007f};
             a.night = 1.0f;
-            a.exposure = 1.45f;
+            a.exposure = 1.25f;
             a.lanterns = 1.0f;
-            a.ambient = {0.03f, 0.04f, 0.07f};
-            a.smokeSun = {0.08f, 0.10f, 0.15f};
-            bright = 0.04f;
+            a.ambient = {0.01f, 0.013f, 0.022f};
+            a.smokeSun = {0.025f, 0.03f, 0.045f};
+            bright = 0.012f;
             break;
         default:  // noon
             a.sunDir = dirAt(0.95f);

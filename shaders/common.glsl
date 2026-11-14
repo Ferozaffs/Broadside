@@ -23,8 +23,8 @@ uniform float uLightning;
 uniform vec4 uVortex;           // maelstrom arena: xy centre (world xz), z = 1 when there is one
 
 // ---- the maelstrom (same formulas as src/maelstrom.h: keep them in step) ----
-const float kVortexR = 600.0, kVortexDepth = 55.0, kVortexBowl = 110.0, kThroatDepth = 20.0, kThroat = 22.0;
-const float kSwirl = 28.0, kSwirlCore = 70.0, kInflow = 44.0, kInflowCore = 95.0;
+const float kVortexR = 600.0, kVortexDepth = 90.0, kVortexBowl = 190.0, kThroatDepth = 30.0, kThroat = 38.0;
+const float kSwirl = 28.0, kSwirlCore = 120.0, kInflow = 44.0, kInflowCore = 165.0;
 float VortexBowl(float r) { return 1.0 / (1.0 + (r / kVortexBowl) * (r / kVortexBowl)); }
 float VortexHeightR(float r) {
     if (r >= kVortexR) return 0.0;

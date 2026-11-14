@@ -174,7 +174,7 @@ void main() {
 
         vec3 specular = uSunColor * F * G * Beckmann(ndoth, a);
         specular /= 4.0 * max(0.001, max(dot(macroNormal, lightDir), 0.0));
-        specular *= NdotL * sh;
+        specular *= NdotL * sh * mix(1.0, 0.2, uNight);  // (a sliver of moon: only a faint glitter path at night)
 
         vec3 refl = reflect(-viewDir, N);
         refl.y = abs(refl.y);
@@ -203,7 +203,7 @@ void main() {
 
         outCol = (1.0 - F) * body + specular + F * envReflection;
         outCol = max(outCol, vec3(0.0));
-        outCol = mix(outCol, kFoamColor * (0.35 + 0.65 * uSunColor.g) * mix(0.55, 1.0, sh), clamp(foam, 0.0, 1.0));
+        outCol = mix(outCol, kFoamColor * (mix(0.35, 0.01, uNight) + 0.65 * uSunColor.g) * mix(0.55, 1.0, sh), clamp(foam, 0.0, 1.0));
         outCol *= 1.0 - 0.85 * eyeDark * eyeDark;  // looking down the throat
     } else {
         // ---------------- seen from below: Snell's window ----------------
@@ -223,7 +223,7 @@ void main() {
             above += uSunColor * pow(max(dot(r, uSunDir), 0.0), 300.0) * 6.0;
             outCol = mix(above, deep, Fu);
         }
-        outCol = mix(outCol, kFoamColor * 0.25, clamp(foam, 0.0, 1.0) * 0.8);
+        outCol = mix(outCol, kFoamColor * 0.25 * mix(1.0, 0.08, uNight), clamp(foam, 0.0, 1.0) * 0.8);
     }
     fragColor = vec4(outCol, 1.0);
 }

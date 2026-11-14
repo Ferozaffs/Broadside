@@ -111,10 +111,10 @@ constexpr float dashAccel = 55.0f;         // m/s^2 along the heading (also in t
 constexpr float dashCooldown = 8.0f;
 constexpr float hookRange = 150.0f;        // m
 constexpr float hookTime = 7.0f;           // s the line holds
-constexpr float hookReel = 10.0f;          // m/s the line is reeled in
+constexpr float hookReel = 18.0f;          // m/s the line is reeled in
 constexpr float hookMinLen = 24.0f;        // m (hull lengths are added on top)
-constexpr float hookStiff = 2.6f;          // m/s^2 per metre of stretch
-constexpr float hookMaxAccel = 26.0f;
+constexpr float hookStiff = 4.5f;          // m/s^2 per metre of stretch
+constexpr float hookMaxAccel = 45.0f;
 constexpr float hookCooldown = 12.0f;
 // crew mode: players aboard someone else's ship, working guns and patching holes
 constexpr float crewReach = 3.2f;          // m: how close a crewman must stand to a gun or a hole
@@ -125,8 +125,8 @@ constexpr float crewWalk = 4.5f;           // m/s on deck
 constexpr float helmTurn = 1.15f;          // a crewman at the wheel: she answers the helm this much quicker...
 constexpr float trimSpeed = 1.06f;         // ...and one tending the sails gets this much more out of them
 constexpr float orderEvery = 8.0f;         // s between a bot captain's orders to a human crew
-constexpr float hookRockAccel = 30.0f;     // m/s^2 max pull of a line made fast to the rocks (all of it on the ship)...
-constexpr float hookRockSpeed = 22.0f;     // ...easing off as we close on the rock at this speed
+constexpr float hookRockAccel = 50.0f;     // m/s^2 max pull of a line made fast to the rocks (all of it on the ship)...
+constexpr float hookRockSpeed = 34.0f;     // ...easing off as we close on the rock at this speed
 constexpr float rakeBonus = 0.25f;         // raking fire (a ball in at the bow or stern, down the length of the decks):
                                            // +0 on a cutter's short deck .. +25% down a ship of the line's
 constexpr float rakeCos = 0.82f;           // how close to the keel line it must travel (~35 deg)

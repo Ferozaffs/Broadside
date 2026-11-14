@@ -1,6 +1,7 @@
 ﻿// Broadside - over-the-top physics galleon PVP on an FFT ocean.
 #include "gl43.h"
 #include "net.h"
+#include "maelstrom.h"
 #include "ocean_gpu.h"
 #include "protocol.h"
 #include "raylib.h"
@@ -336,7 +337,7 @@ public:
     void DrawFigures();
     void DrawCrewHUD(float W, float H);
     int curArena = ARENA_ISLES, oceanArena = -1, menuArena = -1;
-    bool InEye(Vector3 p) const { return curArena == ARENA_MAELSTROM && p.x * p.x + p.z * p.z < 45.0f * 45.0f; }
+    bool InEye(Vector3 p) const { return curArena == ARENA_MAELSTROM && p.x * p.x + p.z * p.z < maelstrom::eye * maelstrom::eye * 2.25f; }
     uint8_t dashSeq = 0, hookSeq = 0, hookAim = 255;
     Vector3 hookPoint{};
     int HookCandidate(Vector3 dir) const;
@@ -4440,8 +4441,13 @@ void Game::Frame() {
             else if (step == 1 && t > 18.0) { SetRole(2); step = 2; }
             else if (step == 2 && t > 28.0) { SetRole(ROLE_CAPTAIN); step = 3; }
         }
-        if (IsCrew()) CrewInputUpdate(dt);
-        else {
+        if (IsCrew()) {
+            CrewInputUpdate(dt);
+            // No ship of our own to predict, so nothing moves the "present" clock the water is drawn at: crew see
+            // the sea at the same moment as the (interpolated) ship they stand on, or it freezes.
+            predTime = renderTime;
+            pred.ocean.Update(predTime);
+        } else {
             Reconcile();
             UpdateInput(dt);
         }

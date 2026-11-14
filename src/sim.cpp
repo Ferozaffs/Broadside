@@ -179,7 +179,7 @@ std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena) {
         for (int i = 0; i < 6; ++i) {
             bool inner = i < 3;
             float ang = base + (i % 3) * (2.0f * PI / 3.0f) + (inner ? 0.0f : PI / 3.0f) + m.R(-0.25f, 0.25f);
-            float rr = inner ? m.R(180.0f, 210.0f) : m.R(245.0f, 295.0f);
+            float rr = inner ? m.R(250.0f, 290.0f) : m.R(380.0f, 450.0f);  // (inner: in reach of a ship in trouble)
             float x = cosf(ang) * rr, z = sinf(ang) * rr;
             addM(x, z, m.R(11.0f, 16.0f), m.R(34.0f, 52.0f));
             int kids = (int)m.R(1.0f, 3.0f);

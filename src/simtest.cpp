@@ -119,7 +119,7 @@ int RunSimTest() {
             g.rounds = false;
             g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
             g.skills = true;  // (the last one dashes whenever it can)
-            const float r0[] = {500, 350, 220, 130, 200, 120, 95, 75, 55, 75};
+            const float r0[] = {560, 450, 330, 220, 330, 210, 165, 130, 95, 130};
             const int K = 10;
             int id[K];
             for (int k = 0; k < K; ++k) {
@@ -133,7 +133,7 @@ int RunSimTest() {
                 s.vel = {0, 0, 0};
                 s.input.sail = k < 4 ? 0.0f : 1.0f;
             }
-            printf("maelstrom, %s (drifting from 500/350/220/130 m | full sail out from 200/120/95/75/55 m, and 75 m dashing): r [m] / hp / air\n", ClassOf(cls).name);
+            printf("maelstrom, %s (drifting from 560/450/330/220 m | full sail out from 330/210/165/130/95 m, and 130 m dashing): r [m] / hp / air\n", ClassOf(cls).name);
             float air[K] = {}, maxUp[K] = {};
             int dead[K] = {};
             const int dbg = getenv("BS_MAELDBG") ? atoi(getenv("BS_MAELDBG")) : -1;
@@ -190,7 +190,7 @@ int RunSimTest() {
             g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
             const Rock* st = nullptr;
             for (const Rock& k : g.rocks)
-                if (k.stack && k.r > 9.0f && k.x * k.x + k.z * k.z < 260.0f * 260.0f) { st = &k; break; }
+                if (k.stack && k.r > 9.0f && k.x * k.x + k.z * k.z < 360.0f * 360.0f) { st = &k; break; }
             if (!st) { printf("no inner stack!\n"); break; }
             float sa = atan2f(st->z, st->x);
             const float ang[3] = {sa, sa + PI, sa + 1.05f};  // (the swirl carries ships towards smaller atan2(z, x))
@@ -198,7 +198,7 @@ int RunSimTest() {
             for (int k = 0; k < 3; ++k) {
                 id[k] = g.AddShip("h", false, cls);
                 Ship& sh = g.ships[id[k]];
-                sh.pos = {cosf(ang[k]) * 80.0f, 0, sinf(ang[k]) * 80.0f};
+                sh.pos = {cosf(ang[k]) * 140.0f, 0, sinf(ang[k]) * 140.0f};
                 sh.pos.y = g.ocean.Height(sh.pos.x, sh.pos.z) + 0.5f;
                 sh.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(sh.pos.x, sh.pos.z));
                 sh.vel = {0, 0, 0};
@@ -237,7 +237,7 @@ int RunSimTest() {
                 g.Step();
                 g.events.clear();
             }
-            printf("maelstrom rescue, %s from 80 m (stack at %.0f m): ", ClassOf(cls).name, sqrtf(st->x * st->x + st->z * st->z));
+            printf("maelstrom rescue, %s from 140 m (stack at %.0f m): ", ClassOf(cls).name, sqrtf(st->x * st->x + st->z * st->z));
             const char* nm[3] = {"hooked at once", "no rock", "hooked when in reach"};
             for (int k = 0; k < 3; ++k)
                 printf("%s%s: %s", k ? ", " : "", nm[k],
@@ -249,7 +249,7 @@ int RunSimTest() {
             World g;
             g.rounds = false;
             g.Init(5, 0, 0, MODE_FFA, false, ARENA_MAELSTROM);
-            const float miss[] = {350, 250, 180, 130, 100};
+            const float miss[] = {500, 420, 320, 230, 175};
             int id[5];
             for (int k = 0; k < 5; ++k) {
                 id[k] = g.AddShip("x", false, cls);
@@ -259,7 +259,7 @@ int RunSimTest() {
                 s.rot = QuaternionFromAxisAngle({0, 1, 0}, PI * 0.5f);  // heading +x
                 s.vel = {0, 0, 0};
             }
-            printf("maelstrom crossing, %s, aiming to pass %s m from the eye: closest / where it ended up\n", ClassOf(cls).name, "350/250/180/130/100");
+            printf("maelstrom crossing, %s, aiming to pass %s m from the eye: closest / where it ended up\n", ClassOf(cls).name, "500/420/320/230/175");
             float closest[5] = {1e9f, 1e9f, 1e9f, 1e9f, 1e9f};
             int sunk[5] = {};
             for (int i = 0; i < 60 * 50; ++i) {
@@ -803,7 +803,7 @@ duels:
                     if (firstKill < 0.0f) firstKill = g.time;
                     if (g.time < 120.0f) kills2++;
                     kills++;
-                    if (arena == ARENA_MAELSTROM && e.pos.x * e.pos.x + e.pos.z * e.pos.z < 40.0f * 40.0f) {
+                    if (arena == ARENA_MAELSTROM && e.pos.x * e.pos.x + e.pos.z * e.pos.z < (maelstrom::eye + 10.0f) * (maelstrom::eye + 10.0f)) {
                         swallowed++;
                         if (e.a < MAX_SHIPS) fed++;
                     }
@@ -815,7 +815,7 @@ duels:
                     aground++;
                     if (e.value > 6.0f) groundings++;
                     float rr = sqrtf(e.pos.x * e.pos.x + e.pos.z * e.pos.z);
-                    rockAt[rr < 260.0f ? 0 : rr < 520.0f ? 1 : 2]++;
+                    rockAt[rr < 360.0f ? 0 : rr < 520.0f ? 1 : 2]++;
                     if (e.a < MAX_SHIPS && g.ships[e.a].isBot && g.ships[e.a].leader >= 0) rockEscort++;
                     for (const Harbour& h : g.harbours)
                         if (Vector2Distance({h.x, h.z}, {e.pos.x, e.pos.z}) < 220.0f) {
@@ -854,7 +854,7 @@ duels:
                 for (const Ship& x : g.ships)
                     if (x.active && x.alive && !x.stowed) {
                         samples++;
-                        if (x.pos.x * x.pos.x + x.pos.z * x.pos.z < 150.0f * 150.0f) inFunnel++;
+                        if (x.pos.x * x.pos.x + x.pos.z * x.pos.z < 260.0f * 260.0f) inFunnel++;
                     }
             if (getenv("BS_ESCTRACE") && i % 60 == 0 && i < 20 * 60)
                 for (const Ship& x : g.ships)
@@ -896,7 +896,7 @@ duels:
         }
         if (g.skills) printf(", skills: %d dashes, %d hooks", dashes, hookups);
         if (arena == ARENA_MAELSTROM)
-            printf(", maelstrom: %d swallowed (%d credited to an enemy), %.1f%% of ship time inside 150 m, rock hits inner/outer stacks/ring %d/%d/%d (%d by escorts)",
+            printf(", maelstrom: %d swallowed (%d credited to an enemy), %.1f%% of ship time inside 260 m, rock hits inner/outer stacks/ring %d/%d/%d (%d by escorts)",
                    swallowed, fed, samples ? 100.0f * inFunnel / samples : 0.0f, rockAt[0], rockAt[1], rockAt[2], rockEscort);
         printf("\n");
     }
