@@ -73,6 +73,7 @@ constexpr float airPitchLevel = 3.0f;       // rad/s^2 per unit of pitch error: 
 constexpr float airPitchDamp = 1.8f;        // 1/s pitch-rate damping in the air
 constexpr float airPitchTarget = 0.06f;     // fwd.y to aim for: a touch bow-up
 constexpr float dunkBuoyancy = 1.5f;       // extra buoyancy once the deck is under (pops ships back up)
+constexpr float dunkBuoyancyCrew = 4.5f;   // the same with human crew aboard (their view goes under with the deck)
 constexpr float planing = 1.35f;            // how hard rising water under a fast hull throws it up
 constexpr float planingMax = 13.0f;        // m/s cap on that throw (keeps launches big, not orbital)
 constexpr float muzzleSpeed = 95.0f;
@@ -88,7 +89,8 @@ constexpr float recoilImpulse = 2.2e5f;     // per cannon
 constexpr float arenaRadius = 1000.0f;     // soft push back (the island ring is the real wall)
 constexpr float rockDamage = 0.9f;         // per m/s of impact over 8 m/s
 // power-ups from floating crates
-constexpr int crateCount = 7;
+constexpr int crateCount = 12;
+constexpr float crateMiddle = 0.6f;        // share of crates floated in the middle of the bay (ships spawn round it)
 constexpr float crateRespawn = 10.0f;      // s before a picked-up crate reappears somewhere else
 constexpr float powerMin = 15.0f, powerMax = 30.0f;  // seconds a power-up lasts
 constexpr float rapidReload = 0.4f;        // reload time multiplier
@@ -324,6 +326,7 @@ struct Ship {
     float gunReload[2][MAX_GUNS] = {};
     Leak leaks[MAX_LEAKS];
     bool helmed = false, trimmed = false;  // a crewman at the wheel / tending the sails
+    bool crewed = false;                   // human crew aboard: she pops back up from a dunk faster (they're looking out)
     float orderTimer = 0.0f;               // bot captains: next order to the crew
     int8_t lastOrder = -1;
     std::vector<PendingShot> pending;

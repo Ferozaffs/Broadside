@@ -762,7 +762,10 @@ void World::StepShip(Ship& s, float dt) {
     Vector3 T = {0, 0, 0};
     float subVol = 0.0f, sternVol = 0.0f, bowVol = 0.0f;
     // a dunked hull pops back up harder than it floats (keeps landings to a dunk, not a dive)
-    float dunk = s.alive ? 1.0f + tune::dunkBuoyancy * Clamp(s.depthBelow / 4.0f, 0.0f, 1.0f) : 1.0f;
+    float dunk = !s.alive ? 1.0f
+                 : s.crewed ? 1.0f + tune::dunkBuoyancyCrew * Clamp(s.depthBelow / 2.5f, 0.0f, 1.0f) *
+                                         Clamp(1.0f - s.vel.y / 7.0f, 0.0f, 1.0f)  // (a quick rise, not a launch)
+                            : 1.0f + tune::dunkBuoyancy * Clamp(s.depthBelow / 4.0f, 0.0f, 1.0f);
     Vector3 waterVelAvg = {0, 0, 0};
     float waterW = 0.0f;
 
@@ -1101,14 +1104,19 @@ void World::RockCollide(Ship& s, bool authoritative) {
 
 void World::PlaceCrate(Crate& c) {
     for (int tries = 0; tries < 40; ++tries) {
-        float ang = RandF() * 2.0f * PI, r = arena == ARENA_MAELSTROM ? 130.0f + RandF() * 490.0f : 60.0f + RandF() * 560.0f;  // (some down the funnel: worth the risk?)
+        // Most crates float in the middle, between where the ships spawn (220-420 m out): racing for them brings
+        // everyone together sooner. The rest anywhere. (Maelstrom: some down the funnel, worth the risk?)
+        float ang = RandF() * 2.0f * PI;
+        float r = arena == ARENA_MAELSTROM ? 130.0f + RandF() * 490.0f
+                  : RandF() < tune::crateMiddle ? 40.0f + RandF() * 240.0f
+                                                : 60.0f + RandF() * 560.0f;
         float x = cosf(ang) * r, z = sinf(ang) * r;
         if (RocksHeight(rocks, x, z) > -8.0f) continue;
         bool crowded = false;
         for (const Ship& s : ships)
             if (s.active && Vector2Distance({s.pos.x, s.pos.z}, {x, z}) < 80.0f) crowded = true;
         for (const Crate& o : crates)
-            if (o.active && &o != &c && Vector2Distance({o.x, o.z}, {x, z}) < 150.0f) crowded = true;
+            if (o.active && &o != &c && Vector2Distance({o.x, o.z}, {x, z}) < 110.0f) crowded = true;
         c.x = x;
         c.z = z;
         if (!crowded) break;
@@ -1778,6 +1786,7 @@ void World::UpdateCrew(float dt) {
     for (Ship& s : ships) s.mannedMask = 0, s.crewCount = 0, s.helmed = s.trimmed = false;
     for (const Crewman& c : crew)
         if (c.active && c.ship >= 0 && ships[c.ship].active) ships[c.ship].crewCount++;
+    for (Ship& s : ships) s.crewed = s.crewCount > 0;
     for (Crewman& c : crew) {
         if (!c.active) continue;
         if (c.ship < 0 || !ships[c.ship].active) {  // our ship's gone (its captain left): find another

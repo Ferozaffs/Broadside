@@ -1736,6 +1736,7 @@ void Game::Reconcile() {
     s.pirate = (ns->flags & SF_PIRATE) != 0;
     s.helmed = (ns->flags & SF_HELM) != 0;  // (crew at the wheel / the sails: the prediction steers like the server)
     s.trimmed = (ns->flags & SF_TRIM) != 0;
+    s.crewed = (ns->flags & SF_CREW) != 0;
     s.maxHp = ns->maxHp;
     s.team = ns->team;
     s.lastFireSeq = ackedFireSeq;
@@ -1966,20 +1967,12 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::BigAir: {
+            // (no feed lines or air-time callouts for jumps: they crowded out the fighting. A spin of your own
+            // still gets its number over the ship.)
             int deg = e.b * 180;
             bool clean = e.flags & EF_CLEAN;
-            bool feedIt = e.a == myId || (IsCaptain(e.a) && (deg >= 360 || e.value > 3.5f));  // only the big ones from others
-            if (!feedIt) {
-            } else if (deg >= 360) {
-                const char* trick = TextFormat("%s%d", clean ? "" : "sketchy ", deg);
-                Feed3(NameOf(e.a), TextFormat("  landed a %s  ", trick), TextFormat("%.1fs", e.value), TeamOf(e.a), ui::kGold);
-            } else if (e.value > 1.5f) {
-                Feed3(NameOf(e.a), TextFormat("  caught %.1fs of air", e.value), "", TeamOf(e.a), ui::kText);
-            }
-            if (e.a == myId && (deg >= 180 || e.value > 2.5f)) {
-                std::string t = deg >= 180 ? TextFormat("%d%s", deg, clean ? "!" : "") : TextFormat("%.1fs AIR", e.value);
-                floats.push_back({Vector3Add(e.pos, {0, 30, 0}), t, clean ? ui::kGold : ui::kText, 2.2f});
-            }
+            if (e.a == myId && deg >= 180)
+                floats.push_back({Vector3Add(e.pos, {0, 30, 0}), TextFormat("%d%s", deg, clean ? "!" : ""), clean ? ui::kGold : ui::kText, 2.2f});
             break;
         }
         case EventType::Ram:

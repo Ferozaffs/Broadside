@@ -132,7 +132,7 @@ inline bool ReadCrewInput(ByteReader& r, CrewInput& in) {
 }
 
 // ---- snapshot -------------------------------------------------------------------
-enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_BOT = 8, SF_HELM = 16, SF_TRIM = 32 };  // (helm / sails: crew at the jobs)
+enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_CREW = 4, SF_BOT = 8, SF_HELM = 16, SF_TRIM = 32 };  // (helm / sails: crew at the jobs)
 
 struct NetShip {
     uint8_t id = 0, flags = 0;
@@ -211,7 +211,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         if (!s.active || s.stowed) continue;  // lost escorts waiting in the wings aren't in the world
         w.Put(s.id);
         w.Put((uint8_t)((s.alive ? SF_ALIVE : 0) | (s.isBot ? SF_BOT : 0) | (s.pirate ? SF_PIRATE : 0) | (s.helmed ? SF_HELM : 0) |
-                        (s.trimmed ? SF_TRIM : 0)));
+                        (s.trimmed ? SF_TRIM : 0) | (s.crewed ? SF_CREW : 0)));
         w.Put(s.team);
         w.Put(s.leader);
         w.Put((uint8_t)Clamp(roundf(s.maxHp), 1.0f, 255.0f));  // whole points (cutter 55 .. ship of the line + treasure 180)

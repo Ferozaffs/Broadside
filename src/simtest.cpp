@@ -580,6 +580,48 @@ int RunSimTest() {
         printf("fleet station keeping (alone, 2 min): slot error %.0f / %.0f / %.0f m, escorts avg %.0f m from the captain\n", err[0] / n,
                err[1] / n, err[2] / n, cohesion / fmaxf(1.0f, (float)cohN));
     }
+    {  // 6c) a big landing (a 4-5 s jump with Fair Wind): how deep each class goes and how long the deck stays under,
+       // without and with human crew aboard (crewed ships pop up harder)
+        for (int c = 0; c < SC_COUNT; ++c) {
+            float res[2][3] = {};
+            for (int crewed = 0; crewed < 2; ++crewed) {
+                float maxD = 0, under = 0, total = 0, rebound = 0;
+                for (int drop = 0; drop < 6; ++drop) {
+                    World g;
+                    g.rounds = false;
+                    g.Init(1);
+                    int id = g.AddShip("t", false, c);
+                    Ship& S = g.ships[id];
+                    S.cls = (uint8_t)c;
+                    S.maxHp = S.hp = 1000;
+                    float x = -200.0f + drop * 80.0f, z = 100.0f - drop * 40.0f;
+                    S.pos = {x, g.ocean.Height(x, z) + 22.0f, z};
+                    S.vel = {0, -16.0f - drop * 1.5f, 32.0f};
+                    S.rot = QuaternionFromAxisAngle({1, 0, 0}, 0.25f);  // nose down a little
+                    S.crewed = crewed != 0;
+                    S.input.sail = 1.0f;
+                    float touch = -1.0f;
+                    for (int i = 0; i < 8 * 60; ++i) {
+                        S.crewed = crewed != 0;  // (UpdateCrew clears it: no crewmen in this world)
+                        g.Step();
+                        g.events.clear();
+                        maxD = fmaxf(maxD, S.depthBelow);
+                        if (S.depthBelow > 2.0f) under += 1.0f / 60.0f;
+                        if (S.depthBelow > 0.0f) total += 1.0f / 60.0f;
+                        if (touch < 0.0f && S.depthBelow > 0.0f) touch = i / 60.0f;
+                        if (touch >= 0.0f && i / 60.0f - touch < 2.5f && S.airTime > 0.0f)  // thrown back up by the landing itself
+                            rebound = fmaxf(rebound, S.pos.y - g.ocean.Height(S.pos.x, S.pos.z));
+                    }
+                }
+                res[crewed][0] = maxD;
+                res[crewed][1] = under / 6.0f;
+                res[crewed][2] = total / 6.0f;
+                printf("   (%s %s: highest bounce after touching down %.1f m)\n", ClassOf(c).name, crewed ? "crewed" : "no crew", rebound);
+            }
+            printf("big landing %-17s deepest %.1f m, deck >2 m under %.2f s (any %.2f s) | crewed: deepest %.1f m, >2 m %.2f s (any %.2f s)\n",
+                   ClassOf(c).name, res[0][0], res[0][1], res[0][2], res[1][0], res[1][1], res[1][2]);
+        }
+    }
     {  // 6d) classes: how each one sails (same sea, same weaving course)
         for (int c = 0; c < SC_COUNT; ++c) {
             World g;
@@ -740,6 +782,8 @@ duels:
         for (int i = 0; i < captains; ++i) g.AddShip(TextFormat("bot%d", i), true);
         int active = 0;
         for (const Ship& x : g.ships) active += x.active;
+        float firstHit = -1.0f, firstKill = -1.0f, pickups = 0;
+        int kills2 = 0;  // sunk in the first two minutes
         int kills = 0, friendly = 0, resupply = 0, booty = 0, denied = 0, banks = 0, pirates = 0, hits = 0, aground = 0, groundings = 0;
         float stationErr = 0;
         int stationN = 0;
@@ -751,10 +795,13 @@ duels:
             g.Step();
             for (const GameEvent& e : g.events) {
                 if (e.type == EventType::Hit) {
+                    if (firstHit < 0.0f) firstHit = g.time;
                     hits++;
                     if (e.a != e.b && g.ships[e.a].active && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
                 }
                 if (e.type == EventType::Kill) {
+                    if (firstKill < 0.0f) firstKill = g.time;
+                    if (g.time < 120.0f) kills2++;
                     kills++;
                     if (arena == ARENA_MAELSTROM && e.pos.x * e.pos.x + e.pos.z * e.pos.z < 40.0f * 40.0f) {
                         swallowed++;
@@ -762,6 +809,7 @@ duels:
                     }
                 }
                 if (e.type == EventType::Dash) dashes++;
+                if (e.type == EventType::Pickup) pickups++;
                 if (e.type == EventType::Hook && e.b < MAX_SHIPS) hookups++;
                 if (e.type == EventType::Ram && (e.flags & EF_ROCK)) {
                     aground++;
@@ -837,8 +885,8 @@ duels:
                         stationN++;
                     }
         }
-        printf("mode %-12s ships %d, %.0f min: %d hits, %d sunk, friendly-fire hits %d, escorts recovered in harbour %d, escort avg %.0f m from captain, team score %d-%d, rock hits %d (%d hard, %d by harbours), stuck by a harbour %d",
-               modeName[m], active, mins, hits, kills, friendly, resupply, stationN ? stationErr / stationN : 0.0f, g.teamScore[0], g.teamScore[1], aground, groundings, rockHarbour, stuck);
+        printf("mode %-12s ships %d, %.0f min: %d hits, %d sunk, friendly-fire hits %d, escorts recovered in harbour %d, escort avg %.0f m from captain, team score %d-%d, rock hits %d (%d hard, %d by harbours), stuck by a harbour %d, first hit %.0f s, first sinking %.0f s, %d sunk in the first 2 min, %.0f crates picked up",
+               modeName[m], active, mins, hits, kills, friendly, resupply, stationN ? stationErr / stationN : 0.0f, g.teamScore[0], g.teamScore[1], aground, groundings, rockHarbour, stuck, firstHit, firstKill, kills2, pickups);
         if (m == MODE_PIRATE) {
             printf(", treasure grabbed %d, dropped by a sinking carrier %d, banked %d (", booty, denied, banks);
             for (const Ship& x : g.ships)
