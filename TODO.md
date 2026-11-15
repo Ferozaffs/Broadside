@@ -301,6 +301,21 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   - The crew tag ("CREW · CPT. X'S SHIP OF THE LINE") overflowed its panel: tracked labels measured as plain text
     (ui::MeasureLabel).
 
+## More race courses, menu, maelstrom treasure (2026-11-15)
+- [x] Four courses (ARENA_STRAIT .. ARENA_ZIGZAG, protocol v17): the strait's plan now sits on a spine (s along it, n
+      across) built from turns: serpent 2 x 130 deg R 430, hairpin 180 deg R 420, zigzag 3 x 120 deg R 170 (half
+      width 130, no stack-field bulge). Spine rotated to fit tightest, centred. Every bend gets a headland on its
+      inside and a stack off its point (SF_CORNER). Wall rocks stepped by distance along the wall; any wall rock that
+      pokes into another stretch of channel (inside of a bend, the hairpin's other leg) is dropped.
+- [x] Progress is World::RaceS (nearest point on the channel middle): standings, "m to go", bot look-ahead, stalls.
+      Bots shorten their look-ahead when the straight line to it crosses rock (round a point).
+- [x] Host "Any": World::raceRotate, the next course every round (StartRound rebuilds, MatchStart.flags = arena,
+      clients SetOcean on it). Menu: GAME row full width (Free-for-all was cut off), race shows a COURSE row instead
+      of arena/skills/fleets; Quit moved to the bottom; compact layout below 960 px tall; Segmented shrinks long labels.
+- [x] Pirate: a treasure dropped in the maelstrom's funnel (r < 200) resurfaces fresh elsewhere; any dropped treasure
+      left 60 s resurfaces; fresh ones surface outside the bots' keep-out ring (they never fetched them inside it).
+- Simtest: 4 courses x 2 seeds all 6/6, winners 50-68 s. BS_RACECOURSE, BS_RACESEEDS, BS_RACEMAP=dir (.ppm maps).
+
 ## Race mode: the Strait (2026-11-15)
 - [x] MODE_RACE always sails ARENA_STRAIT (World::Init forces it; nothing else uses it). Protocol v16.
       A 2 km channel down z (strait::startZ -1000 .. finishZ +1000, cliffs at +-endZ 1260). StraitPlan (seed):

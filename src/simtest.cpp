@@ -768,13 +768,52 @@ duels:
     }
     // 7) game modes: whole bot matches, checking the rules hold
     const char* modeName[] = {"free-for-all", "teams", "pirate", "race"};
-    {  // race: bots sprint down the strait (dash and hooks on); everyone should finish, nobody should stall
-        for (uint32_t seed : {1u, 2u, 3u, 4u}) {
-            if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != MODE_RACE) break;
+    // race: bots sprint down every course (dash and hooks on); everyone should finish, nobody should stall.
+    // BS_RACECOURSE=2..5 just that course, BS_RACESEEDS=n seeds of each, BS_RACEMAP=dir writes a map of each (.ppm)
+    for (int course = ARENA_STRAIT; course < ARENA_COUNT; ++course) {
+        if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != MODE_RACE) break;
+        if (getenv("BS_RACECOURSE") && atoi(getenv("BS_RACECOURSE")) != course) continue;
+        const uint32_t seeds = getenv("BS_RACESEEDS") ? (uint32_t)atoi(getenv("BS_RACESEEDS")) : 2u;
+        for (uint32_t seed = 1; seed <= seeds; ++seed) {
             World g;
             g.rounds = false;
-            g.Init(seed, 0, 0, MODE_RACE, false, ARENA_STRAIT);
+            g.Init(seed, 0, 0, MODE_RACE, false, (uint8_t)course);
             g.skills = true;
+            if (const char* dir = getenv("BS_RACEMAP")) {  // top down, 4 m a pixel: land, shallows, sea, the racing line
+                const int N = 900;
+                const float M = 4.0f;
+                std::vector<unsigned char> img(N * N * 3);
+                for (int j = 0; j < N; ++j)
+                    for (int i = 0; i < N; ++i) {
+                        float x = (i - N / 2) * M, z = (N / 2 - j) * M, h = RocksHeight(g.rocks, x, z);
+                        unsigned char* p = &img[(j * N + i) * 3];
+                        if (h > 0.0f) { p[0] = 120; p[1] = 100; p[2] = 70; }
+                        else if (h > -7.0f) { p[0] = 190; p[1] = 175; p[2] = 130; }
+                        else { p[0] = 30; p[1] = 70; p[2] = 110; }
+                    }
+                auto dot = [&](float x, float z, int r, unsigned char cr, unsigned char cg, unsigned char cb) {
+                    int ci = (int)(x / M) + N / 2, cj = N / 2 - (int)(z / M);
+                    for (int dj = -r; dj <= r; ++dj)
+                        for (int di = -r; di <= r; ++di) {
+                            int i = ci + di, j = cj + dj;
+                            if (i < 0 || j < 0 || i >= N || j >= N) continue;
+                            unsigned char* p = &img[(j * N + i) * 3];
+                            p[0] = cr; p[1] = cg; p[2] = cb;
+                        }
+                };
+                for (const Vector3& l : g.raceLine) dot(l.x, l.z, 0, 230, 60, 50);
+                for (const Rock& k : g.rocks)
+                    if (k.stack) dot(k.x, k.z, 1, 250, 250, 120);
+                dot(g.raceStart.x, g.raceStart.y, 4, 60, 230, 80);
+                const RaceGate& fg = g.course.back();
+                for (float u = -fg.half; u <= fg.half; u += 4.0f) dot(fg.x - fg.dz * u, fg.z + fg.dx * u, 0, 255, 255, 255);
+                FILE* f = fopen(TextFormat("%s/race_%d_%u.ppm", dir, course, seed), "wb");
+                if (f) {
+                    fprintf(f, "P6 %d %d 255\n", N, N);
+                    fwrite(img.data(), 1, img.size(), f);
+                    fclose(f);
+                }
+            }
             if (getenv("BS_STRAITLOG")) {  // the channel: open water across it every 50 m, and the racing line
                 for (float z = -1200.0f; z <= 1200.0f; z += 50.0f) {
                     float half;
@@ -807,11 +846,11 @@ duels:
                 }
                 g.events.clear();
                 for (const Ship& x : g.ships)
-                    if (x.active && x.pos.z > bestZ[x.id] + 20.0f) { bestZ[x.id] = x.pos.z; lastProgress[x.id] = g.raceClock; }
+                    if (x.active && g.RaceS(x.pos.x, x.pos.z) > bestZ[x.id] + 20.0f) { bestZ[x.id] = g.RaceS(x.pos.x, x.pos.z); lastProgress[x.id] = g.raceClock; }
                 if (getenv("BS_RACETRACE") && i % 60 == 0 && seed == (uint32_t)atoi(getenv("BS_RACETRACE"))) {
                     const Ship& x = g.ships[getenv("BS_RACESHIP") ? atoi(getenv("BS_RACESHIP")) : 0];
                     float half;
-                    Vector2 lp = g.RaceLineAt(x.pos.z, &half);
+                    Vector2 lp = g.RaceLineAt(g.RaceS(x.pos.x, x.pos.z), &half);
                     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, x.rot), up = Vector3RotateByQuaternion({0, 1, 0}, x.rot);
                     printf("   [trace] t=%.0f at (%.0f, %.0f) line x %.0f half %.0f v %.1f slowed %.1f hooked %d hdg %.0f up %.2f rudder %.2f sail %.2f\n", g.raceClock,
                            x.pos.x, x.pos.z, lp.x, half, Vector3Length(x.vel), x.slowTimer, x.hooked, atan2f(f.x, f.z) * RAD2DEG, up.y, x.input.rudder, x.input.sail);
@@ -820,15 +859,15 @@ duels:
                     for (const Ship& x : g.ships)
                         if (x.active && !x.racePlace && g.raceClock > tune::raceCountdown) {
                             float st = g.raceClock - fmaxf(lastProgress[x.id], tune::raceCountdown);
-                            if (st > worstStall) { worstStall = st; stallShip = x.id; stallZ = x.pos.z; }
+                            if (st > worstStall) { worstStall = st; stallShip = x.id; stallZ = g.RaceS(x.pos.x, x.pos.z); }
                         }
                 if (g.raceFinished == 6) break;
             }
-            printf("race seed %u (strait, %.0f m): finished %d/6, times", seed, strait::finishZ - strait::startZ, g.raceFinished);
+            printf("race seed %u (%s, %d rocks): finished %d/6, times", seed, RaceCourseName(course), (int)g.rocks.size(), g.raceFinished);
             for (int place = 1; place <= 6; ++place)
                 for (const Ship& x : g.ships)
                     if (x.active && x.racePlace == place) printf(" %.1f", x.raceTime);
-            printf(" s | cripples %d, dashes %d, hooks %d, rock hits %d (%d hard), longest stall %.0f s (ship %d at z %.0f)\n", cripples, dashes, hooks,
+            printf(" s | cripples %d, dashes %d, hooks %d, rock hits %d (%d hard), longest stall %.0f s (ship %d at s %.0f)\n", cripples, dashes, hooks,
                    rockHits, bigRock, worstStall, stallShip, stallZ);
             if (getenv("BS_RACELOG"))
                 for (const Ship& x : g.ships)

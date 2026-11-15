@@ -72,14 +72,17 @@ The host picks the game in the menu:
   no repairs) and has to sail it to the harbour flying the black flag - always far away, and a different one for
   every treasure - and hold it for 10 seconds to unload, while everyone else hunts them. Sink the carrier and the
   treasure goes over the side for anyone to grab. First to 5 banked.
-- **Race**: a sprint down the Strait, a 2 km channel between cliffs with its own arena. First across the finish
-  line at the far end wins; the rest get 20 seconds. Everyone starts abreast for a 3-2-1 countdown. On the way:
+- **Race**: a 2 km sprint down a channel between cliffs, on one of four courses: the **Strait** (straight, with a
+  dogleg), the **Serpent** (an S of two long sweeping bends), the **Hairpin** (a U-turn round a headland: you finish
+  alongside where you started) and the **Zigzag** (three sharp corners, narrower). The host picks one, or "Any" for
+  a different course every round. First across the finish line at the far end wins; the rest get 20 seconds. Everyone starts abreast for a 3-2-1 countdown. On the way:
   narrows where the cliffs close in to under 100 m and the whole pack arrives at once, an island in the fairway
   with a wide way round and a narrow gut down the other side, a field of sea stacks to thread, and a dogleg. Dash
   and the grappling hook are always on and come back quicker: hook a ship ahead and let it tow you up, or throw a
-  line round a stack or a headland and swing yourself through a corner. Guns run out 5 seconds after the start.
+  line round a stack or a headland and swing yourself through a corner (every bend has a headland on its inside
+  and a tall stack off its point for exactly that). Guns run out 5 seconds after the start.
   Sunk means crippled: you're patched up on the spot but sail at 40% for 4 seconds (and can't be crippled again
-  meanwhile). Every match gets a new strait: the order of the narrows, island, stacks and dogleg changes.
+  meanwhile). Every match gets a new layout: the order of the narrows, island, stacks and dogleg changes.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
@@ -139,7 +142,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--arena maelstrom`, `--time night`, `--weather storm`).
+(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

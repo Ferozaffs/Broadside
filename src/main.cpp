@@ -100,7 +100,11 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--deck-only") o.deckOnly = true;
         else if (a == "--skills") o.skills = true;
         else if (a == "--crew") o.role = ROLE_CREW;
-        else if (a == "--arena") o.arena = next("isles") == "maelstrom" ? ARENA_MAELSTROM : ARENA_ISLES;
+        else if (a == "--arena") {  // isles | maelstrom, or for a race: any | strait | serpent | hairpin | zigzag
+            std::string v = next("isles");
+            o.arena = v == "maelstrom" ? ARENA_MAELSTROM : v == "any" ? ARENA_RACE_ANY : v == "strait" ? ARENA_STRAIT
+                      : v == "serpent" ? ARENA_SERPENT : v == "hairpin" ? ARENA_HAIRPIN : v == "zigzag" ? ARENA_ZIGZAG : ARENA_ISLES;
+        }
         else if (a == "--classes") {
             std::string c = next("cutter,frigate,line");
             o.allowedCls = (c.find("cutter") != std::string::npos ? 1 : 0) | (c.find("frigate") != std::string::npos ? 2 : 0) |
@@ -280,6 +284,7 @@ public:
     int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
     bool curSkills = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
+    int courseSel = 0;               // ...and of race course: 0 a different one every round, else ARENA_STRAIT + n - 1
     // crew mode
     int roleSel = ROLE_CAPTAIN;      // menu: sail your own ship, or sign on as crew
     int crewId = -1;                 // our crewman (-1: we're a captain)
@@ -591,7 +596,8 @@ void Game::Init() {
     allowSel = opt.allowedCls;
     viewSel = opt.deckOnly ? 1 : 0;
     skillSel = opt.skills ? 1 : 0;
-    arenaSel = opt.arena;
+    arenaSel = RaceArena(opt.arena) || opt.arena == ARENA_RACE_ANY ? ARENA_ISLES : opt.arena;
+    courseSel = RaceArena(opt.arena) ? opt.arena - ARENA_STRAIT + 1 : 0;
     roleSel = opt.role;
     if (const char* e = getenv("BS_LOD")) SetLod(atoi(e));  // (testing: pin a level of detail)
     if (const char* e = getenv("BS_EYE")) sscanf(e, "%f %f %f", &deckEye.y, &deckEye.z, &deckEye.x);
@@ -634,8 +640,9 @@ void Game::StartSession(bool host, int bots, bool open) {
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
+        int arena = modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arenaSel)) {
+                          arena)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -778,7 +785,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             sessionStart = GetTime();
             DisableCursor();
             Feed(curMode == MODE_TEAMS ? "Welcome aboard. Sink the other side!"
-                 : curMode == MODE_RACE ? "Welcome aboard. Race down the strait: first across the finish line wins!"
+                 : curMode == MODE_RACE ? TextFormat("Welcome aboard. Race down %s: first across the finish line wins!", RaceCourseName(curArena))
                  : curMode == MODE_PIRATE ? "Welcome aboard. Grab the treasure and sail it to the pirate cove!"
                                           : "Welcome aboard. Sink them all!",
                  ui::kText);
@@ -1724,7 +1731,7 @@ int Game::RacePosition(int id) const {
     auto key = [&](int i) {
         const NetShip& s = view[i].s;
         if (s.racePlace) return 1e9f - s.racePlace;
-        return s.pos.z;  // (down the strait: the furthest along)
+        return pred.RaceS(s.pos.x, s.pos.z);  // (the furthest along the course)
     };
     int pos = 1;
     for (int i = 0; i < MAX_SHIPS; ++i)
@@ -2290,7 +2297,9 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::ChestSpawn:
-            if (curMode == MODE_PIRATE) Feed(e.b == 1 ? "The treasure is adrift!" : "A new treasure has surfaced.", Scenery::PowerColor(PU_COUNT));
+            if (curMode == MODE_PIRATE)
+                Feed(e.b == 1 ? "The treasure is adrift!" : e.b == 2 ? "The treasure went down the maelstrom. A new one has surfaced." : "A new treasure has surfaced.",
+                     Scenery::PowerColor(PU_COUNT));
             for (int i = 0; i < 24; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(4, 10), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
             break;
         case EventType::CrateSpawn:
@@ -2324,6 +2333,13 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::MatchStart:
+            if (curMode == MODE_RACE && RaceArena(e.flags) && e.flags != curArena) {  // on to the next course
+                curArena = e.flags;
+                SetOcean(oceanSeed, curWeather, curArena, curMode);
+                predValid = false;
+                history.clear();
+                Feed(TextFormat("This round: %s.", RaceCourseName(curArena)), ui::kGold);
+            }
             banner = TextFormat("ROUND %d", e.b);
             bannerTime = GetTime();
             awards.clear();
@@ -2891,7 +2907,7 @@ void Game::RenderWorld(float dt, bool menu) {
 
     const std::vector<Rock>& rocks = menu ? menuWorld.rocks : pred.rocks;
     const bool whirl = (menu ? arenaSel : curArena) == ARENA_MAELSTROM;
-    uint32_t key = (menu ? 0x80000007u : oceanSeed) + (whirl ? 0x01000000u : 0u) + (!menu && curArena == ARENA_STRAIT ? 0x02000000u : 0u);
+    uint32_t key = (menu ? 0x80000007u : oceanSeed) + (whirl ? 0x01000000u : 0u) + (!menu && RaceArena(curArena) ? (uint32_t)curArena * 0x01000000u : 0u);
     if (key != sceneryKey) {
         scenery.Build(rocks, whirl);
         scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
@@ -3398,7 +3414,7 @@ void Game::DrawHUD() {
             t = TextFormat("FINISHED %s   \xC2\xB7   %s", Ordinal(me->racePlace), RaceTimeStr(me->raceTime).c_str());
         else
             t = TextFormat("%s OF %d   \xC2\xB7   %d m TO GO   \xC2\xB7   %s", Ordinal(RacePosition(myId)), captains,
-                           (int)fmaxf(0.0f, strait::finishZ - me->pos.z), RaceTimeStr(fmaxf(0.0f, raceClock - tune::raceCountdown)).c_str());
+                           (int)fmaxf(0.0f, strait::finishZ - pred.RaceS(me->pos.x, me->pos.z)), RaceTimeStr(fmaxf(0.0f, raceClock - tune::raceCountdown)).c_str());
         bool someoneHome = false;
         for (int id = 0; id < MAX_SHIPS; ++id) someoneHome |= view[id].present && view[id].s.racePlace == 1;
         Vector2 m = Measure(t.c_str(), 16, true);
@@ -3837,10 +3853,10 @@ void Game::DrawMenu() {
     using namespace ui;
     const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
     DrawRectangleGradientH(0, 0, (int)(W * 0.55f), (int)H, {6, 12, 20, 210}, {6, 12, 20, 0});
-    // layout is ~620 px tall from the title down; centre it in whatever height we have
+    // layout is ~830 px tall from the title down; centre it in whatever height we have
     // short windows (720p) get a compact layout: smaller title, name and address side by side
-    const bool compact = H < 860.0f;
-    const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 700.0f) * 0.45f);
+    const bool compact = H < 960.0f;
+    const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 830.0f) * 0.45f);
     const float ts = compact ? 60.0f : 92.0f, head = compact ? 112.0f : 168.0f;
     float y = y0;
     DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, ts, ts * 0.12f, Fade(BLACK, 0.45f));
@@ -3860,7 +3876,7 @@ void Game::DrawMenu() {
         if (Button({x, y + 104, 200, 50}, "Cancel")) Disconnect("");
         return;
     }
-    const float fw = 400;
+    const float fw = 420;
     if (compact) {
         float half = (fw - 8) * 0.5f;
         TextField({x, y + 24, half, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
@@ -3871,38 +3887,56 @@ void Game::DrawMenu() {
         TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
         y += 192;
     }
-    if (Button({x, y, fw, 54}, "Join battle", true)) StartSession(false, 0);
-    if (Button({x, y + 64, fw - 128, 54}, "Host battle")) StartSession(true, botCount, true);
+    // two columns: the wide one on the left, a narrow one (128) on the right
+    const float mw = fw - 128 - 8, bh = compact ? 50.0f : 54.0f, row = compact ? 64.0f : 72.0f;
+    if (Button({x, y, fw, bh}, "Join battle", true)) StartSession(false, 0);
+    if (Button({x, y + bh + 8, mw, bh}, "Host battle")) StartSession(true, botCount, true);
     // bot stepper
-    Rectangle st = {x + fw - 120, y + 64, 120, 54};
+    Rectangle st = {x + mw + 8, y + bh + 8, 128, bh};
     DrawRectangleRounded(st, 0.4f, 8, {255, 255, 255, 14});
     if (Button({st.x + 4, st.y + 7, 36, 40}, "-")) botCount = std::max(0, botCount - 1);
     if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = std::min(7, botCount + 1);
-    Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 6, 24, kText, true, Center, false);
-    Label("BOTS", st.x + st.width * 0.5f, st.y + 34, 9, kDim, Center);
+    Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 4, 24, kText, true, Center, false);
+    Label("BOTS", st.x + st.width * 0.5f, st.y + bh - 20, 9, kDim, Center);
     // match settings for hosting (the backdrop previews them)
+    y += 2.0f * bh + 18.0f;
     static const char* const kTimes[] = {"Noon", "Sunset", "Night"};
     static const char* const kWeathers[] = {"Clear", "Storm", "Fog"};
     float hw = (fw - 8) * 0.5f;
-    Label("TIME OF DAY", x + 2, y + 128, 11, kDim);
-    Label("WEATHER", x + hw + 10, y + 128, 11, kDim);
-    Segmented({x, y + 146, hw, 42}, kTimes, 3, todSel);
-    Segmented({x + hw + 8, y + 146, hw, 42}, kWeathers, 3, weatherSel);
-    static const char* const kFleets[] = {"Solo", "Fleets"};
-    float mw = fw - 128 - 8;
-    Label("GAME", x + 2, y + 200, 11, kDim);
-    Label("SHIPS", x + mw + 10, y + 200, 11, kDim);
-    Segmented({x, y + 218, mw, 42}, kModeNames, MODE_COUNT, modeSel);
-    Segmented({x + mw + 8, y + 218, 128, 42}, kFleets, 2, fleetSel);
+    Label("TIME OF DAY", x + 2, y, 11, kDim);
+    Label("WEATHER", x + hw + 10, y, 11, kDim);
+    Segmented({x, y + 18, hw, 40}, kTimes, 3, todSel);
+    Segmented({x + hw + 8, y + 18, hw, 40}, kWeathers, 3, weatherSel);
+    y += row;
+    Label("GAME", x + 2, y, 11, kDim);
+    Segmented({x, y + 18, fw, 40}, kModeNames, MODE_COUNT, modeSel);
+    y += row;
+    if (modeSel == MODE_RACE) {  // a race: which course (dash and hook are always on, and nobody sails with a fleet)
+        static const char* const kCourses[] = {"Any", "Strait", "Serpent", "Hairpin", "Zigzag"};
+        Label(courseSel == 0 ? "RACE COURSE   \xC2\xB7   A DIFFERENT ONE EVERY ROUND" : "RACE COURSE", x + 2, y, 11, kDim);
+        Segmented({x, y + 18, fw, 40}, kCourses, 1 + RACE_COURSES, courseSel);
+    } else {
+        static const char* const kArenas[] = {"Isles", "Maelstrom"};
+        static const char* const kSkills[] = {"Off", "On"};
+        static const char* const kFleets[] = {"Solo", "Fleets"};
+        const float sw = 100.0f, aw = fw - sw - 128 - 16;
+        Label("ARENA", x + 2, y, 11, kDim);
+        Label("SKILLS", x + aw + 10, y, 11, kDim);
+        Label("SHIPS", x + mw + 10, y, 11, kDim);
+        Segmented({x, y + 18, aw, 40}, kArenas, 2, arenaSel);
+        Segmented({x + aw + 8, y + 18, sw, 40}, kSkills, 2, skillSel);
+        Segmented({x + mw + 8, y + 18, 128, 40}, kFleets, 2, fleetSel);
+    }
+    y += row;
     // which ships captains may sail, and whether everyone plays from the deck
-    Label("SHIPS ALLOWED", x + 2, y + 272, 11, kDim);
-    Label("CAMERA", x + mw + 10, y + 272, 11, kDim);
+    Label("SHIPS ALLOWED", x + 2, y, 11, kDim);
+    Label("CAMERA", x + mw + 10, y, 11, kDim);
     {
         float bw = (mw - 2 * 6) / 3.0f;
         const char* nm[3] = {"Cutter", "Frigate", "Line"};
         for (int c = 0; c < SC_PLAYABLE; ++c) {
             bool on = allowSel & (1 << c);
-            if (Button({x + c * (bw + 6), y + 290, bw, 40}, nm[c], on)) {
+            if (Button({x + c * (bw + 6), y + 18, bw, 40}, nm[c], on)) {
                 int next = allowSel ^ (1 << c);
                 if (next & SC_ALL) allowSel = next;  // at least one class stays allowed
                 if (!(allowSel & (1 << classSel)))
@@ -3911,23 +3945,10 @@ void Game::DrawMenu() {
             }
         }
         static const char* const kViews[] = {"Free", "Deck"};
-        Segmented({x + mw + 8, y + 290, 128, 40}, kViews, 2, viewSel);
+        Segmented({x + mw + 8, y + 18, 128, 40}, kViews, 2, viewSel);
     }
-    Label("SKILLS", x + 2, y + 344, 11, kDim);
-    Label("ARENA", x + 118, y + 344, 11, kDim);
-    {
-        static const char* const kSkills[] = {"Off", "On"};
-        static const char* const kArenas[] = {"Isles", "Maelstrom"};
-        Segmented({x, y + 362, 108, 40}, kSkills, 2, skillSel);
-        if (modeSel == MODE_RACE) {  // a race is always down the strait
-            static const char* const kStrait[] = {"The Strait"};
-            int one = 0;
-            Segmented({x + 116, y + 362, mw - 116, 40}, kStrait, 1, one);
-        } else {
-            Segmented({x + 116, y + 362, mw - 116, 40}, kArenas, 2, arenaSel);
-        }
-    }
-    if (Button({x + mw + 8, y + 362, 128, 40}, "Quit")) quit = true;
+    y += row;
+    if (Button({x + mw + 8, y, 128, 40}, "Quit")) quit = true;
 
     {
         float cx = x + fw + 36, cwid = fminf(360.0f, W * (compact ? 0.66f : 0.55f) - cx - 20);

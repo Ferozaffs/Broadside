@@ -145,6 +145,8 @@ constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
 constexpr int chestSlots = 1;              // pirate mode: the one treasure everyone chases
 constexpr float chestRespawn = 6.0f;       // s after it is banked before a new one appears
+constexpr float chestAdrift = 60.0f;       // s a dropped treasure floats before it sinks and a fresh one surfaces
+constexpr float chestDeep = 200.0f;        // maelstrom: closer in than this a dropped treasure goes down the funnel
 constexpr float pirateSpeed = 0.75f;       // the treasure is heavy: its carrier sails at this share of its class's speed...
 constexpr float pirateMaxSpeed = 21.0f;    // ...and never faster than this (m/s), so even a ship of the line can catch it
 constexpr float shoreCalm = 0.3f;          // wave height right at the coast (share of the open sea)
@@ -172,9 +174,22 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 // ---- game modes and harbours -----------------------------------------------------
 enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_COUNT = 4 };
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
-// The strait is the race course (race mode always sails it, nothing else does).
-enum Arena : uint8_t { ARENA_ISLES = 0, ARENA_MAELSTROM = 1, ARENA_STRAIT = 2, ARENA_COUNT = 3 };
-// The strait: a long channel down the z axis between cliffs, start at one end, finish at the other
+// The race courses (race mode always sails one of them, nothing else does): a long channel between cliffs, start at
+// one end, finish at the other. The strait runs straight down the z axis; the serpent is an S of two sweeping bends,
+// the hairpin a U-turn round a headland, the zigzag a Z with two sharp corners.
+enum Arena : uint8_t {
+    ARENA_ISLES = 0, ARENA_MAELSTROM = 1,
+    ARENA_STRAIT = 2, ARENA_SERPENT = 3, ARENA_HAIRPIN = 4, ARENA_ZIGZAG = 5,
+    ARENA_COUNT = 6
+};
+constexpr uint8_t ARENA_RACE_ANY = 255;  // host option for a race: a different course every round
+constexpr int RACE_COURSES = ARENA_COUNT - ARENA_STRAIT;
+inline bool RaceArena(int a) { return a >= ARENA_STRAIT && a < ARENA_COUNT; }
+inline const char* RaceCourseName(int a) {
+    static const char* const n[RACE_COURSES] = {"the Strait", "the Serpent", "the Hairpin", "the Zigzag"};
+    return RaceArena(a) ? n[a - ARENA_STRAIT] : "the course";
+}
+// Distances along a course (s) are measured down the middle of the channel, from one end to the other
 namespace strait {
 constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind it)
 constexpr float finishZ = 1000.0f;  // the finish line, right across the channel
@@ -195,7 +210,7 @@ struct Crate {
     bool active = false;
     uint8_t id = 0, type = 0;
     float x = 0, z = 0;
-    float timer = 0;  // respawn countdown while inactive
+    float timer = 0;  // respawn countdown while inactive; while active, how long a dropped one has left (0: no limit)
 };
 
 // ---- arena: a ring of islands and sea stacks (same layout on server and clients) ----
@@ -214,10 +229,15 @@ struct RaceGate {
     float dx, dz;  // the way to sail through it
     float half;    // half the width between its buoys
 };
-// The strait's course: the finish line, where the grid starts and which way it faces, and a racing line for the
-// bots (x, free half width, z) every raceLineStep m from one end to the other, through the open water
-void MakeStraitCourse(uint32_t seed, const std::vector<Rock>& rocks, std::vector<RaceGate>& course, Vector2& start, Vector2& startDir,
-                      std::vector<Vector3>& line);
+// A race course: the finish line, where the grid starts and which way it faces, a racing line for the bots (x,
+// free half width, z) every raceLineStep m from one end to the other through the open water, and the middle of the
+// channel with its direction at the same steps (to measure how far along a ship is)
+struct RaceTrack {
+    std::vector<Vector3> line;
+    std::vector<Vector2> mid, dir;
+};
+void MakeStraitCourse(uint32_t seed, uint8_t arena, const std::vector<Rock>& rocks, std::vector<RaceGate>& course, Vector2& start,
+                      Vector2& startDir, RaceTrack& track);
 constexpr float raceLineStep = 10.0f;
 // can a grappling hook bite at p (on or just under a rock surface, above the seabed)?
 bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
@@ -456,8 +476,13 @@ public:
     std::vector<Harbour> harbours;
     // race
     std::vector<RaceGate> course;
-    std::vector<Vector3> raceLine;  // the bots' way down the strait (see MakeStraitCourse)
-    Vector2 RaceLineAt(float z, float* half = nullptr) const;
+    std::vector<Vector3> raceLine;  // the bots' way down the course (see MakeStraitCourse)
+    std::vector<Vector2> raceMid, raceDir;  // the middle of the channel and its direction, every raceLineStep m
+    bool raceRotate = false;               // host chose "any": a different course every round
+    Vector2 RaceLineAt(float s, float* half = nullptr) const;  // s: m along the course (strait::startZ .. finishZ)
+    Vector2 RaceDirAt(float s) const;
+    float RaceS(float x, float z) const;  // how far along the course a point is
+    void BuildArena();                    // rocks, harbours, the course and the sea's calm patches for `arena`
     Vector2 raceStart{}, raceStartDir{0, 1};
     float raceClock = 0.0f;  // s since the round started (the first raceCountdown of it on the start line)
     int raceFinished = 0;

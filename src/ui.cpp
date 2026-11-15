@@ -62,6 +62,7 @@ bool Segmented(Rectangle r, const char* const* items, int n, int& sel) {
         else if (hover) DrawRectangleRounded(c, 10.0f / c.height * 2.0f, 8, {255, 255, 255, 30});
         if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && sel != i) sel = i, changed = true;
         float size = 18;
+        while (size > 13.0f && Measure(items[i], size, true).x > c.width - 8.0f) size -= 1.0f;  // (squeeze a long one in)
         Text(items[i], c.x + c.width / 2, c.y + (c.height - size) / 2 - 1, size, i == sel ? Color{24, 22, 18, 255} : kText, true, Center,
              false);
     }
