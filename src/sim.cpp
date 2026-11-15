@@ -63,96 +63,244 @@ std::vector<Harbour> MakeHarbours(uint32_t seed) {
     return out;
 }
 
-std::vector<RaceGate> MakeRaceCourse(uint32_t seed, uint8_t arena, const std::vector<Harbour>& hs, const std::vector<Rock>& rocks,
-                                     Vector2& start, Vector2& startDir) {
-    std::vector<RaceGate> out;
-    if (hs.size() < 4) return out;
-    Lcg g{seed * 2246822519u + 101u};
-    g.F();
-    const int a = (int)(g.F() * 4.0f) % 4, b = (a + 2) % 4;  // from a harbour to the one across the bay
-    const Vector2 ua = Vector2Normalize({hs[a].x, hs[a].z}), ub = Vector2Normalize({hs[b].x, hs[b].z});
-    start = Vector2Scale(ua, 590.0f);
-    startDir = Vector2Negate(ua);
-    const Vector2 finish = Vector2Scale(ub, 650.0f);
-    const bool whirl = arena == ARENA_MAELSTROM;
-    const float turn = (g.F(), -1.0f);  // (the maelstrom: round with the swirl, towards smaller atan2(z, x), so the current carries the pack)
-    auto open = [&](Vector2 p, Vector2 n, float half) {
-        for (float k : {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f})
-            if (RocksHeight(rocks, p.x + n.x * half * k, p.y + n.y * half * k) > -8.0f) return false;
-        return true;
-    };
-    const int N = tune::raceGates;
-    for (int i = 1; i <= N; ++i) {
-        float t = (float)i / (N + 1);
-        Vector2 p;
-        if (whirl) {  // round the whirlpool, in and out across the carousel
-            float a0 = atan2f(ua.y, ua.x), ang = a0 + turn * PI * t;
-            float r = (i % 2 ? 400.0f : 500.0f) + g.R(-25.0f, 25.0f);
-            p = {cosf(ang) * r, sinf(ang) * r};
-        } else {  // zig-zag across the bay
-            Vector2 base = Vector2Lerp(start, finish, t), side = Vector2Normalize({-(finish.y - start.y), finish.x - start.x});
-            p = Vector2Add(base, Vector2Scale(side, (i % 2 ? 1.0f : -1.0f) * g.R(100.0f, 180.0f)));
-            float r = Vector2Length(p);
-            if (r > 520.0f) p = Vector2Scale(p, 520.0f / r);
+// ---- the strait ----------------------------------------------------------------
+// Its middle meanders a little; its walls close in at the narrows, open out round an island or a field of sea
+// stacks, and kink sideways at a dogleg. One plan (from the seed) drives both the rocks and the course.
+namespace {
+enum StraitFeature { SF_NARROWS = 0, SF_SPLIT = 1, SF_STACKS = 2, SF_DOGLEG = 3 };
+struct StraitPlan {
+    float a1 = 0, a2 = 0, p1 = 0, p2 = 0, p3 = 0;
+    struct Bend { float z, w, len, sign; };  // sign -1: the walls close in to half width w; +1: open out to it
+    struct Shift { float z, dx; };           // a dogleg: the channel steps sideways by dx
+    std::vector<Bend> bends;
+    std::vector<Shift> shifts;
+    std::vector<std::pair<int, float>> feats;  // (feature, z)
+    float Cx(float z) const {
+        float x = a1 * sinf(z * 0.0039f + p1) + a2 * sinf(z * 0.0093f + p2);
+        for (const Shift& q : shifts) {
+            float t = Clamp((z - q.z) / 340.0f + 0.5f, 0.0f, 1.0f);
+            x += q.dx * t * t * (3.0f - 2.0f * t);
         }
-        out.push_back({p.x, p.y, 0.0f, 1.0f, 40.0f});
+        return x;
     }
-    out.push_back({finish.x, finish.y, ub.x, ub.y, 60.0f});  // the finish: into the far harbour
-    // the way through each gate: halfway between the way in and the way out, so the racing line cuts through it
-    Vector2 prev = start;
-    for (int i = 0; i < N; ++i) {
-        Vector2 at = {out[i].x, out[i].z};
-        Vector2 din = Vector2Normalize(Vector2Subtract(at, prev)), dout = Vector2Normalize(Vector2Subtract({out[i + 1].x, out[i + 1].z}, at));
-        Vector2 d = Vector2Add(din, dout);
-        d = Vector2Length(d) > 0.2f ? Vector2Normalize(d) : din;
-        out[i].dx = d.x;
-        out[i].dz = d.y;
-        prev = at;
+    float Hw(float z) const {
+        float w = 205.0f + 25.0f * sinf(z * 0.006f + p3);
+        for (const Bend& b : bends) {
+            float u = (z - b.z) / b.len, g = expf(-u * u);
+            float to = w + (b.w - w) * g;
+            w = b.sign < 0.0f ? fminf(w, to) : fmaxf(w, to);
+        }
+        return w;
     }
-    // clear of the rocks: slide a gate towards open water until its whole width is clear
-    for (int i = 0; i < N; ++i) {
-        RaceGate& q = out[i];
-        Vector2 n = {-q.dz, q.dx};
-        for (int k = 0; k < 16 && !open({q.x, q.z}, n, q.half); ++k) {
-            float s = whirl ? (k % 2 ? 1.0f : -1.0f) * (1 + k / 2) * 15.0f : 0.0f;
-            if (whirl) {  // in and out along the radius
-                Vector2 u = Vector2Normalize({q.x, q.z});
-                q.x += u.x * s;
-                q.z += u.y * s;
-            } else {
-                q.x *= 0.93f;
-                q.z *= 0.93f;
+};
+StraitPlan PlanStrait(uint32_t seed) {
+    Lcg g{seed * 1103515245u + 12345u};
+    g.F();
+    StraitPlan p;
+    p.a1 = g.R(40.0f, 70.0f);
+    p.a2 = g.R(15.0f, 30.0f);
+    p.p1 = g.R(0.0f, 2.0f * PI);
+    p.p2 = g.R(0.0f, 2.0f * PI);
+    p.p3 = g.R(0.0f, 2.0f * PI);
+    int order[4] = {SF_NARROWS, SF_SPLIT, SF_STACKS, SF_DOGLEG};
+    for (int i = 3; i > 0; --i) std::swap(order[i], order[(int)(g.F() * (i + 1)) % (i + 1)]);
+    const float at[4] = {-600.0f, -220.0f, 170.0f, 540.0f};
+    for (int i = 0; i < 4; ++i) {
+        float z = at[i] + g.R(-40.0f, 40.0f);
+        switch (order[i]) {
+            case SF_NARROWS: p.bends.push_back({z, g.R(42.0f, 54.0f), 75.0f, -1.0f}); break;
+            case SF_SPLIT: p.bends.push_back({z, 225.0f, 160.0f, 1.0f}); break;
+            case SF_STACKS: p.bends.push_back({z, 240.0f, 200.0f, 1.0f}); break;
+            case SF_DOGLEG:
+                p.shifts.push_back({z, (g.F() < 0.5f ? -1.0f : 1.0f) * g.R(140.0f, 190.0f)});
+                p.bends.push_back({z, 140.0f, 170.0f, -1.0f});
+                break;
+        }
+        p.feats.push_back({order[i], z});
+    }
+    // the last gap: one more narrows before the sprint to the line
+    float z = 830.0f + g.R(-20.0f, 20.0f);
+    p.bends.push_back({z, g.R(44.0f, 54.0f), 65.0f, -1.0f});
+    p.feats.push_back({SF_NARROWS, z});
+    return p;
+}
+}  // namespace
+
+static std::vector<Rock> MakeStraitRocks(uint32_t seed) {
+    std::vector<Rock> out;
+    const StraitPlan P = PlanStrait(seed);
+    Lcg g{seed * 747796405u + 2891336453u};
+    g.F();
+    auto add = [&](float x, float z, float r, float h, bool stack) {
+        Rock k;
+        k.x = x; k.z = z; k.r = r; k.h = h; k.stack = stack;
+        k.p = stack ? g.R(5.0f, 8.0f) : g.R(2.8f, 5.0f);
+        k.q = stack ? g.R(0.2f, 0.35f) : g.R(0.45f, 0.8f);
+        for (float& a : k.ph) a = g.R(0.0f, 2.0f * PI);
+        k.seed = (uint32_t)(g.F() * 4.0e9f);
+        out.push_back(k);
+    };
+    const float E = strait::endZ;
+    // the walls: overlapping islands down both sides (their coasts always overlap, so no gaps), a taller row behind
+    for (float sgn : {-1.0f, 1.0f}) {
+        float z = -E - 150.0f, r = g.R(50.0f, 90.0f);
+        while (z < E + 150.0f) {
+            add(P.Cx(z) + sgn * (P.Hw(z) + r * 1.1f), z, r, g.R(0.35f, 0.8f) * r, false);
+            float rn = g.R(50.0f, 90.0f);
+            z += (r + rn) * 0.5f;
+            r = rn;
+        }
+        z = -E - 300.0f;
+        r = g.R(120.0f, 190.0f);
+        while (z < E + 300.0f) {
+            add(P.Cx(z) + sgn * (P.Hw(z) + 110.0f + r * 0.9f), z, r, g.R(0.45f, 0.85f) * r, false);
+            float rn = g.R(120.0f, 190.0f);
+            z += (r + rn) * 0.6f;
+            r = rn;
+        }
+    }
+    // ...and cliffs across each end
+    for (float sgn : {-1.0f, 1.0f}) {
+        float zc = sgn * E, cx = P.Cx(zc), hw = P.Hw(zc);
+        float x = cx - hw - 120.0f, r = g.R(60.0f, 100.0f);
+        while (x < cx + hw + 120.0f) {
+            add(x, zc + sgn * r, r, g.R(0.4f, 0.8f) * r, false);
+            float rn = g.R(60.0f, 100.0f);
+            x += (r + rn) * 0.5f;
+            r = rn;
+        }
+        x = cx - hw - 320.0f;
+        r = g.R(130.0f, 190.0f);
+        while (x < cx + hw + 320.0f) {
+            add(x, zc + sgn * (150.0f + r * 0.9f), r, g.R(0.5f, 0.9f) * r, false);
+            float rn = g.R(130.0f, 190.0f);
+            x += (r + rn) * 0.6f;
+            r = rn;
+        }
+    }
+    auto stackAt = [&](float x, float z, float rMin, float rMax, float hMin, float hMax) { add(x, z, g.R(rMin, rMax), g.R(hMin, hMax), true); };
+    for (const auto& f : P.feats) {
+        const float z = f.second, cx = P.Cx(z), hw = P.Hw(z);
+        switch (f.first) {
+            case SF_NARROWS: {
+                // headlands: tall cliffs either side, closer together than the walls' big islands can get
+                for (float sgn : {-1.0f, 1.0f})
+                    for (float dz : {-55.0f, 0.0f, 55.0f}) {
+                        float zz = z + dz + g.R(-8.0f, 8.0f), r = g.R(38.0f, 50.0f);
+                        add(P.Cx(zz) + sgn * (P.Hw(zz) + r * 0.95f), zz, r, g.R(0.7f, 1.1f) * r, false);
+                    }
+                // a stack in each mouth, close under the cliffs: something to throw a line round
+                float side = g.F() < 0.5f ? -1.0f : 1.0f;
+                for (float dz : {-115.0f, 115.0f}) {
+                    float zz = z + dz;
+                    stackAt(P.Cx(zz) + side * (P.Hw(zz) - g.R(18.0f, 30.0f)), zz, 8.0f, 12.0f, 28.0f, 46.0f);
+                    side = -side;
+                }
+                break;
+            }
+            case SF_SPLIT: {  // an island in the fairway: a wide way round one side, a narrow gut down the other
+                float side = g.F() < 0.5f ? -1.0f : 1.0f, off = side * g.R(50.0f, 70.0f), r = g.R(70.0f, 85.0f);
+                add(cx + off, z - 75.0f, r * 0.8f, g.R(0.5f, 0.75f) * r, false);
+                add(cx + off, z, r, g.R(0.6f, 0.9f) * r, false);
+                add(cx + off, z + 75.0f, r * 0.8f, g.R(0.5f, 0.75f) * r, false);
+                stackAt(cx + off, z - 75.0f - r * 1.15f, 8.0f, 11.0f, 26.0f, 40.0f);  // a pylon off each end of it
+                stackAt(cx + off, z + 75.0f + r * 1.15f, 8.0f, 11.0f, 26.0f, 40.0f);
+                break;
+            }
+            case SF_STACKS: {  // a field of sea stacks to thread through
+                std::vector<Vector2> put;
+                for (int tries = 0; tries < 80 && put.size() < 10; ++tries) {
+                    float zz = z + g.R(-170.0f, 170.0f), xx = P.Cx(zz) + g.R(-1.0f, 1.0f) * (P.Hw(zz) - 35.0f);
+                    bool ok = true;
+                    for (const Vector2& q : put) ok &= Vector2Distance(q, {xx, zz}) > 58.0f;
+                    if (!ok) continue;
+                    put.push_back({xx, zz});
+                    stackAt(xx, zz, 6.0f, 12.0f, 18.0f, 46.0f);
+                    if (g.F() < 0.4f) stackAt(xx + g.R(-16.0f, 16.0f), zz + g.R(-16.0f, 16.0f), 3.0f, 5.0f, 5.0f, 12.0f);
+                }
+                break;
+            }
+            case SF_DOGLEG: {  // a tall stack on the inside of each corner
+                float dx = 0.0f;
+                for (const auto& q : P.shifts)
+                    if (fabsf(q.z - z) < 1.0f) dx = q.dx;
+                float in = dx > 0.0f ? 1.0f : -1.0f;
+                for (float dz : {-150.0f, 150.0f}) {
+                    float zz = z + dz;
+                    stackAt(P.Cx(zz) + in * (P.Hw(zz) - g.R(30.0f, 45.0f)), zz, 10.0f, 14.0f, 36.0f, 55.0f);
+                    in = -in;
+                }
+                break;
             }
         }
+        (void)cx;
+        (void)hw;
+    }
+    // here and there a lone stack off the cliffs, away from the features and the start and finish
+    for (float z = -820.0f; z < 920.0f; z += g.R(140.0f, 240.0f)) {
+        bool clear = fabsf(z - strait::finishZ) > 70.0f;
+        for (const auto& f : P.feats) clear &= fabsf(z - f.second) > 200.0f;
+        float side = g.F() < 0.5f ? -1.0f : 1.0f, inset = g.R(20.0f, 40.0f);
+        if (clear) stackAt(P.Cx(z) + side * (P.Hw(z) - inset), z, 6.0f, 10.0f, 20.0f, 38.0f);
     }
     return out;
 }
 
-void AddRacePylons(uint32_t seed, std::vector<Rock>& rocks, const std::vector<RaceGate>& course, Vector2 start) {
-    Lcg m{seed * 3266489917u + 7u};
-    m.F();
-    Vector2 prev = start;
-    for (size_t i = 0; i + 1 < course.size(); ++i) {
-        Vector2 at = {course[i].x, course[i].z}, next = {course[i + 1].x, course[i + 1].z};
-        Vector2 din = Vector2Normalize(Vector2Subtract(at, prev)), dout = Vector2Normalize(Vector2Subtract(next, at));
-        prev = at;
-        Vector2 inside = Vector2Subtract(dout, din);
-        if (Vector2Length(inside) < 0.35f) continue;  // (hardly a turn)
-        inside = Vector2Normalize(inside);
-        Vector2 p = Vector2Add(at, Vector2Scale(inside, course[i].half + 38.0f));
-        if (RocksHeight(rocks, p.x, p.y) > -20.0f) continue;  // (land there already)
-        Rock k;
-        k.x = p.x;
-        k.z = p.y;
-        k.r = m.R(7.0f, 10.0f);
-        k.h = m.R(28.0f, 40.0f);
-        k.stack = true;
-        k.p = m.R(5.0f, 8.0f);
-        k.q = m.R(0.2f, 0.35f);
-        for (float& a : k.ph) a = m.R(0.0f, 2.0f * PI);
-        k.seed = (uint32_t)(m.F() * 4.0e9f);
-        rocks.push_back(k);
+void MakeStraitCourse(uint32_t seed, const std::vector<Rock>& rocks, std::vector<RaceGate>& course, Vector2& start, Vector2& startDir,
+                      std::vector<Vector3>& line) {
+    const StraitPlan P = PlanStrait(seed);
+    auto dir = [&](float z) { return Vector2Normalize({P.Cx(z + 20.0f) - P.Cx(z - 20.0f), 40.0f}); };
+    start = {P.Cx(strait::startZ), strait::startZ};
+    startDir = dir(strait::startZ);
+    const float zf = strait::finishZ;
+    Vector2 fd = dir(zf);
+    course.clear();
+    course.push_back({P.Cx(zf), zf, fd.x, fd.y, P.Hw(zf) + 80.0f});  // (right across: the cliffs are the ends of it)
+    // the racing line: down the middle of the open water, keeping to the gap it was in, and to the wider way
+    // round an island
+    line.clear();
+    float prevX = P.Cx(-strait::endZ);
+    for (float z = -strait::endZ; z <= strait::endZ + 0.1f; z += raceLineStep) {
+        const float cx = P.Cx(z), hw = P.Hw(z);
+        float bestScore = -1e9f, bestMid = prevX, bestHalf = 8.0f;
+        float runStart = 0.0f;
+        bool open = false;
+        const float x0 = cx - hw - 70.0f, x1 = cx + hw + 70.0f;
+        for (float x = x0; x <= x1 + 4.0f; x += 4.0f) {
+            bool o = x <= x1 && RocksHeight(rocks, x, z) < -7.0f;
+            if (o && !open) runStart = x;
+            if (!o && open) {
+                float wdt = x - 4.0f - runStart, mid = runStart + wdt * 0.5f;
+                float sc = fminf(wdt, 160.0f) - 0.8f * fabsf(mid - prevX);
+                if (wdt >= 24.0f && sc > bestScore) { bestScore = sc; bestMid = mid; bestHalf = wdt * 0.5f; }
+            }
+            open = o;
+        }
+        line.push_back({bestMid, bestHalf, z});
+        prevX = bestMid;
     }
+    for (int pass = 0; pass < 4; ++pass) {  // smooth it out (the bots look well ahead of themselves anyway)
+        std::vector<Vector3> sm = line;
+        for (size_t i = 1; i + 1 < line.size(); ++i) {
+            sm[i].x = (line[i - 1].x + 2.0f * line[i].x + line[i + 1].x) * 0.25f;
+            sm[i].y = fminf(line[i].y, fminf(line[i - 1].y, line[i + 1].y) + 4.0f);
+        }
+        line = sm;
+    }
+}
+
+Vector2 World::RaceLineAt(float z, float* half) const {
+    if (raceLine.empty()) {
+        if (half) *half = 100.0f;
+        return {0.0f, z};
+    }
+    float u = Clamp((z - raceLine.front().z) / raceLineStep, 0.0f, (float)raceLine.size() - 1.001f);
+    size_t i = (size_t)u;
+    float t = u - (float)i;
+    const Vector3& a = raceLine[i];
+    const Vector3& b = raceLine[std::min(i + 1, raceLine.size() - 1)];
+    if (half) *half = a.y + (b.y - a.y) * t;
+    return {a.x + (b.x - a.x) * t, z};
 }
 
 int HarbourOwner(int mode, int i) {
@@ -160,7 +308,7 @@ int HarbourOwner(int mode, int i) {
     return -1;
 }
 
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vortex) {
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vortex, float calmDist) {
     const int N = OceanCPU::DAMP_N;
     const float E = OceanCPU::DAMP_EXTENT, cell = 2.0f * E / N;
     // distance to land on the grid (two-pass chamfer), land = anything near or above the waterline
@@ -193,7 +341,7 @@ std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vo
         }
     std::vector<unsigned char> out(N * N);
     for (int k = 0; k < N * N; ++k) {
-        float t = Clamp(d[k] / tune::shoreCalmDist, 0.0f, 1.0f);
+        float t = Clamp(d[k] / calmDist, 0.0f, 1.0f);
         t = t * t * (3.0f - 2.0f * t);
         float m = tune::shoreCalm + (1.0f - tune::shoreCalm) * t;
         if (vortex) {  // the waves die down in the funnel
@@ -206,6 +354,7 @@ std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vo
 }
 
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena) {
+    if (arena == ARENA_STRAIT) return MakeStraitRocks(seed);
     std::vector<Rock> out;
     const std::vector<Harbour> ports = MakeHarbours(seed);
     auto nearPort = [&](float x, float z, float r) {
@@ -546,6 +695,8 @@ float World::RandF() {
 void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mode_, bool fleets_, uint8_t arena_) {
     weather = weather_;
     arena = arena_ < ARENA_COUNT ? arena_ : ARENA_ISLES;
+    if (mode_ == MODE_RACE) arena = ARENA_STRAIT;            // a race is always down the strait...
+    else if (arena == ARENA_STRAIT) arena = ARENA_ISLES;     // ...and nothing else is
     timeOfDay = timeOfDay_;
     mode = mode_ < MODE_COUNT ? mode_ : MODE_FFA;
     fleets = fleets_;
@@ -565,19 +716,19 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     events.clear();
     seedUsed = seed;
     rocks = MakeRocks(seed, arena);
-    harbours = MakeHarbours(seed);
+    harbours = arena == ARENA_STRAIT ? std::vector<Harbour>{} : MakeHarbours(seed);
     course.clear();
+    raceLine.clear();
     raceClock = 0.0f;
     raceFinished = 0;
     if (mode == MODE_RACE) {
         fleets = false;
         roundLength = matchClock = tune::raceLength;
-        course = MakeRaceCourse(seed, arena, harbours, rocks, raceStart, raceStartDir);
-        AddRacePylons(seed, rocks, course, raceStart);
+        MakeStraitCourse(seed, rocks, course, raceStart, raceStartDir, raceLine);
     } else if (roundLength == tune::raceLength) {
         roundLength = matchClock = tune::matchLength;  // (a world reused after a race)
     }
-    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM));
+    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM, arena == ARENA_STRAIT ? 90.0f : tune::shoreCalmDist));  // (a strait: the sea runs right up the middle)
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
         chests[i].id = (uint8_t)i;
@@ -682,7 +833,7 @@ void World::Respawn(Ship& s) {
 }
 
 void World::Damage(Ship& v, float amount, int attacker) {
-    if (!v.alive || matchState != 0) return;
+    if (!v.alive || matchState != 0 || RaceHeld()) return;  // (nothing counts on the start line)
     if (attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // no friendly fire
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
@@ -754,7 +905,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
     if (in.fireSeq != s.lastFireSeq) {
         s.lastFireSeq = in.fireSeq;
         if (authoritative && matchState != 0) return;
-        if (mode == MODE_RACE && s.raceGate == 0 && s.leader < 0) return;  // a race: guns housed until the first gate (no broadsides on the start line)
+        if (mode == MODE_RACE && raceClock < tune::raceCountdown + tune::raceGunsHeld) return;  // a race: guns housed for the first few seconds
         int side = GunSide(s.cls, s.rot, in.aim);
         if (s.reload[side] <= 0.0f && s.pending.empty()) {
             s.reload[side] = ReloadTime(s, side);
@@ -1111,10 +1262,13 @@ void World::StepShip(Ship& s, float dt) {
             F = Vector3Add(F, {-s.pos.x / r * a * P.mass, 0.0f, -s.pos.z / r * a * P.mass});
         }
     }
-    // soft arena boundary
+    // soft arena boundary (the strait: only off its ends, its cliffs are the sides)
     Vector2 hp = {s.pos.x, s.pos.z};
     float dist = Vector2Length(hp);
-    if (dist > tune::arenaRadius) {
+    if (arena == ARENA_STRAIT) {
+        float over = fabsf(s.pos.z) - (strait::endZ + 40.0f);
+        if (over > 0.0f) F.z -= (s.pos.z > 0.0f ? 1.0f : -1.0f) * over * 0.08f * P.mass;
+    } else if (dist > tune::arenaRadius) {
         Vector2 n = Vector2Scale(hp, 1.0f / dist);
         float push = (dist - tune::arenaRadius) * 0.08f * P.mass;
         F = Vector3Add(F, {-n.x * push, 0, -n.y * push});
@@ -1242,12 +1396,10 @@ void World::PlaceCrate(Crate& c) {
     for (int tries = 0; tries < 40; ++tries) {
         // Most crates float in the middle, between where the ships spawn (220-420 m out): racing for them brings
         // everyone together sooner. The rest anywhere. (Maelstrom: some down the funnel, worth the risk?)
-        if (mode == MODE_RACE && !course.empty()) {  // a race: along the course, a little off the line
-            int i = (int)(RandF() * course.size()) % (int)course.size();
-            Vector2 a = i == 0 ? raceStart : Vector2{course[i - 1].x, course[i - 1].z}, b = {course[i].x, course[i].z};
-            Vector2 p = Vector2Lerp(a, b, 0.2f + 0.6f * RandF());
-            Vector2 n = Vector2Normalize({-(b.y - a.y), b.x - a.x});
-            p = Vector2Add(p, Vector2Scale(n, (RandF() - 0.5f) * 110.0f));
+        if (mode == MODE_RACE && !raceLine.empty()) {  // a race: down the strait, across the open water
+            float half, z = strait::startZ + 120.0f + RandF() * (strait::finishZ - strait::startZ - 180.0f);
+            Vector2 p = RaceLineAt(z, &half);
+            p.x += (RandF() * 2.0f - 1.0f) * half * 0.8f;
             if (RocksHeight(rocks, p.x, p.y) > -8.0f) continue;
             c.x = p.x;
             c.z = p.y;
@@ -1426,33 +1578,26 @@ void World::BotThink(Ship& s, float dt) {
     float wallLimit = 600.0f;  // how far out this ship may sail before it turns for the middle
     Vector3 goal{};
     const Ship* cap = s.leader >= 0 && ships[s.leader].active ? &ships[s.leader] : nullptr;
-    if (mode == MODE_RACE && s.leader < 0 && !course.empty()) {  // racing: through the next gate, dashing on the straights
+    if (mode == MODE_RACE && s.leader < 0 && !raceLine.empty()) {  // racing: down the strait, dashing on the straights
         fight = false;
         haveGoal = true;
+        const float spd = Vector2Length({s.vel.x, s.vel.z});
         if (s.racePlace) {
-            goal = {course.back().x + course.back().dx * 40.0f, 0.0f, course.back().z + course.back().dz * 40.0f};  // home: heave to
+            goal = {RaceLineAt(strait::finishZ + 90.0f).x, 0.0f, strait::finishZ + 90.0f};  // home: heave to
             in.sail = 0.3f;
         } else {
-            const RaceGate& gt = course[std::min<size_t>(s.raceGate, course.size() - 1)];
-            float sx = s.pos.x - gt.x, sz = s.pos.z - gt.z;
-            float along = sx * gt.dx + sz * gt.dz, lat = sx * -gt.dz + sz * gt.dx;
-            bool inCone = along < 0.0f && fabsf(lat) < gt.half * 0.8f + -along * 1.3f;
-            if (inCone) {
-                // in the cone in front of it: straight through, for the middle once it's close
-                float past = along > -80.0f ? 15.0f : 45.0f;
-                goal = {gt.x + gt.dx * past, 0.0f, gt.z + gt.dz * past};
-            } else if (along < 0.0f) {
-                // off to the side: make for a point out in front of it first
-                float back = fminf(120.0f, fabsf(lat) * 0.6f);
-                goal = {gt.x - gt.dx * back - gt.dz * lat * 0.25f, 0.0f, gt.z - gt.dz * back + gt.dx * lat * 0.25f};
-            } else {
-                // missed it (past its line, outside the buoys): round again
-                goal = {gt.x - gt.dx * 100.0f, 0.0f, gt.z - gt.dz * 100.0f};
-            }
-            float gd = flat(goal, s.pos), err = wrap(atan2f(goal.x - s.pos.x, goal.z - s.pos.z) - heading);
-            if (!RaceHeld() && s.dashCd <= 0.0f && gd > 170.0f && fabsf(err) < 0.15f) in.dashSeq++;
+            // a point on the racing line well ahead, each bot a lane of its own where the water is wide
+            float half, zl = s.pos.z + Clamp(70.0f + spd * 2.5f, 80.0f, 160.0f);
+            Vector2 p = RaceLineAt(zl, &half);
+            float lane = (float)((s.id * 7) % 5) * 0.5f - 1.0f;
+            goal = {p.x + lane * fmaxf(0.0f, half - 30.0f) * 0.6f, 0.0f, zl};
+            if (RaceHeld()) goal = {s.pos.x + raceStartDir.x * 200.0f, 0.0f, s.pos.z + raceStartDir.y * 200.0f};  // (helm amidships on the line)
+            float err = wrap(atan2f(goal.x - s.pos.x, goal.z - s.pos.z) - heading);
+            bool clear = true;  // dash only with open water ahead
+            for (float t : {50.0f, 100.0f, 150.0f}) clear &= RocksHeight(rocks, s.pos.x + fwd.x * t, s.pos.z + fwd.z * t) < -6.0f;
+            if (!RaceHeld() && s.dashCd <= 0.0f && clear && fabsf(err) < 0.15f) in.dashSeq++;
             // a ship ahead within reach: throw it a line and let it tow us up
-            if (s.hooked < 0 && s.hookCd <= 0.0f && !RaceHeld() && inCone) {  // (not while coming round for a gate)
+            if (s.hooked < 0 && s.hookCd <= 0.0f && !RaceHeld()) {
                 for (const Ship& o : ships) {
                     if (!o.active || !o.alive || o.id == s.id || o.leader >= 0) continue;
                     Vector3 to = Vector3Subtract(o.pos, s.pos);
@@ -1602,7 +1747,7 @@ void World::BotThink(Ship& s, float dt) {
         }
         desired = atan2f(aim.x - s.pos.x, aim.z - s.pos.z);
         goalDist = flat(goal, s.pos);
-        bool nearWall = sqrtf(goal.x * goal.x + goal.z * goal.z) > 650.0f;
+        bool nearWall = arena != ARENA_STRAIT && sqrtf(goal.x * goal.x + goal.z * goal.z) > 650.0f;
         if (s.leader < 0 && nearWall) in.sail = fminf(in.sail, Clamp(goalDist / 160.0f, 0.15f, 1.0f));  // ease into harbour
     } else if (fight && target) {
         Vector3 to = Vector3Subtract(target->pos, s.pos);
@@ -1702,7 +1847,8 @@ void World::BotThink(Ship& s, float dt) {
     float home = atan2f(-s.pos.x, -s.pos.z);
     // (escorts always have a goal, their slot, but only a captain heading for a harbour may go near the wall)
     bool harbourRun = haveGoal && !cap;
-    float k = Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
+    const bool inStrait = arena == ARENA_STRAIT;  // (no ring to keep inside: just the rocks ahead)
+    float k = inStrait ? 0.0f : Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
     Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
     Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
     bool rockAhead = RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f;
@@ -1722,6 +1868,18 @@ void World::BotThink(Ship& s, float dt) {
         }
         // a stack out in the maelstrom: "turn for the middle" would be into the whirlpool and back onto the rock.
         // Turn away from the rock instead, leaning out of the funnel.
+        if (inStrait) {
+            // no middle to turn for: the clear heading nearest the one we want
+            float bestErr = 1e9f, bestH = heading + PI * 0.5f;
+            for (float dA : {0.3f, -0.3f, 0.6f, -0.6f, 0.9f, -0.9f, 1.3f, -1.3f, 1.8f, -1.8f}) {
+                float h = heading + dA;
+                bool ok = true;
+                for (float t : {25.0f, 50.0f, 80.0f}) ok &= RocksHeight(rocks, s.pos.x + sinf(h) * t, s.pos.z + cosf(h) * t) < -6.0f;
+                float e = fabsf(wrap(h - desired));
+                if (ok && e < bestErr) { bestErr = e; bestH = h; }
+            }
+            home = bestH;
+        }
         if (ocean.Vortex() && dc < maelstrom::radius) {
             const Rock* nr = nullptr;
             float nd = 1e9f;
@@ -2422,8 +2580,8 @@ void World::PlaceOnGrid(Ship& s) {
         if (o.active && o.leader < 0 && o.id < s.id) ++k;
     const Vector2 d = raceStartDir, n = {-d.y, d.x};
     const int row = k / 4, col = k % 4;
-    float x = raceStart.x - d.x * row * 45.0f + n.x * (col - 1.5f) * 30.0f;
-    float z = raceStart.y - d.y * row * 45.0f + n.y * (col - 1.5f) * 30.0f;
+    float x = raceStart.x - d.x * row * 62.0f + n.x * (col - 1.5f) * 38.0f;  // (room for a ship of the line in every slot)
+    float z = raceStart.y - d.y * row * 62.0f + n.y * (col - 1.5f) * 38.0f;
     s.pos = {x, ocean.Height(x, z) + 1.0f, z};
     s.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(d.x, d.y));
     s.vel = {0, 0, 0};

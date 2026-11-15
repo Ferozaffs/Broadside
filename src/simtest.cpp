@@ -768,64 +768,71 @@ duels:
     }
     // 7) game modes: whole bot matches, checking the rules hold
     const char* modeName[] = {"free-for-all", "teams", "pirate", "race"};
-    {  // race: bots sprint the course (dash and hooks on); everyone should finish, nobody should stall
-        for (uint32_t seed : {1u, 2u, 3u}) {
+    {  // race: bots sprint down the strait (dash and hooks on); everyone should finish, nobody should stall
+        for (uint32_t seed : {1u, 2u, 3u, 4u}) {
             if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != MODE_RACE) break;
             World g;
             g.rounds = false;
-            const uint8_t arena = getenv("BS_ARENA") ? (uint8_t)atoi(getenv("BS_ARENA")) : ARENA_ISLES;
-            g.Init(seed, 0, 0, MODE_RACE, false, arena);
+            g.Init(seed, 0, 0, MODE_RACE, false, ARENA_STRAIT);
             g.skills = true;
-            for (int i = 0; i < 6; ++i) g.AddShip(TextFormat("racer%d", i), true);
-            int cripples = 0, gates = 0, dashes = 0, hooks = 0, rockHits = 0;
-            float lastProgress[MAX_SHIPS] = {}, worstStall = 0;
-            int stallShip = -1, stallGate = -1;
-            float len = 0;
-            {
-                Vector2 prev = g.raceStart;
-                for (const RaceGate& q : g.course) { len += Vector2Distance(prev, {q.x, q.z}); prev = {q.x, q.z}; }
+            if (getenv("BS_STRAITLOG")) {  // the channel: open water across it every 50 m, and the racing line
+                for (float z = -1200.0f; z <= 1200.0f; z += 50.0f) {
+                    float half;
+                    Vector2 lp = g.RaceLineAt(z, &half);
+                    std::string row;
+                    int open = 0, gaps = 0;
+                    bool was = false;
+                    for (float x = lp.x - 400.0f; x <= lp.x + 400.0f; x += 8.0f) {
+                        bool o = RocksHeight(g.rocks, x, z) < -7.0f;
+                        row += o ? (fabsf(x - lp.x) < 4.1f ? '|' : '.') : '#';
+                        open += o;
+                        gaps += o && !was;
+                        was = o;
+                    }
+                    printf("  z %5.0f  line %5.0f half %4.0f  open %4d m in %d  %s\n", z, lp.x, half, open * 8, gaps, row.c_str());
+                }
             }
+            for (int i = 0; i < 6; ++i) g.AddShip(TextFormat("racer%d", i), true);
+            int cripples = 0, dashes = 0, hooks = 0, rockHits = 0, bigRock = 0;
+            float bestZ[MAX_SHIPS], lastProgress[MAX_SHIPS] = {}, worstStall = 0, stallZ = 0;
+            for (float& z : bestZ) z = -1e9f;
+            int stallShip = -1;
             for (int i = 0; i < 200 * 60; ++i) {
                 g.Step();
                 for (const GameEvent& e : g.events) {
                     if (e.type == EventType::Kill && (e.flags & EF_CRIPPLE)) cripples++;
-                    if (e.type == EventType::RaceGate) { gates++; lastProgress[e.a] = (float)g.raceClock; }
                     if (e.type == EventType::Dash) dashes++;
                     if (e.type == EventType::Hook && e.b != 255) hooks++;
-                    if (e.type == EventType::Ram && (e.flags & EF_ROCK)) rockHits++;
+                    if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { rockHits++; bigRock += e.value > 8.0f; }
                 }
                 g.events.clear();
+                for (const Ship& x : g.ships)
+                    if (x.active && x.pos.z > bestZ[x.id] + 20.0f) { bestZ[x.id] = x.pos.z; lastProgress[x.id] = g.raceClock; }
                 if (getenv("BS_RACETRACE") && i % 60 == 0 && seed == (uint32_t)atoi(getenv("BS_RACETRACE"))) {
                     const Ship& x = g.ships[getenv("BS_RACESHIP") ? atoi(getenv("BS_RACESHIP")) : 0];
-                    if (x.raceGate < g.course.size()) {
-                        const RaceGate& q = g.course[x.raceGate];
-                        float sx = x.pos.x - q.x, sz = x.pos.z - q.z;
-                        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, x.rot);
-                        printf("   [trace] t=%.0f gate %d along %.0f lat %.0f (half %.0f) v %.1f hdg-to-gate %.0f deg, slowed %.1f, hooked %d\n", g.raceClock,
-                               x.raceGate, sx * q.dx + sz * q.dz, sx * -q.dz + sz * q.dx, q.half, Vector3Length(x.vel),
-                               (atan2f(q.x - x.pos.x, q.z - x.pos.z) - atan2f(f.x, f.z)) * RAD2DEG, x.slowTimer, x.hooked);
-                    }
+                    float half;
+                    Vector2 lp = g.RaceLineAt(x.pos.z, &half);
+                    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, x.rot), up = Vector3RotateByQuaternion({0, 1, 0}, x.rot);
+                    printf("   [trace] t=%.0f at (%.0f, %.0f) line x %.0f half %.0f v %.1f slowed %.1f hooked %d hdg %.0f up %.2f rudder %.2f sail %.2f\n", g.raceClock,
+                           x.pos.x, x.pos.z, lp.x, half, Vector3Length(x.vel), x.slowTimer, x.hooked, atan2f(f.x, f.z) * RAD2DEG, up.y, x.input.rudder, x.input.sail);
                 }
                 if (i % 60 == 0)
                     for (const Ship& x : g.ships)
                         if (x.active && !x.racePlace && g.raceClock > tune::raceCountdown) {
                             float st = g.raceClock - fmaxf(lastProgress[x.id], tune::raceCountdown);
-                            if (st > worstStall) { worstStall = st; stallShip = x.id; stallGate = x.raceGate; }
+                            if (st > worstStall) { worstStall = st; stallShip = x.id; stallZ = x.pos.z; }
                         }
                 if (g.raceFinished == 6) break;
             }
-            printf("race seed %u (%s, course %.0f m, %d gates): finished %d/6, times", seed, arena ? "maelstrom" : "isles", len, (int)g.course.size(),
-                   g.raceFinished);
+            printf("race seed %u (strait, %.0f m): finished %d/6, times", seed, strait::finishZ - strait::startZ, g.raceFinished);
             for (int place = 1; place <= 6; ++place)
                 for (const Ship& x : g.ships)
                     if (x.active && x.racePlace == place) printf(" %.1f", x.raceTime);
-            printf(" s | gates %d, cripples %d, dashes %d, hooks %d, rock hits %d, longest stall %.0f s (ship %d at gate %d)\n", gates, cripples, dashes,
-                   hooks, rockHits, worstStall, stallShip, stallGate);
+            printf(" s | cripples %d, dashes %d, hooks %d, rock hits %d (%d hard), longest stall %.0f s (ship %d at z %.0f)\n", cripples, dashes, hooks,
+                   rockHits, bigRock, worstStall, stallShip, stallZ);
             if (getenv("BS_RACELOG"))
                 for (const Ship& x : g.ships)
-                    if (x.active && !x.racePlace)
-                        printf("   unfinished: %s gate %d at (%.0f, %.0f), next gate (%.0f, %.0f)\n", x.name.c_str(), x.raceGate, x.pos.x, x.pos.z,
-                               x.raceGate < g.course.size() ? g.course[x.raceGate].x : 0.0f, x.raceGate < g.course.size() ? g.course[x.raceGate].z : 0.0f);
+                    if (x.active && !x.racePlace) printf("   unfinished: %s at (%.0f, %.0f)\n", x.name.c_str(), x.pos.x, x.pos.z);
         }
     }
     for (int m = 0; m < MODE_COUNT; ++m) {

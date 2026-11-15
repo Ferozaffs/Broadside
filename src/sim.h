@@ -91,7 +91,7 @@ constexpr float raceCripple = 4.0f;        // s a crippled ship sails slowed
 constexpr float raceSlow = 0.4f;           // ...at this share of its top speed
 constexpr float raceDashCooldown = 4.0f;   // skills matter more in a race: they come back quicker
 constexpr float raceHookCooldown = 6.0f;
-constexpr int raceGates = 5;               // gates between the start and the finish
+constexpr float raceGunsHeld = 5.0f;       // s after the start before the guns run out (no broadsides on the start line)
 constexpr float ballDamage = 8.0f;
 constexpr float ballKnockback = 1.6e6f;     // N*s impulse per ball hit (silly big)
 constexpr float recoilImpulse = 2.2e5f;     // per cannon
@@ -171,8 +171,15 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 
 // ---- game modes and harbours -----------------------------------------------------
 enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_COUNT = 4 };
-// arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h)
-enum Arena : uint8_t { ARENA_ISLES = 0, ARENA_MAELSTROM = 1, ARENA_COUNT = 2 };
+// arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
+// The strait is the race course (race mode always sails it, nothing else does).
+enum Arena : uint8_t { ARENA_ISLES = 0, ARENA_MAELSTROM = 1, ARENA_STRAIT = 2, ARENA_COUNT = 3 };
+// The strait: a long channel down the z axis between cliffs, start at one end, finish at the other
+namespace strait {
+constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind it)
+constexpr float finishZ = 1000.0f;  // the finish line, right across the channel
+constexpr float endZ = 1260.0f;     // the cliffs that close off each end
+}  // namespace strait
 struct Harbour {
     float x, z;  // where ships tie up (the pier runs from here to the island behind it)
     float ang;   // bearing from the arena centre
@@ -201,21 +208,22 @@ struct Rock {
     bool stack;      // tall narrow sea stack
 };
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena = ARENA_ISLES);
-// race course: gates (centre, the way through, half width); the last one is the finish, in the far harbour's mouth
+// race course: lines to cross (centre, the way through, half width); the strait has one, the finish
 struct RaceGate {
     float x, z;
     float dx, dz;  // the way to sail through it
     float half;    // half the width between its buoys
 };
-std::vector<RaceGate> MakeRaceCourse(uint32_t seed, uint8_t arena, const std::vector<Harbour>& harbours, const std::vector<Rock>& rocks,
-                                     Vector2& start, Vector2& startDir);
-// a sea stack on the inside of each turn: something to throw a line round and swing about
-void AddRacePylons(uint32_t seed, std::vector<Rock>& rocks, const std::vector<RaceGate>& course, Vector2 start);
+// The strait's course: the finish line, where the grid starts and which way it faces, and a racing line for the
+// bots (x, free half width, z) every raceLineStep m from one end to the other, through the open water
+void MakeStraitCourse(uint32_t seed, const std::vector<Rock>& rocks, std::vector<RaceGate>& course, Vector2& start, Vector2& startDir,
+                      std::vector<Vector3>& line);
+constexpr float raceLineStep = 10.0f;
 // can a grappling hook bite at p (on or just under a rock surface, above the seabed)?
 bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
 constexpr uint8_t HOOK_ROCK = 64;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
 // Wave-height multipliers for OceanCPU::SetDamp: full sea in open water, calm in the lee of the land
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false);
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false, float calmDist = tune::shoreCalmDist);
 float RockCoast(const Rock& k, float ang);       // coastline radius at a bearing from the centre
 float RockHeight(const Rock& k, float x, float z);  // surface height (below 0 = seabed slope)
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z);  // max over all rocks (-1e9 if none near)
@@ -448,6 +456,8 @@ public:
     std::vector<Harbour> harbours;
     // race
     std::vector<RaceGate> course;
+    std::vector<Vector3> raceLine;  // the bots' way down the strait (see MakeStraitCourse)
+    Vector2 RaceLineAt(float z, float* half = nullptr) const;
     Vector2 raceStart{}, raceStartDir{0, 1};
     float raceClock = 0.0f;  // s since the round started (the first raceCountdown of it on the start line)
     int raceFinished = 0;

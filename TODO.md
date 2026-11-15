@@ -301,6 +301,26 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   - The crew tag ("CREW · CPT. X'S SHIP OF THE LINE") overflowed its panel: tracked labels measured as plain text
     (ui::MeasureLabel).
 
+## Race mode: the Strait (2026-11-15)
+- [x] MODE_RACE always sails ARENA_STRAIT (World::Init forces it; nothing else uses it). Protocol v16.
+      A 2 km channel down z (strait::startZ -1000 .. finishZ +1000, cliffs at +-endZ 1260). StraitPlan (seed):
+      meandering middle Cx(z), half width Hw(z) ~205 m; features at ~-600/-220/170/540 in random order: narrows
+      (headland cliffs, ~70-110 m open, a stack in each mouth), split (an island in the fairway: ~70 m gut one side,
+      ~180 m the other, a stack off each end), stack field (10 stacks), dogleg (140-190 m sideways, a stack on the
+      inside of each corner); one more narrows at ~830. Lone stacks off the cliffs. No harbours. Shore calm over 90 m
+      (not 260) so the sea still runs up the middle.
+- [x] Finish line only (no gates): course = one RaceGate right across; chequered buoys every 24 m wherever there's
+      water, chequered banner. HUD: place, "N m TO GO", clock; FINISH marker / edge arrow; standings by z.
+- [x] Guns run out 5 s after the start (tune::raceGunsHeld); no damage during the countdown; grid 38 m abreast,
+      62 m between rows (ships of the line landed on each other at 30/45).
+- [x] Bots: World::raceLine (x, free half width, z every 10 m, from scanning the open water, smoothed); they aim
+      80-160 m ahead on it, each in its own lane where it's wide; dash only with 150 m clear ahead; with rocks ahead
+      they take the clear heading nearest the one they want. Helm amidships during the countdown (they used to spin).
+- Simtest (BS_ONLYMODE=3, BS_STRAITLOG=1 prints the channel every 50 m): 4 seeds, 6/6 finish, winners 50-83 s,
+  ~20 cripples, 30-45 hooks, 15-30 rock hits per race, longest stall 6-13 s.
+- [ ] Bots never hook rocks in the strait (humans can swing round stacks/headlands; bots only hook ships ahead).
+- [x] Escorts: no tags, markers or feed lines at all (filler); your own keep the green ring on the water.
+
 ## Known issues / next
 - Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;
   it now stands on the model's quarterdeck (ShipModel::DeckAt) behind the rail. Figures closer than 2.2 m to the
