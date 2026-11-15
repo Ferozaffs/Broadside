@@ -82,7 +82,16 @@ constexpr float gunTraverse = 0.6f;        // rad the carriages swing either sid
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
-constexpr int scoreLimit[3] = {12, 20, 5};  // free-for-all sinkings / team sinkings / treasure banked
+constexpr int scoreLimit[4] = {12, 20, 5, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race: none)
+// race: a sprint from one harbour to the far one through gates; sunk = crippled (slowed a while), not out
+constexpr float raceLength = 180.0f;       // s before a race is called off
+constexpr float raceCountdown = 4.0f;      // s held on the start line (3, 2, 1, go)
+constexpr float raceGrace = 20.0f;         // s the rest get to finish once someone has
+constexpr float raceCripple = 4.0f;        // s a crippled ship sails slowed
+constexpr float raceSlow = 0.4f;           // ...at this share of its top speed
+constexpr float raceDashCooldown = 4.0f;   // skills matter more in a race: they come back quicker
+constexpr float raceHookCooldown = 6.0f;
+constexpr int raceGates = 5;               // gates between the start and the finish
 constexpr float ballDamage = 8.0f;
 constexpr float ballKnockback = 1.6e6f;     // N*s impulse per ball hit (silly big)
 constexpr float recoilImpulse = 2.2e5f;     // per cannon
@@ -161,7 +170,7 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
 
 // ---- game modes and harbours -----------------------------------------------------
-enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_COUNT = 3 };
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_COUNT = 4 };
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h)
 enum Arena : uint8_t { ARENA_ISLES = 0, ARENA_MAELSTROM = 1, ARENA_COUNT = 2 };
 struct Harbour {
@@ -192,6 +201,16 @@ struct Rock {
     bool stack;      // tall narrow sea stack
 };
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena = ARENA_ISLES);
+// race course: gates (centre, the way through, half width); the last one is the finish, in the far harbour's mouth
+struct RaceGate {
+    float x, z;
+    float dx, dz;  // the way to sail through it
+    float half;    // half the width between its buoys
+};
+std::vector<RaceGate> MakeRaceCourse(uint32_t seed, uint8_t arena, const std::vector<Harbour>& harbours, const std::vector<Rock>& rocks,
+                                     Vector2& start, Vector2& startDir);
+// a sea stack on the inside of each turn: something to throw a line round and swing about
+void AddRacePylons(uint32_t seed, std::vector<Rock>& rocks, const std::vector<RaceGate>& course, Vector2 start);
 // can a grappling hook bite at p (on or just under a rock surface, above the seabed)?
 bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
 constexpr uint8_t HOOK_ROCK = 64;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
@@ -302,6 +321,12 @@ struct Ship {
     float catchUp = 0.0f;  // escorts: extra speed while they're far off station
     float strayTime = 0.0f;  // escorts: how long they've been hopelessly far off station (then they rejoin)
     bool stowed = false;  // escort that went down and waits for its captain to respawn or reach a harbour
+    // race
+    uint8_t raceGate = 0;   // the next gate to sail through (course.size(): finished)
+    uint8_t racePlace = 0;  // finishing place (0: still racing)
+    float raceTime = 0.0f;  // s from the start to the finish line
+    float raceSide = 0.0f;  // which side of the next gate we were on last tick (along its way through)
+    float slowTimer = 0.0f; // crippled: s left at reduced speed
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
     int booty = 0;        // pirate: chests aboard
@@ -363,7 +388,10 @@ enum class EventType : uint8_t {
     Warning = 18,    // b = seconds left in the round (60 / 10)
     Repair = 21,     // a = ship, b = crewman, value = hp the patch gave back
     OrderGiven = 22, // a = ship, b = Order
+    RaceGate = 23,   // a = ship, b = gates now behind it
+    RaceFinish = 24, // a = ship, b = place, value = time (s)
 };
+constexpr uint8_t EF_CRIPPLE = 64;  // (Kill in a race: crippled, not sunk; shares the bit with EF_DENY, which only chests use)
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
 struct GameEvent {
@@ -418,6 +446,14 @@ public:
     bool fleets = false;
     uint8_t arena = ARENA_ISLES;
     std::vector<Harbour> harbours;
+    // race
+    std::vector<RaceGate> course;
+    Vector2 raceStart{}, raceStartDir{0, 1};
+    float raceClock = 0.0f;  // s since the round started (the first raceCountdown of it on the start line)
+    int raceFinished = 0;
+    bool RaceHeld() const { return mode == MODE_RACE && matchState == 0 && raceClock < tune::raceCountdown; }
+    float DashCooldown() const { return mode == MODE_RACE ? tune::raceDashCooldown : tune::dashCooldown; }
+    float HookCooldown() const { return mode == MODE_RACE ? tune::raceHookCooldown : tune::hookCooldown; }
     Crate chests[tune::chestSlots];  // pirate booty
     uint8_t cove = 0;                // pirate: the harbour the treasure must be delivered to (changes with every treasure)
     uint8_t allowedCls = SC_ALL;     // host: which classes captains may sail (bit per class)
@@ -433,8 +469,11 @@ public:
     float matchClock = tune::matchLength;  // s left in the round (or in the results)
     float roundLength = tune::matchLength;
     uint8_t round = 1;
-    int ScoreOf(const Ship& captain) const { return mode == MODE_PIRATE ? captain.banked : captain.kills; }
-    int ScoreLimit() const { return tune::scoreLimit[mode < 3 ? mode : 0]; }
+    int ScoreOf(const Ship& captain) const {
+        if (mode == MODE_RACE) return captain.racePlace ? 100 - captain.racePlace : captain.raceGate;  // (finished first, then furthest on)
+        return mode == MODE_PIRATE ? captain.banked : captain.kills;
+    }
+    int ScoreLimit() const { return tune::scoreLimit[mode < MODE_COUNT ? mode : 0]; }
     uint32_t tick = 0;
     Ship ships[MAX_SHIPS];
     // crew mode
@@ -467,6 +506,9 @@ private:
     void PlaceEscort(Ship& e, const Ship& captain, bool atHarbour, Vector2 harbourPos);
     Vector3 SlotPos(const Ship& captain, int slot) const;
     void UpdateHarbours(float dt);
+    void UpdateRace(float dt);
+    void PlaceOnGrid(Ship& s);
+    uint32_t seedUsed = 0;
     void UpdateChests(float dt);
     void PlaceChest(Crate& c, bool random, float x, float z);
     void SetPirate(int id);

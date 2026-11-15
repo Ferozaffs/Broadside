@@ -63,6 +63,98 @@ std::vector<Harbour> MakeHarbours(uint32_t seed) {
     return out;
 }
 
+std::vector<RaceGate> MakeRaceCourse(uint32_t seed, uint8_t arena, const std::vector<Harbour>& hs, const std::vector<Rock>& rocks,
+                                     Vector2& start, Vector2& startDir) {
+    std::vector<RaceGate> out;
+    if (hs.size() < 4) return out;
+    Lcg g{seed * 2246822519u + 101u};
+    g.F();
+    const int a = (int)(g.F() * 4.0f) % 4, b = (a + 2) % 4;  // from a harbour to the one across the bay
+    const Vector2 ua = Vector2Normalize({hs[a].x, hs[a].z}), ub = Vector2Normalize({hs[b].x, hs[b].z});
+    start = Vector2Scale(ua, 590.0f);
+    startDir = Vector2Negate(ua);
+    const Vector2 finish = Vector2Scale(ub, 650.0f);
+    const bool whirl = arena == ARENA_MAELSTROM;
+    const float turn = (g.F(), -1.0f);  // (the maelstrom: round with the swirl, towards smaller atan2(z, x), so the current carries the pack)
+    auto open = [&](Vector2 p, Vector2 n, float half) {
+        for (float k : {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f})
+            if (RocksHeight(rocks, p.x + n.x * half * k, p.y + n.y * half * k) > -8.0f) return false;
+        return true;
+    };
+    const int N = tune::raceGates;
+    for (int i = 1; i <= N; ++i) {
+        float t = (float)i / (N + 1);
+        Vector2 p;
+        if (whirl) {  // round the whirlpool, in and out across the carousel
+            float a0 = atan2f(ua.y, ua.x), ang = a0 + turn * PI * t;
+            float r = (i % 2 ? 400.0f : 500.0f) + g.R(-25.0f, 25.0f);
+            p = {cosf(ang) * r, sinf(ang) * r};
+        } else {  // zig-zag across the bay
+            Vector2 base = Vector2Lerp(start, finish, t), side = Vector2Normalize({-(finish.y - start.y), finish.x - start.x});
+            p = Vector2Add(base, Vector2Scale(side, (i % 2 ? 1.0f : -1.0f) * g.R(100.0f, 180.0f)));
+            float r = Vector2Length(p);
+            if (r > 520.0f) p = Vector2Scale(p, 520.0f / r);
+        }
+        out.push_back({p.x, p.y, 0.0f, 1.0f, 40.0f});
+    }
+    out.push_back({finish.x, finish.y, ub.x, ub.y, 60.0f});  // the finish: into the far harbour
+    // the way through each gate: halfway between the way in and the way out, so the racing line cuts through it
+    Vector2 prev = start;
+    for (int i = 0; i < N; ++i) {
+        Vector2 at = {out[i].x, out[i].z};
+        Vector2 din = Vector2Normalize(Vector2Subtract(at, prev)), dout = Vector2Normalize(Vector2Subtract({out[i + 1].x, out[i + 1].z}, at));
+        Vector2 d = Vector2Add(din, dout);
+        d = Vector2Length(d) > 0.2f ? Vector2Normalize(d) : din;
+        out[i].dx = d.x;
+        out[i].dz = d.y;
+        prev = at;
+    }
+    // clear of the rocks: slide a gate towards open water until its whole width is clear
+    for (int i = 0; i < N; ++i) {
+        RaceGate& q = out[i];
+        Vector2 n = {-q.dz, q.dx};
+        for (int k = 0; k < 16 && !open({q.x, q.z}, n, q.half); ++k) {
+            float s = whirl ? (k % 2 ? 1.0f : -1.0f) * (1 + k / 2) * 15.0f : 0.0f;
+            if (whirl) {  // in and out along the radius
+                Vector2 u = Vector2Normalize({q.x, q.z});
+                q.x += u.x * s;
+                q.z += u.y * s;
+            } else {
+                q.x *= 0.93f;
+                q.z *= 0.93f;
+            }
+        }
+    }
+    return out;
+}
+
+void AddRacePylons(uint32_t seed, std::vector<Rock>& rocks, const std::vector<RaceGate>& course, Vector2 start) {
+    Lcg m{seed * 3266489917u + 7u};
+    m.F();
+    Vector2 prev = start;
+    for (size_t i = 0; i + 1 < course.size(); ++i) {
+        Vector2 at = {course[i].x, course[i].z}, next = {course[i + 1].x, course[i + 1].z};
+        Vector2 din = Vector2Normalize(Vector2Subtract(at, prev)), dout = Vector2Normalize(Vector2Subtract(next, at));
+        prev = at;
+        Vector2 inside = Vector2Subtract(dout, din);
+        if (Vector2Length(inside) < 0.35f) continue;  // (hardly a turn)
+        inside = Vector2Normalize(inside);
+        Vector2 p = Vector2Add(at, Vector2Scale(inside, course[i].half + 38.0f));
+        if (RocksHeight(rocks, p.x, p.y) > -20.0f) continue;  // (land there already)
+        Rock k;
+        k.x = p.x;
+        k.z = p.y;
+        k.r = m.R(7.0f, 10.0f);
+        k.h = m.R(28.0f, 40.0f);
+        k.stack = true;
+        k.p = m.R(5.0f, 8.0f);
+        k.q = m.R(0.2f, 0.35f);
+        for (float& a : k.ph) a = m.R(0.0f, 2.0f * PI);
+        k.seed = (uint32_t)(m.F() * 4.0e9f);
+        rocks.push_back(k);
+    }
+}
+
 int HarbourOwner(int mode, int i) {
     if (mode == MODE_TEAMS) return i == 0 ? 0 : i == 2 ? 1 : -1;
     return -1;
@@ -471,9 +563,21 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     for (auto& c : crew) c = Crewman{};
     balls.clear();
     events.clear();
+    seedUsed = seed;
     rocks = MakeRocks(seed, arena);
-    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM));
     harbours = MakeHarbours(seed);
+    course.clear();
+    raceClock = 0.0f;
+    raceFinished = 0;
+    if (mode == MODE_RACE) {
+        fleets = false;
+        roundLength = matchClock = tune::raceLength;
+        course = MakeRaceCourse(seed, arena, harbours, rocks, raceStart, raceStartDir);
+        AddRacePylons(seed, rocks, course, raceStart);
+    } else if (roundLength == tune::raceLength) {
+        roundLength = matchClock = tune::matchLength;  // (a world reused after a race)
+    }
+    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM));
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
         chests[i].id = (uint8_t)i;
@@ -568,6 +672,7 @@ void World::Respawn(Ship& s) {
     s.dashTimer = s.dashCd = s.hookCd = 0;
     for (Leak& l : s.leaks) l = Leak{};
     for (auto& side : s.gunReload) for (float& g : side) g = 0.0f;
+    if (mode == MODE_RACE) PlaceOnGrid(s);
     GameEvent e{EventType::Respawn};
     e.a = s.id;
     e.pos = s.pos;
@@ -581,6 +686,29 @@ void World::Damage(Ship& v, float amount, int attacker) {
     if (attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // no friendly fire
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
+    if (mode == MODE_RACE && v.slowTimer > 0.0f) v.hp = fmaxf(v.hp, 1.0f);  // (crippled already: no piling on)
+    if (v.hp <= 0.0f && mode == MODE_RACE) {  // a race: crippled for a few seconds, then patched up and on
+        v.hp = v.maxHp;
+        v.slowTimer = tune::raceCripple;
+        if (v.leader < 0) v.deaths++;
+        int killer = v.lastAttacker;
+        if (killer >= 0 && ships[killer].active && Enemies(ships[killer], v)) ships[CaptainOf(killer)].kills++;
+        GameEvent e{EventType::Kill};
+        e.a = (uint8_t)(killer >= 0 ? killer : 255);
+        e.b = v.id;
+        e.flags = EF_CRIPPLE;
+        e.pos = v.pos;
+        events.push_back(e);
+        // dragged into the maelstrom's eye: towed back out to the last gate behind it
+        if (arena == ARENA_MAELSTROM && v.pos.x * v.pos.x + v.pos.z * v.pos.z < maelstrom::eye * maelstrom::eye * 6.0f) {
+            Vector2 back = v.raceGate > 0 && v.raceGate <= course.size() ? Vector2{course[v.raceGate - 1].x, course[v.raceGate - 1].z} : raceStart;
+            v.pos = {back.x, ocean.Height(back.x, back.y) + 1.0f, back.y};
+            v.vel = {0, 0, 0};
+            v.hooked = -1;
+        }
+        v.lastAttacker = -1;
+        return;
+    }
     if (v.hp <= 0.0f) {
         v.hp = 0.0f;
         v.alive = false;
@@ -610,16 +738,23 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
         return;
     }
     for (float& p : s.power) p = fmaxf(0.0f, p - dt);
+    s.slowTimer = fmaxf(0.0f, s.slowTimer - dt);
     // throttle and rudder both respond quickly
     float ds = Clamp(in.sail, -1.0f, 1.0f) - s.sail;
     s.sail += Clamp(ds, -4.0f * dt, 4.0f * dt);
     float dr = Clamp(in.rudder, -1.0f, 1.0f) - s.rudder;
     s.rudder += Clamp(dr, -7.0f * dt, 7.0f * dt);
+    if (RaceHeld()) {  // on the start line: held until the gun
+        s.sail = 0.0f;
+        s.vel.x = s.vel.z = 0.0f;
+        return;
+    }
 
     // fire: each new fireSeq value is one trigger pull
     if (in.fireSeq != s.lastFireSeq) {
         s.lastFireSeq = in.fireSeq;
         if (authoritative && matchState != 0) return;
+        if (mode == MODE_RACE && s.raceGate == 0 && s.leader < 0) return;  // a race: guns housed until the first gate (no broadsides on the start line)
         int side = GunSide(s.cls, s.rot, in.aim);
         if (s.reload[side] <= 0.0f && s.pending.empty()) {
             s.reload[side] = ReloadTime(s, side);
@@ -644,7 +779,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
         s.lastDashSeq = in.dashSeq;
         if (skills && s.dashCd <= 0.0f && matchState == 0) {
             s.dashTimer = tune::dashTime;
-            s.dashCd = tune::dashCooldown;
+            s.dashCd = DashCooldown();
             if (authoritative) {
                 GameEvent e{EventType::Dash};
                 e.a = s.id;
@@ -672,7 +807,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
                 s.hooked = (int8_t)HOOK_ROCK;
                 s.hookAnchor = in.hookPoint;
                 s.hookTimer = tune::hookTime;
-                s.hookCd = tune::hookCooldown;
+                s.hookCd = HookCooldown();
                 s.hookRest = Vector3Distance(in.hookPoint, s.pos);
                 if (authoritative) {
                     GameEvent e{EventType::Hook};
@@ -692,7 +827,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
             if (ok) {
                 s.hooked = (int8_t)in.hookTarget;
                 s.hookTimer = tune::hookTime;
-                s.hookCd = tune::hookCooldown;
+                s.hookCd = HookCooldown();
                 s.hookRest = authoritative ? Vector3Distance(ships[in.hookTarget].pos, s.pos) : Vector3Distance(s.hookPos, s.pos);
                 if (authoritative) {
                     GameEvent e{EventType::Hook};
@@ -869,6 +1004,7 @@ void World::StepShip(Ship& s, float dt) {
         if (s.leader >= 0 && ships[s.leader].active)  // escorts pace their captain, whatever he sails
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
+        if (s.slowTimer > 0.0f) top *= tune::raceSlow;  // crippled in a race
         float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
         float vmax = (s.sail >= 0.0f ? top * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : C.reverseSpeed) * boost;
         if (fabsf(s.sail) > 0.02f) {
@@ -1106,6 +1242,17 @@ void World::PlaceCrate(Crate& c) {
     for (int tries = 0; tries < 40; ++tries) {
         // Most crates float in the middle, between where the ships spawn (220-420 m out): racing for them brings
         // everyone together sooner. The rest anywhere. (Maelstrom: some down the funnel, worth the risk?)
+        if (mode == MODE_RACE && !course.empty()) {  // a race: along the course, a little off the line
+            int i = (int)(RandF() * course.size()) % (int)course.size();
+            Vector2 a = i == 0 ? raceStart : Vector2{course[i - 1].x, course[i - 1].z}, b = {course[i].x, course[i].z};
+            Vector2 p = Vector2Lerp(a, b, 0.2f + 0.6f * RandF());
+            Vector2 n = Vector2Normalize({-(b.y - a.y), b.x - a.x});
+            p = Vector2Add(p, Vector2Scale(n, (RandF() - 0.5f) * 110.0f));
+            if (RocksHeight(rocks, p.x, p.y) > -8.0f) continue;
+            c.x = p.x;
+            c.z = p.y;
+            break;
+        }
         float ang = RandF() * 2.0f * PI;
         float r = arena == ARENA_MAELSTROM ? 130.0f + RandF() * 490.0f
                   : RandF() < tune::crateMiddle ? 40.0f + RandF() * 240.0f
@@ -1279,7 +1426,50 @@ void World::BotThink(Ship& s, float dt) {
     float wallLimit = 600.0f;  // how far out this ship may sail before it turns for the middle
     Vector3 goal{};
     const Ship* cap = s.leader >= 0 && ships[s.leader].active ? &ships[s.leader] : nullptr;
-    if (cap && cap->alive) {  // escort: keep station on the captain unless an enemy is close to us both
+    if (mode == MODE_RACE && s.leader < 0 && !course.empty()) {  // racing: through the next gate, dashing on the straights
+        fight = false;
+        haveGoal = true;
+        if (s.racePlace) {
+            goal = {course.back().x + course.back().dx * 40.0f, 0.0f, course.back().z + course.back().dz * 40.0f};  // home: heave to
+            in.sail = 0.3f;
+        } else {
+            const RaceGate& gt = course[std::min<size_t>(s.raceGate, course.size() - 1)];
+            float sx = s.pos.x - gt.x, sz = s.pos.z - gt.z;
+            float along = sx * gt.dx + sz * gt.dz, lat = sx * -gt.dz + sz * gt.dx;
+            bool inCone = along < 0.0f && fabsf(lat) < gt.half * 0.8f + -along * 1.3f;
+            if (inCone) {
+                // in the cone in front of it: straight through, for the middle once it's close
+                float past = along > -80.0f ? 15.0f : 45.0f;
+                goal = {gt.x + gt.dx * past, 0.0f, gt.z + gt.dz * past};
+            } else if (along < 0.0f) {
+                // off to the side: make for a point out in front of it first
+                float back = fminf(120.0f, fabsf(lat) * 0.6f);
+                goal = {gt.x - gt.dx * back - gt.dz * lat * 0.25f, 0.0f, gt.z - gt.dz * back + gt.dx * lat * 0.25f};
+            } else {
+                // missed it (past its line, outside the buoys): round again
+                goal = {gt.x - gt.dx * 100.0f, 0.0f, gt.z - gt.dz * 100.0f};
+            }
+            float gd = flat(goal, s.pos), err = wrap(atan2f(goal.x - s.pos.x, goal.z - s.pos.z) - heading);
+            if (!RaceHeld() && s.dashCd <= 0.0f && gd > 170.0f && fabsf(err) < 0.15f) in.dashSeq++;
+            // a ship ahead within reach: throw it a line and let it tow us up
+            if (s.hooked < 0 && s.hookCd <= 0.0f && !RaceHeld() && inCone) {  // (not while coming round for a gate)
+                for (const Ship& o : ships) {
+                    if (!o.active || !o.alive || o.id == s.id || o.leader >= 0) continue;
+                    Vector3 to = Vector3Subtract(o.pos, s.pos);
+                    float d = Vector3Length(to);
+                    if (d < 40.0f || d > tune::hookRange * 0.85f || Vector3DotProduct(fwd, to) < 0.85f * d) continue;
+                    if (RandF() < 0.06f) {
+                        in.hookTarget = o.id;
+                        in.hookSeq++;
+                    }
+                    break;
+                }
+            } else if (s.hooked >= 0 && s.hooked < MAX_SHIPS) {  // let go once it's no longer ahead
+                const Ship& o = ships[s.hooked];
+                if (Vector3DotProduct(fwd, Vector3Subtract(o.pos, s.pos)) < 0.0f) in.hookSeq++;
+            }
+        }
+    } else if (cap && cap->alive) {  // escort: keep station on the captain unless an enemy is close to us both
         goal = SlotPos(*cap, s.slot);
         float gr = sqrtf(goal.x * goal.x + goal.z * goal.z);
         // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
@@ -1448,7 +1638,8 @@ void World::BotThink(Ship& s, float dt) {
         int side = GunSide(s.cls, s.rot, in.aim);
         Vector3 ab = Vector3RotateByQuaternion(in.aim, QuaternionInvert(s.rot));
         float yawOff = side == 2 ? 0.0f : fabsf(atan2f(ab.z, fabsf(ab.x)));
-        if (yawOff < MC.traverse - 0.05f && s.reload[side] <= 0.0f && RandF() < 0.05f) in.fireSeq++;
+        float keen = mode == MODE_RACE ? (best < 260.0f ? 0.015f : 0.0f) : 0.05f;  // (racing bots shoot less: the race is the thing)
+        if (yawOff < MC.traverse - 0.05f && s.reload[side] <= 0.0f && RandF() < keen) in.fireSeq++;
     }
     // nothing to shoot nearby: go for a power-up crate (captains only; escorts keep station)
     if (!haveGoal && !cap && !s.pirate && (!target || best > 320.0f)) {
@@ -1913,7 +2104,8 @@ void World::UpdateMatch(float dt) {
                 events.push_back(e);
             }
         bool limit = false;
-        if (mode == MODE_TEAMS) limit = teamScore[0] >= ScoreLimit() || teamScore[1] >= ScoreLimit();
+        if (mode == MODE_RACE) {
+        } else if (mode == MODE_TEAMS) limit = teamScore[0] >= ScoreLimit() || teamScore[1] >= ScoreLimit();
         else
             for (const Ship& s : ships)
                 if (s.active && s.leader < 0 && ScoreOf(s) >= ScoreLimit()) limit = true;
@@ -1976,6 +2168,8 @@ void World::EndRound(bool byLimit) {
 void World::StartRound() {
     matchState = 0;
     matchClock = roundLength;
+    raceClock = 0.0f;
+    raceFinished = 0;
     round++;
     teamScore[0] = teamScore[1] = 0;
     for (Ship& s : ships) {
@@ -2216,5 +2410,68 @@ void World::Step() {
     UpdateCrates(dt);
     UpdateHarbours(dt);
     if (mode == MODE_PIRATE && matchState == 0) UpdateChests(dt);
+    if (mode == MODE_RACE && matchState == 0) UpdateRace(dt);
     if (rounds) UpdateMatch(dt);
+}
+
+// ---- race -------------------------------------------------------------------------
+// The start: four abreast in the start harbour's mouth, rows behind, all facing the way to the first gate.
+void World::PlaceOnGrid(Ship& s) {
+    int k = 0;
+    for (const Ship& o : ships)
+        if (o.active && o.leader < 0 && o.id < s.id) ++k;
+    const Vector2 d = raceStartDir, n = {-d.y, d.x};
+    const int row = k / 4, col = k % 4;
+    float x = raceStart.x - d.x * row * 45.0f + n.x * (col - 1.5f) * 30.0f;
+    float z = raceStart.y - d.y * row * 45.0f + n.y * (col - 1.5f) * 30.0f;
+    s.pos = {x, ocean.Height(x, z) + 1.0f, z};
+    s.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(d.x, d.y));
+    s.vel = {0, 0, 0};
+    s.angVel = {0, 0, 0};
+    s.raceGate = 0;
+    s.racePlace = 0;
+    s.raceTime = 0.0f;
+    s.raceSide = 0.0f;
+    s.slowTimer = 0.0f;
+}
+
+// Through a gate: crossing its line, going the right way, between its buoys. Miss and you come round again.
+void World::UpdateRace(float dt) {
+    raceClock += dt;
+    if (course.empty() || RaceHeld()) return;
+    int captains = 0, home = 0;
+    for (Ship& s : ships) {
+        if (!s.active || s.leader >= 0) continue;
+        ++captains;
+        if (s.racePlace) { ++home; continue; }
+        if (!s.alive) continue;
+        const RaceGate& g = course[std::min<size_t>(s.raceGate, course.size() - 1)];
+        float sx = s.pos.x - g.x, sz = s.pos.z - g.z;
+        float along = sx * g.dx + sz * g.dz, lat = fabsf(sx * -g.dz + sz * g.dx);
+        if (s.raceSide < 0.0f && along >= 0.0f && lat < g.half + 6.0f) {  // (any of the hull between the buoys counts)
+            s.raceGate++;
+            GameEvent e{EventType::RaceGate};
+            e.a = s.id;
+            e.b = s.raceGate;
+            e.pos = s.pos;
+            events.push_back(e);
+            if (s.raceGate >= course.size()) {
+                s.racePlace = (uint8_t)++raceFinished;
+                s.raceTime = raceClock - tune::raceCountdown;
+                GameEvent f{EventType::RaceFinish};
+                f.a = s.id;
+                f.b = s.racePlace;
+                f.value = s.raceTime;
+                f.pos = s.pos;
+                events.push_back(f);
+                if (s.racePlace == 1 && rounds) matchClock = fminf(matchClock, tune::raceGrace);  // the rest: hurry
+                ++home;
+                continue;
+            }
+            const RaceGate& n = course[s.raceGate];
+            along = (s.pos.x - n.x) * n.dx + (s.pos.z - n.z) * n.dz;
+        }
+        s.raceSide = along;
+    }
+    if (rounds && captains > 0 && home == captains) EndRound(true);
 }

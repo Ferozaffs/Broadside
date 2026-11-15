@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 14;
+constexpr uint16_t PROTOCOL_VERSION = 15;  // 15: race mode
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -152,6 +152,8 @@ struct NetShip {
     float maxHp = 100;
     float unload = 0;  // pirate: unloading progress in the cove, 0..1
     uint16_t banked = 0;
+    uint8_t raceGate = 0, racePlace = 0;  // race: gates behind it / finishing place (0: racing)
+    float raceTime = 0, slowTimer = 0;    // race: time over the line / s left crippled
     Vector3 pos{}, vel{}, angVel{};
     Quaternion rot{0, 0, 0, 1};
 };
@@ -192,6 +194,7 @@ struct Snapshot {
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
     float matchClock = 0;
+    float raceClock = 0;  // race: s since the round started (the countdown is the first raceCountdown of it)
 };
 
 inline void WriteSnapshot(ByteWriter& w, const World& world) {
@@ -204,6 +207,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(world.round);
     w.Put(world.cove);
     w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
+    w.Put((uint16_t)Clamp(world.raceClock * 20.0f, 0.0f, 65000.0f));
     uint8_t n = 0;
     for (auto& s : world.ships) n += (s.active && !s.stowed) ? 1 : 0;
     w.Put(n);
@@ -237,6 +241,10 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(s.lastInputSeq);
         w.Put((uint16_t)s.kills);
         w.Put((uint16_t)s.deaths);
+        w.Put(s.raceGate);
+        w.Put(s.racePlace);
+        w.Put((uint16_t)Clamp(s.raceTime * 100.0f, 0.0f, 65000.0f));
+        w.PutU8f(s.slowTimer / tune::raceCripple);
         w.PutVec3(s.pos);
         w.PutVec3(s.vel);
         w.PutVec3(s.angVel);
@@ -326,6 +334,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.round = r.Get<uint8_t>();
     s.cove = r.Get<uint8_t>();
     s.matchClock = r.Get<uint16_t>() / 10.0f;
+    s.raceClock = r.Get<uint16_t>() / 20.0f;
     uint8_t n = r.Get<uint8_t>();
     s.ships.resize(n);
     for (auto& sh : s.ships) {
@@ -356,6 +365,10 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.ack = r.Get<uint32_t>();
         sh.kills = r.Get<uint16_t>();
         sh.deaths = r.Get<uint16_t>();
+        sh.raceGate = r.Get<uint8_t>();
+        sh.racePlace = r.Get<uint8_t>();
+        sh.raceTime = r.Get<uint16_t>() / 100.0f;
+        sh.slowTimer = r.GetU8f() * tune::raceCripple;
         sh.pos = r.GetVec3();
         sh.vel = r.GetVec3();
         sh.angVel = r.GetVec3();

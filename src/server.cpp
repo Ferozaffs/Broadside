@@ -20,7 +20,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets, (uint8_t)arena);
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
     world.deckOnly = deckOnly;
-    world.skills = skills;
+    world.skills = skills || mode == MODE_RACE;  // (dash and hook are what a race is about)
     for (int i = 0; i < bots; ++i)
         if (world.AddShip(kBotNames[i % 8], true) < 0) break;
     world.events.clear();

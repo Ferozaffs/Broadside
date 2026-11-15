@@ -767,8 +767,69 @@ duels:
                ends, awards, starts, g.round, killsInResults, hpLostInResults, resetOk ? "yes" : "NO");
     }
     // 7) game modes: whole bot matches, checking the rules hold
-    const char* modeName[] = {"free-for-all", "teams", "pirate"};
+    const char* modeName[] = {"free-for-all", "teams", "pirate", "race"};
+    {  // race: bots sprint the course (dash and hooks on); everyone should finish, nobody should stall
+        for (uint32_t seed : {1u, 2u, 3u}) {
+            if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != MODE_RACE) break;
+            World g;
+            g.rounds = false;
+            const uint8_t arena = getenv("BS_ARENA") ? (uint8_t)atoi(getenv("BS_ARENA")) : ARENA_ISLES;
+            g.Init(seed, 0, 0, MODE_RACE, false, arena);
+            g.skills = true;
+            for (int i = 0; i < 6; ++i) g.AddShip(TextFormat("racer%d", i), true);
+            int cripples = 0, gates = 0, dashes = 0, hooks = 0, rockHits = 0;
+            float lastProgress[MAX_SHIPS] = {}, worstStall = 0;
+            int stallShip = -1, stallGate = -1;
+            float len = 0;
+            {
+                Vector2 prev = g.raceStart;
+                for (const RaceGate& q : g.course) { len += Vector2Distance(prev, {q.x, q.z}); prev = {q.x, q.z}; }
+            }
+            for (int i = 0; i < 200 * 60; ++i) {
+                g.Step();
+                for (const GameEvent& e : g.events) {
+                    if (e.type == EventType::Kill && (e.flags & EF_CRIPPLE)) cripples++;
+                    if (e.type == EventType::RaceGate) { gates++; lastProgress[e.a] = (float)g.raceClock; }
+                    if (e.type == EventType::Dash) dashes++;
+                    if (e.type == EventType::Hook && e.b != 255) hooks++;
+                    if (e.type == EventType::Ram && (e.flags & EF_ROCK)) rockHits++;
+                }
+                g.events.clear();
+                if (getenv("BS_RACETRACE") && i % 60 == 0 && seed == (uint32_t)atoi(getenv("BS_RACETRACE"))) {
+                    const Ship& x = g.ships[getenv("BS_RACESHIP") ? atoi(getenv("BS_RACESHIP")) : 0];
+                    if (x.raceGate < g.course.size()) {
+                        const RaceGate& q = g.course[x.raceGate];
+                        float sx = x.pos.x - q.x, sz = x.pos.z - q.z;
+                        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, x.rot);
+                        printf("   [trace] t=%.0f gate %d along %.0f lat %.0f (half %.0f) v %.1f hdg-to-gate %.0f deg, slowed %.1f, hooked %d\n", g.raceClock,
+                               x.raceGate, sx * q.dx + sz * q.dz, sx * -q.dz + sz * q.dx, q.half, Vector3Length(x.vel),
+                               (atan2f(q.x - x.pos.x, q.z - x.pos.z) - atan2f(f.x, f.z)) * RAD2DEG, x.slowTimer, x.hooked);
+                    }
+                }
+                if (i % 60 == 0)
+                    for (const Ship& x : g.ships)
+                        if (x.active && !x.racePlace && g.raceClock > tune::raceCountdown) {
+                            float st = g.raceClock - fmaxf(lastProgress[x.id], tune::raceCountdown);
+                            if (st > worstStall) { worstStall = st; stallShip = x.id; stallGate = x.raceGate; }
+                        }
+                if (g.raceFinished == 6) break;
+            }
+            printf("race seed %u (%s, course %.0f m, %d gates): finished %d/6, times", seed, arena ? "maelstrom" : "isles", len, (int)g.course.size(),
+                   g.raceFinished);
+            for (int place = 1; place <= 6; ++place)
+                for (const Ship& x : g.ships)
+                    if (x.active && x.racePlace == place) printf(" %.1f", x.raceTime);
+            printf(" s | gates %d, cripples %d, dashes %d, hooks %d, rock hits %d, longest stall %.0f s (ship %d at gate %d)\n", gates, cripples, dashes,
+                   hooks, rockHits, worstStall, stallShip, stallGate);
+            if (getenv("BS_RACELOG"))
+                for (const Ship& x : g.ships)
+                    if (x.active && !x.racePlace)
+                        printf("   unfinished: %s gate %d at (%.0f, %.0f), next gate (%.0f, %.0f)\n", x.name.c_str(), x.raceGate, x.pos.x, x.pos.z,
+                               x.raceGate < g.course.size() ? g.course[x.raceGate].x : 0.0f, x.raceGate < g.course.size() ? g.course[x.raceGate].z : 0.0f);
+        }
+    }
     for (int m = 0; m < MODE_COUNT; ++m) {
+        if (m == MODE_RACE) continue;  // (its own test above)
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;

@@ -92,7 +92,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--mode") {
             std::string t = next("ffa");
-            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : MODE_FFA;
+            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : MODE_FFA;
         } else if (a == "--fleets") o.fleets = true;
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
@@ -151,7 +151,12 @@ static const Color kPalette[8] = {{220, 50, 40, 255},  {40, 110, 230, 255}, {40,
 static const Color kSide[2] = {{215, 56, 44, 255}, {44, 112, 232, 255}};  // teams: red, blue
 static const Color kNavy = {44, 112, 232, 255}, kPirate = {34, 32, 36, 255}, kPirateText = {255, 196, 80, 255};
 static const char* const kOrderText[ORDER_COUNT] = {"MAN THE PORT GUNS!", "MAN THE STARBOARD GUNS!", "PATCH THE HOLES!"};
-static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate"};
+static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race"};
+static std::string RaceTimeStr(float t) { return TextFormat("%d:%04.1f", (int)(t / 60.0f), fmodf(t, 60.0f)); }
+static const char* Ordinal(int n) {
+    static const char* k[] = {"", "1ST", "2ND", "3RD"};
+    return n >= 1 && n <= 3 ? k[n] : TextFormat("%dTH", n);
+}
 
 enum class Mode { Menu, Connecting, Playing };
 
@@ -433,7 +438,11 @@ public:
     void Shutdown();
 
 private:
-    void SetOcean(uint32_t seed, int weather, int arena);
+    void SetOcean(uint32_t seed, int weather, int arena, int mode = MODE_FFA);
+    int oceanMode = -1;
+    float raceClock = 0.0f;  // race: s since the round started (from the snapshots)
+    void DrawRaceGates(bool banners);  // the course: buoys, and a banner across the next gate
+    int RacePosition(int id) const;    // 1 = leading
     void StartSession(bool host, int bots, bool open = false);  // open: ask the router to forward the port (real hosting)
     bool portOpened = false;
     void Disconnect(const std::string& why);
@@ -603,12 +612,16 @@ void Game::Shutdown() {
     if (soundOn) sfx::Shutdown();
 }
 
-void Game::SetOcean(uint32_t seed, int weather, int arena) {
-    if (seed == oceanSeed && weather == oceanWeather && arena == oceanArena && pred.ocean.Ready()) return;
+void Game::SetOcean(uint32_t seed, int weather, int arena, int mode) {
+    if (seed == oceanSeed && weather == oceanWeather && arena == oceanArena && mode == oceanMode && pred.ocean.Ready()) return;
     oceanSeed = seed;
     oceanWeather = weather;
     oceanArena = arena;
-    pred.Init(seed, (uint8_t)weather, 0, MODE_FFA, false, (uint8_t)arena);
+    oceanMode = mode;
+    pred.Init(seed, (uint8_t)weather, 0, (uint8_t)mode, false, (uint8_t)arena);
+    if (getenv("BS_RACELOG"))
+        for (size_t i = 0; i < pred.course.size(); ++i)
+            printf("[race] gate %d at %.0f %.0f, through %.2f %.2f, half %.0f\n", (int)i + 1, pred.course[i].x, pred.course[i].z, pred.course[i].dx, pred.course[i].dz, pred.course[i].half);
     renderer.vortex = {0.0f, 0.0f, arena == ARENA_MAELSTROM ? 1.0f : 0.0f, 0.0f};
     sceneryKey = 0xFFFFFFFFu;
     wind = {pred.oceanParams.windDir.x * 3.0f, 0.0f, pred.oceanParams.windDir.y * 3.0f};
@@ -752,7 +765,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                     if (curAllowed & (1 << c)) { classSel = c; break; }
             }
             if (curDeckOnly || crewId >= 0) camDist = 0.0f;
-            SetOcean(seed, curWeather, curArena);
+            SetOcean(seed, curWeather, curArena, curMode);
             predTime = t;
             predValid = false;
             history.clear();
@@ -875,6 +888,9 @@ void Game::Interpolate() {
     cove = snaps.back().cove;
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
+    raceClock = snaps.back().raceClock;
+    pred.matchState = matchState;  // (the prediction holds us on the start line like the server)
+    pred.raceClock = raceClock + (float)Clamp(predTime - snaps.back().time, 0.0, 0.5);
     float t = (b->time > a->time) ? (float)((renderTime - a->time) / (b->time - a->time)) : 0.0f;
     t = Clamp(t, 0.0f, 1.0f);
     float extra = (a == b) ? (float)Clamp(renderTime - a->time, 0.0, 0.25) : 0.0f;
@@ -1092,6 +1108,11 @@ void Game::Autopilot(float dt, PlayerInput& in) {
         o.pirate = (v.s.flags & SF_PIRATE) != 0;
         for (int k = 0; k < 3; ++k) o.reload[k] = v.s.reload[k];
         o.cls = v.s.cls;
+        o.raceGate = v.s.raceGate;
+        o.racePlace = v.s.racePlace;
+        o.hooked = v.s.hooked;
+        o.dashCd = v.s.dashCd;
+        o.hookCd = v.s.hookCd;
     }
     pred.chests[0].active = !chests.empty();
     if (!chests.empty()) { pred.chests[0].x = chests[0].x; pred.chests[0].z = chests[0].z; }
@@ -1286,7 +1307,7 @@ void Game::DrawResults(float W, float H) {
         title = "NOBODY SCORED";
         tc = kText;
     } else {
-        title = won ? "VICTORY" : TextFormat("%s WINS", TextToUpper(NameOf(winShip).c_str()));
+        title = won ? "VICTORY" : TextFormat(curMode == MODE_RACE ? "%s WINS THE RACE" : "%s WINS", TextToUpper(NameOf(winShip).c_str()));
     }
     float y = H * 0.12f;
     Text(title.c_str(), W * 0.5f, y, 64, tc, true, Center);
@@ -1297,7 +1318,9 @@ void Game::DrawResults(float W, float H) {
     for (int id = 0; id < MAX_SHIPS; ++id)
         if (view[id].present && IsCaptain(id)) order.push_back(id);
     auto score = [&](int id) { return curMode == MODE_PIRATE ? (int)view[id].s.banked : (int)view[id].s.kills; };
+    const bool race = curMode == MODE_RACE;
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        if (race) return RacePosition(a) < RacePosition(b);
         return score(a) != score(b) ? score(a) > score(b) : view[a].s.deaths < view[b].s.deaths;
     });
     if (order.size() > 8) order.resize(8);
@@ -1307,8 +1330,8 @@ void Game::DrawResults(float W, float H) {
     Rectangle ps = {x0, top, colW, 60 + order.size() * 38.0f};
     Panel(ps, {10, 16, 24, 230}, 14);
     Label("STANDINGS", ps.x + 22, ps.y + 20, 12, kDim);
-    Label(curMode == MODE_PIRATE ? "BANKED" : "SUNK", ps.x + colW - 110, ps.y + 20, 12, kDim, Center);
-    Label("LOST", ps.x + colW - 40, ps.y + 20, 12, kDim, Center);
+    Label(race ? "TIME" : curMode == MODE_PIRATE ? "BANKED" : "SUNK", ps.x + colW - 110, ps.y + 20, 12, kDim, Center);
+    Label(race ? "CRIPPLED" : "LOST", ps.x + colW - 40, ps.y + 20, 12, kDim, Center);
     for (size_t i = 0; i < order.size(); ++i) {
         int id = order[i];
         float ry = ps.y + 46 + i * 38.0f;
@@ -1316,7 +1339,11 @@ void Game::DrawResults(float W, float H) {
         Text(TextFormat("%d", (int)i + 1), ps.x + 26, ry, 20, i == 0 ? kGold : kDim, true, Center);
         DrawCircleV({ps.x + 50, ry + 11}, 6, TeamOf(id));
         Text(NameOf(id).c_str(), ps.x + 64, ry, 20, id == myId ? kGold : kText, true, Left, false);
-        Text(TextFormat("%d", score(id)), ps.x + colW - 110, ry, 20, kText, true, Center);
+        if (race)
+            Text(view[id].s.racePlace ? RaceTimeStr(view[id].s.raceTime).c_str()
+                                      : TextFormat("GATE %d/%d", (int)view[id].s.raceGate, (int)pred.course.size()),
+                 ps.x + colW - 110, ry, view[id].s.racePlace ? 20 : 14, view[id].s.racePlace ? kText : kDim, true, Center);
+        else Text(TextFormat("%d", score(id)), ps.x + colW - 110, ry, 20, kText, true, Center);
         Text(TextFormat("%d", view[id].s.deaths), ps.x + colW - 40, ry, 20, kDim, false, Center);
     }
     // awards
@@ -1605,6 +1632,86 @@ void Game::DrawFleetRings() {
     rlEnableBackfaceCulling();
 }
 
+// The race course: a buoy each side of every gate still ahead of us, a lamp and a pennant on top; the next gate
+// lit green with a banner strung between its buoys, the finish in black and white.
+void Game::DrawRaceGates(bool banners) {
+    const std::vector<RaceGate>& course = pred.course;
+    if (course.empty()) return;
+    const int next = myId >= 0 && view[myId].present ? view[myId].s.raceGate : 0;
+    const float lit = 1.0f - 0.75f * Clamp(lanternBoost, 0.0f, 1.0f);
+    const float t = (float)GetTime();
+    auto shade = [&](Color c, float k) {
+        return Color{(unsigned char)Clamp(c.r * k, 0.0f, 255.0f), (unsigned char)Clamp(c.g * k, 0.0f, 255.0f), (unsigned char)Clamp(c.b * k, 0.0f, 255.0f), c.a};
+    };
+    if (banners) {
+        if (next >= (int)course.size()) return;
+        const RaceGate& g = course[next];
+        Vector3 a = {g.x - g.dz * g.half, 0, g.z + g.dx * g.half}, b = {g.x + g.dz * g.half, 0, g.z - g.dx * g.half};
+        float pulse = 0.6f + 0.4f * sinf(t * 4.0f);
+        bool fin = next == (int)course.size() - 1;
+        rlDrawRenderBatchActive();
+        rlSetTexture(rlGetTextureIdDefault());
+        rlDisableBackfaceCulling();
+        BeginBlendMode(BLEND_ADDITIVE);
+        rlBegin(RL_QUADS);
+        const int N = 16;
+        for (int k = 0; k < N; ++k) {  // a banner between the pole tops, sagging a little
+            float u0 = (float)k / N, u1 = (float)(k + 1) / N;
+            Vector3 p0 = Vector3Lerp(a, b, u0), p1 = Vector3Lerp(a, b, u1);
+            float y0 = Ocean().Height(p0.x, p0.z) * 0.3f + 13.0f - sinf(u0 * PI) * 1.5f, y1 = Ocean().Height(p1.x, p1.z) * 0.3f + 13.0f - sinf(u1 * PI) * 1.5f;
+            bool check = fin && (k % 2 == 0);
+            Color c = fin ? (check ? Color{255, 255, 255, 255} : Color{40, 40, 40, 255}) : Color{80, 255, 140, 255};
+            rlColor4ub(c.r, c.g, c.b, (unsigned char)(fin ? 200 : 170 * pulse));
+            rlVertex3f(p0.x, y0, p0.z);
+            rlVertex3f(p1.x, y1, p1.z);
+            rlVertex3f(p1.x, y1 - 2.2f, p1.z);
+            rlVertex3f(p0.x, y0 - 2.2f, p0.z);
+        }
+        rlEnd();
+        rlDrawRenderBatchActive();
+        EndBlendMode();
+        rlSetTexture(0);
+        rlEnableBackfaceCulling();
+        return;
+    }
+    for (int i = std::max(0, next); i < (int)course.size(); ++i) {
+        const RaceGate& g = course[i];
+        bool isNext = i == next, fin = i == (int)course.size() - 1;
+        if (!isNext && !fin && i > next + 2) continue;  // (the next three and the finish)
+        Color body = fin ? Color{235, 235, 235, 255} : isNext ? Color{70, 230, 120, 255} : Color{230, 70, 50, 255};
+        for (float side : {-1.0f, 1.0f}) {
+            float x = g.x - g.dz * g.half * side, z = g.z + g.dx * g.half * side;
+            float y = Ocean().Height(x, z);
+            Vector3 base = {x, y - 1.5f, z}, top = {x, y + 14.0f, z};
+            DrawCylinderEx(base, {x, y + 2.0f, z}, 2.4f, 1.8f, 10, shade(body, lit));                   // the float
+            DrawCylinderEx({x, y + 1.0f, z}, {x, y + 1.6f, z}, 2.45f, 2.45f, 10, shade({240, 240, 240, 255}, lit));  // a white band
+            DrawCylinderEx({x, y + 2.0f, z}, top, 0.3f, 0.22f, 6, shade({60, 52, 44, 255}, lit));      // the pole
+            DrawSphere(top, isNext ? 0.9f : 0.6f, isNext || fin ? Color{255, 230, 150, 255} : shade({200, 200, 200, 255}, lit));  // its lamp
+            Vector3 f0 = Vector3Add(top, {0, -0.3f, 0}), f1 = Vector3Add(top, {0, -2.6f, 0});
+            Vector3 fly = Vector3Add(Vector3Lerp(f0, f1, 0.5f), {g.dx * 3.2f, 0.3f * sinf(t * 5.0f + side), g.dz * 3.2f});
+            Color flag = fin ? ((int)(t * 2.0f) % 2 ? Color{20, 20, 20, 255} : Color{245, 245, 245, 255}) : body;
+            DrawTriangle3D(f0, f1, fly, shade(flag, lit));
+            DrawTriangle3D(f1, f0, fly, shade(flag, lit));
+            if (isNext || fin) fx.Lantern(top, isNext ? 7.0f : 5.0f, Fade(isNext ? Color{140, 255, 170, 255} : Color{255, 236, 190, 255}, 0.55f + 0.3f * lanternBoost));
+        }
+    }
+}
+
+// standing in the race: finished first, then the most gates, then the nearest to the next one
+int Game::RacePosition(int id) const {
+    auto key = [&](int i) {
+        const NetShip& s = view[i].s;
+        if (s.racePlace) return 1e9f - s.racePlace;
+        float d = 0.0f;
+        if (s.raceGate < pred.course.size()) d = Vector2Distance({s.pos.x, s.pos.z}, {pred.course[s.raceGate].x, pred.course[s.raceGate].z});
+        return s.raceGate * 10000.0f - d;
+    };
+    int pos = 1;
+    for (int i = 0; i < MAX_SHIPS; ++i)
+        if (i != id && view[i].present && IsCaptain(i) && key(i) > key(id)) ++pos;
+    return pos;
+}
+
 // Where is the reticle pointing? The first thing the camera ray meets: an enemy hull, the sea, or the
 // islands. Returns false when it only finds sky.
 bool Game::ReticlePoint(Vector3 dir, Vector3& out) {
@@ -1825,6 +1932,8 @@ void Game::Reconcile() {
     s.lastHookSeq = ackedHookSeq;
     for (int i = 0; i < PU_COUNT; ++i) s.power[i] = ns->power[i];
     s.pirate = (ns->flags & SF_PIRATE) != 0;
+    s.slowTimer = ns->slowTimer;
+    s.raceGate = ns->raceGate;
     s.helmed = (ns->flags & SF_HELM) != 0;  // (crew at the wheel / the sails: the prediction steers like the server)
     s.trimmed = (ns->flags & SF_TRIM) != 0;
     s.crewed = (ns->flags & SF_CREW) != 0;
@@ -2038,6 +2147,17 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::Kill: {
+            if (e.flags & EF_CRIPPLE) {  // a race: crippled, not sunk
+                fx.Explosion(e.pos, {0, 1, 0}, 1.6f);
+                sfx::Play(sfx::Hit, e.pos, 1.0f, 0.8f);
+                if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  is crippled", "", TeamOf(e.b), ui::kText);
+                else Feed3(NameOf(e.a), "  crippled  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
+                if (e.b == myId) {
+                    flash = fmaxf(flash, 0.4f);
+                    shake = fmaxf(shake, 1.0f);
+                }
+                break;
+            }
             fx.BigExplosion(e.pos);
             sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
             sfx::Play(sfx::Sink, e.pos, 0.9f);
@@ -2167,6 +2287,20 @@ void Game::PlayEvent(const GameEvent& e) {
         }
         case EventType::Award:
             if (e.a < MAX_SHIPS) awards.push_back({e.a, e.b, e.value});
+            break;
+        case EventType::RaceGate:
+            if (e.a == myId && e.b < pred.course.size()) {
+                sfx::PlayFlat(sfx::Chime, 0.7f, 1.2f);
+                floats.push_back({Vector3Add(e.pos, {0, 24, 0}), TextFormat("GATE %d / %d", (int)e.b, (int)pred.course.size()), ui::kGreen, 1.6f});
+            }
+            break;
+        case EventType::RaceFinish:
+            Feed3(NameOf(e.a), TextFormat("  finished %s  ", Ordinal(e.b)), RaceTimeStr(e.value), TeamOf(e.a), ui::kGold);
+            if (e.a == myId) {
+                sfx::PlayFlat(sfx::Treasure, 0.9f, e.b == 1 ? 1.0f : 0.85f);
+                banner = TextFormat("FINISHED %s   %s", Ordinal(e.b), RaceTimeStr(e.value).c_str());
+                bannerTime = GetTime();
+            }
             break;
         case EventType::MatchStart:
             banner = TextFormat("ROUND %d", e.b);
@@ -2785,6 +2919,7 @@ void Game::RenderWorld(float dt, bool menu) {
         }
     }
     DrawCrates(menu);
+    if (!menu && curMode == MODE_RACE) DrawRaceGates(false);
 
     // ships
     lanternPts.clear();
@@ -2809,6 +2944,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu) DrawTracers(cam);
     if (!menu) DrawHookLines();
     if (!menu) DrawFleetRings();
+    if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
     if (!menu && myId >= 0 && view[myId].present && OwnShipGhost() < 0.99f) {
         const NetShip& s = view[myId].s;
         rlDrawRenderBatchActive();
@@ -3230,14 +3366,80 @@ void Game::DrawHUD() {
         bannerRight = r.x + r.width;
         if (unload > 0.0f) Bar({r.x + 10, r.y + r.height - 4, (r.width - 20), 3}, unload, kPirateText, {0, 0, 0, 120});
     }
+    // ---- race ----
+    if (curMode == MODE_RACE && me && matchState == 0 && !pred.course.empty()) {
+        const int total = (int)pred.course.size();
+        const float held = tune::raceCountdown - raceClock;
+        if (held > -1.0f) {  // 3, 2, 1, GO
+            const char* c = held > 0.0f ? TextFormat("%d", (int)ceilf(fminf(held, 3.0f))) : "GO!";
+            float k = held > 0.0f ? held - floorf(held) : held + 1.0f;  // (each number swells and fades)
+            Text(c, W * 0.5f, H * 0.26f, 110.0f + 40.0f * (1.0f - k), A(held > 0.0f ? kGold : kGreen, Clamp(k * 1.5f, 0.0f, 1.0f)), true, Center);
+        }
+        int gate = std::min<int>(me->raceGate, total);
+        std::string t;
+        int captains = 0;
+        for (int id = 0; id < MAX_SHIPS; ++id) captains += view[id].present && IsCaptain(id);
+        if (me->racePlace)
+            t = TextFormat("FINISHED %s   \xC2\xB7   %s", Ordinal(me->racePlace), RaceTimeStr(me->raceTime).c_str());
+        else
+            t = TextFormat("GATE %d / %d   \xC2\xB7   %s OF %d   \xC2\xB7   %s", gate + 1 > total ? total : gate + 1, total, Ordinal(RacePosition(myId)), captains,
+                           RaceTimeStr(fmaxf(0.0f, raceClock - tune::raceCountdown)).c_str());
+        bool someoneHome = false;
+        for (int id = 0; id < MAX_SHIPS; ++id) someoneHome |= view[id].present && view[id].s.racePlace == 1;
+        Vector2 m = Measure(t.c_str(), 16, true);
+        Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
+        Panel(r, kPanel, 8);
+        Text(t.c_str(), W * 0.5f, r.y + 4, 16, me->racePlace ? kGold : kText, true, Center);
+        if (someoneHome && !me->racePlace) {  // the clock is running out for the rest
+            float pulse = 0.6f + 0.4f * sinf((float)now * 6.0f);
+            Text(TextFormat("%d s TO FINISH", (int)ceilf(matchClock)), W * 0.5f, r.y + 34, 18, A(kRed, pulse), true, Center);
+        }
+        // the next gate: a marker over it, or an arrow at the edge of the screen pointing the way
+        if (!me->racePlace && gate < total) {
+            const RaceGate& g = pred.course[gate];
+            Vector3 p = {g.x, Ocean().Height(g.x, g.z) + 16.0f, g.z};
+            float d = Vector3Distance(rv.pos, p);
+            Vector2 sp;
+            bool onScreen = rv.Project(p, sp) && sp.x > 30 && sp.y > 60 && sp.x < W - 30 && sp.y < H - 30;
+            bool fin = gate == total - 1;
+            Color c = fin ? kGold : kGreen;
+            if (onScreen) {
+                DrawPoly(sp, 4, 13.0f, 45.0f, {0, 0, 0, 170});
+                DrawPoly(sp, 4, 10.0f, 45.0f, c);
+                Label(fin ? "FINISH" : TextFormat("GATE %d", gate + 1), sp.x, sp.y - 30, 11, c, Center);
+                Text(TextFormat("%d m", (int)d), sp.x, sp.y + 15, 13, c, false, Center);
+            } else {
+                Vector3 to = Vector3Subtract(p, rv.pos);
+                Vector3 fwdC = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+                Vector3 right = Vector3Normalize(Vector3CrossProduct(fwdC, {0, 1, 0}));
+                float ax = Vector3DotProduct(to, right), ay = -Vector3DotProduct(to, {0, 1, 0}) * 0.2f;
+                float ang = atan2f(ay, ax);
+                Vector2 dir = {cosf(ang), sinf(ang)};
+                Vector2 at = {W * 0.5f + dir.x * (W * 0.5f - 60), H * 0.5f + dir.y * (H * 0.5f - 80)};
+                Vector2 tip = Vector2Add(at, Vector2Scale(dir, 18)), l = Vector2Add(at, {-dir.y * 12, dir.x * 12}), rr = Vector2Add(at, {dir.y * 12, -dir.x * 12});
+                DrawTriangle(tip, rr, l, c);
+                DrawTriangle(tip, l, rr, c);
+                Label(fin ? "FINISH" : TextFormat("GATE %d", gate + 1), at.x - dir.x * 30, at.y - dir.y * 30 - 6, 11, c, Center);
+            }
+        }
+        if (!me->racePlace && gate == 0 && held <= -1.0f)
+            Text("GUNS RUN OUT AFTER THE FIRST GATE", W * 0.5f, r.y + 34, 15, kDim, true, Center);
+        if (me->slowTimer > 0.0f) {  // crippled
+            const char* c = TextFormat("CRIPPLED   \xC2\xB7   SLOWED %.1f s", me->slowTimer);
+            Vector2 cm = Measure(c, 18, true);
+            Rectangle cr = {W * 0.5f - cm.x * 0.5f - 18, H * 0.2f + 30, cm.x + 36, 32};
+            Panel(cr, A(kPanel, 0.9f), 8);
+            Text(c, W * 0.5f, cr.y + 6, 18, kRed, true, Center);
+        }
+    }
     // ---- round clock ----
-    if (matchClock > 0.0f && matchState == 0) {
+    if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE) {
         int secs = (int)ceilf(matchClock);
         int lim = tune::scoreLimit[curMode < 3 ? curMode : 0];
         const char* goal = curMode == MODE_PIRATE ? TextFormat("FIRST TO %d TREASURE", lim)
                                                    : TextFormat("FIRST TO %d SINKINGS", lim);
         std::string t = TextFormat("%d:%02d   \xC2\xB7   %s", secs / 60, secs % 60, goal);
-        if (bannerRight > 0) t = TextFormat("%d:%02d   Â·   FIRST TO %d", secs / 60, secs % 60, lim);  // short beside a banner
+        if (bannerRight > 0) t = TextFormat("%d:%02d   \xC2\xB7   FIRST TO %d", secs / 60, secs % 60, lim);  // short beside a banner
         else if (curMode != MODE_TEAMS) {  // who's ahead
             int lead = -1;
             for (int id = 0; id < MAX_SHIPS; ++id) {

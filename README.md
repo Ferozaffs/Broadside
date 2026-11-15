@@ -72,6 +72,13 @@ The host picks the game in the menu:
   no repairs) and has to sail it to the harbour flying the black flag - always far away, and a different one for
   every treasure - and hold it for 10 seconds to unload, while everyone else hunts them. Sink the carrier and the
   treasure goes over the side for anyone to grab. First to 5 banked.
+- **Race**: a sprint from one harbour to the one across the bay, through five gates (two buoys with a banner
+  across the one you want next). Everyone starts abreast for a 3-2-1 countdown. Dash and the grappling hook are
+  always on and come back quicker: hook a ship ahead and let it tow you up, or throw a line round the sea stack on
+  the inside of a turn and swing about it. Guns run out after the first gate. Sunk means crippled: you're patched
+  up on the spot but sail at 40% for 4 seconds (and can't be crippled again meanwhile). Miss a gate and you come
+  round for it. First home wins; the rest get 20 seconds. In the maelstrom the course runs round the whirlpool,
+  with the current.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
