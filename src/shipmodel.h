@@ -57,6 +57,7 @@ private:
     bool LoadLod(const std::string& dir, const char* base, Shader lit, const std::vector<std::string>& sailKeys, Model& out,
                  std::vector<bool>& sailOut, std::vector<bool>& ropeOut);
     float extTop = 25.0f;
+    float extFit = 1.0f;  // model units -> hull units (the sail flutter is given in model units, so divide by it)
     // crew mode deck map (hull space grid, built from the standard model's upward faces and walls)
     static constexpr float kDX = 0.25f, kX0 = -6.0f, kZ0 = -20.0f;
     static constexpr int kNX = 48, kNZ = 168;

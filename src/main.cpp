@@ -343,6 +343,7 @@ public:
     int HookCandidate(Vector3 dir) const;
     bool RockCandidate(Vector3 dir, Vector3& at) const;  // a rock face under the reticle within hook range
     void DrawHookLines();
+    void DrawFleetRings();  // a green ring on the water round each of your escorts
     void PickClass(int c);
     void DrawClassCards(Rectangle area, bool keys, bool row);
     float ScaleOf(int id) const { return id >= 0 && id < MAX_SHIPS ? ClassOf(view[id].s.cls).scale : 1.0f; }
@@ -501,6 +502,12 @@ private:
     bool hitMarkerGold = false;
     std::string NameOf(int id) const {
         if (id < 0 || id >= MAX_SHIPS) return "the sea";
+        int lead = info[id].leader >= 0 ? info[id].leader : view[id].s.leader;
+        if (lead >= 0 && lead < MAX_SHIPS && lead != id) {  // an escort: no name of its own
+            if (lead == myId) return "your escort";
+            std::string cap = info[lead].name.empty() ? std::string(TextFormat("Ship %d", lead)) : info[lead].name;
+            return cap + "'s escort";
+        }
         return info[id].name.empty() ? TextFormat("Ship %d", id) : info[id].name;
     }
     void Emit(Vector3 p, Vector3 v, float life, float size, float grow, Color c, uint8_t kind) {
@@ -1478,11 +1485,21 @@ int Game::HookCandidate(Vector3 dir) const {
 
 // Grappling lines: a sagging rope from the bow of the ship that threw it to the other hull.
 void Game::DrawHookLines() {
-    const float lit = 1.0f - 0.8f * Clamp(lanternBoost, 0.0f, 1.0f);  // unlit geometry: dim it at night
+    // A tarred hemp line with a grapnel on the end: shaded round (dark edges, a lit middle), the strands twisting
+    // along it up close, sagging as it slackens and thrumming while it's hauled taut. Thrown out over a quarter
+    // of a second when the hook is first let fly.
+    const float lit = 1.0f - 0.85f * Clamp(lanternBoost, 0.0f, 1.0f);  // unlit geometry: dim it at night
+    const float now = (float)GetTime();
+    struct Grapnel { Vector3 at, dir; };
+    std::vector<Grapnel> hooks;
     rlDrawRenderBatchActive();
     rlSetTexture(rlGetTextureIdDefault());
     rlDisableBackfaceCulling();
     rlBegin(RL_QUADS);
+    auto col = [&](float k) {
+        rlColor4ub((unsigned char)Clamp(74.0f * k * lit, 0.0f, 255.0f), (unsigned char)Clamp(54.0f * k * lit, 0.0f, 255.0f),
+                   (unsigned char)Clamp(32.0f * k * lit, 0.0f, 255.0f), 255);  // tarred hemp (the tonemap lifts it)
+    };
     for (int id = 0; id < MAX_SHIPS; ++id) {
         if (!view[id].present) continue;
         const NetShip& s = view[id].s;
@@ -1492,27 +1509,98 @@ void Game::DrawHookLines() {
         Vector3 a = HullToWorld(s.pos, s.rot, {0, 3.0f, hull::halfLength}, ClassOf(s.cls).scale);
         Vector3 b = rock ? s.hookAnchor : HullToWorld(view[t].s.pos, view[t].s.rot, {0, 3.0f, 0}, ClassOf(view[t].s.cls).scale);
         float len = Vector3Distance(a, b);
+        if (len < 0.5f) continue;
         float slack = Clamp(1.0f - s.hookTimer / tune::hookTime, 0.0f, 1.0f);
-        const int N = 16;
+        float out = Clamp((tune::hookTime - s.hookTimer) / 0.25f, 0.0f, 1.0f);  // (the throw)
+        Vector3 end = Vector3Lerp(a, b, out);
+        float taut = out < 1.0f ? 0.0f : 1.0f - slack;
+        const int N = 40;
         Vector3 prev = a;
+        float prevU = 0.0f;
         for (int k = 1; k <= N; ++k) {
             float u = (float)k / N;
-            Vector3 p = Vector3Lerp(a, b, u);
-            p.y -= sinf(u * PI) * (0.03f * len) * (0.4f + 0.6f * slack);  // sag
+            Vector3 p = Vector3Lerp(a, end, u);
+            float sagK = out < 1.0f ? 0.015f : 0.03f * (0.35f + 0.65f * slack);
+            p.y -= sinf(u * PI) * fminf(sagK * len, 2.5f);  // (a long line would sag into the swell and vanish)
+            p.y += sinf(u * PI) * sinf(now * 38.0f + id) * 0.06f * taut;  // thrum while hauled taut
             Vector3 dir = Vector3Normalize(Vector3Subtract(p, prev));
-            Vector3 side = Vector3CrossProduct(dir, Vector3Normalize(Vector3Subtract(rv.pos, p)));
-            float w = 0.2f + 0.0028f * Vector3Distance(rv.pos, p);  // reads as a line at range too
-            side = Vector3Scale(Vector3Normalize(side), w);
-            rlColor4ub((unsigned char)(196 * lit), (unsigned char)(168 * lit), (unsigned char)(118 * lit), 255);  // pale hemp
-            rlVertex3f(prev.x + side.x, prev.y + side.y, prev.z + side.z);
-            rlVertex3f(prev.x - side.x, prev.y - side.y, prev.z - side.z);
-            rlVertex3f(p.x - side.x, p.y - side.y, p.z - side.z);
-            rlVertex3f(p.x + side.x, p.y + side.y, p.z + side.z);
+            Vector3 toEye = Vector3Normalize(Vector3Subtract(rv.pos, p));
+            float d = Vector3Distance(rv.pos, p);
+            float w = 0.17f + 0.0034f * d;  // a rope up close, still a line at range
+            Vector3 side = Vector3Scale(Vector3Normalize(Vector3CrossProduct(dir, toEye)), w);
+            // strands: a light band that winds round the rope (only where it's close enough to see)
+            float twist = Clamp(1.0f - d / 90.0f, 0.0f, 1.0f);
+            float ph0 = prevU * len / 0.32f * 2.0f * PI, ph1 = u * len / 0.32f * 2.0f * PI;
+            float c0 = 1.0f + 0.22f * twist * sinf(ph0), c1 = 1.0f + 0.22f * twist * sinf(ph1);
+            Vector3 l0 = Vector3Add(prev, side), r0 = Vector3Subtract(prev, side);
+            Vector3 l1 = Vector3Add(p, side), r1 = Vector3Subtract(p, side);
+            // left half: edge in shadow -> lit middle; right half: lit middle -> edge
+            col(0.45f); rlVertex3f(l0.x, l0.y, l0.z);
+            col(1.15f * c0); rlVertex3f(prev.x, prev.y, prev.z);
+            col(1.15f * c1); rlVertex3f(p.x, p.y, p.z);
+            col(0.45f); rlVertex3f(l1.x, l1.y, l1.z);
+            col(1.15f * c0); rlVertex3f(prev.x, prev.y, prev.z);
+            col(0.35f); rlVertex3f(r0.x, r0.y, r0.z);
+            col(0.35f); rlVertex3f(r1.x, r1.y, r1.z);
+            col(1.15f * c1); rlVertex3f(p.x, p.y, p.z);
             prev = p;
+            prevU = u;
+        }
+        if (Vector3Distance(rv.pos, end) < 400.0f) hooks.push_back({end, Vector3Normalize(Vector3Subtract(end, a))});
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    rlSetTexture(0);
+    rlEnableBackfaceCulling();
+    // the grapnel: an iron shank with four flukes curling back from the crown
+    const Color iron = {(unsigned char)(70 * lit), (unsigned char)(66 * lit), (unsigned char)(62 * lit), 255};
+    for (const Grapnel& g : hooks) {
+        Vector3 up = fabsf(g.dir.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+        Vector3 r1 = Vector3Normalize(Vector3CrossProduct(g.dir, up)), r2 = Vector3CrossProduct(g.dir, r1);
+        Vector3 crown = Vector3Add(g.at, Vector3Scale(g.dir, 0.9f));
+        DrawCylinderEx(Vector3Subtract(g.at, Vector3Scale(g.dir, 0.2f)), crown, 0.07f, 0.09f, 6, iron);
+        DrawSphere(g.at, 0.13f, iron);  // the eye the line is bent to
+        for (int k = 0; k < 4; ++k) {
+            float ang = k * PI * 0.5f + 0.4f;
+            Vector3 rad = Vector3Add(Vector3Scale(r1, cosf(ang)), Vector3Scale(r2, sinf(ang)));
+            Vector3 mid = Vector3Add(crown, Vector3Add(Vector3Scale(rad, 0.42f), Vector3Scale(g.dir, 0.05f)));
+            Vector3 tip = Vector3Add(crown, Vector3Add(Vector3Scale(rad, 0.62f), Vector3Scale(g.dir, -0.45f)));
+            DrawCylinderEx(crown, mid, 0.06f, 0.055f, 5, iron);
+            DrawCylinderEx(mid, tip, 0.055f, 0.015f, 5, iron);
+        }
+    }
+}
+
+void Game::DrawFleetRings() {
+    if (myId < 0) return;
+    rlDrawRenderBatchActive();
+    rlSetTexture(rlGetTextureIdDefault());
+    rlDisableBackfaceCulling();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlBegin(RL_QUADS);
+    const float t = (float)GetTime();
+    for (int id = 0; id < MAX_SHIPS; ++id) {
+        if (id == myId || !view[id].present || view[id].s.leader != myId || !(view[id].s.flags & SF_ALIVE)) continue;
+        const NetShip& s = view[id].s;
+        float R = 16.0f * ClassOf(s.cls).scale + 6.0f, d = Vector3Distance(rv.pos, s.pos);
+        float wdt = 0.9f + d * 0.004f;
+        float pulse = 0.75f + 0.25f * sinf(t * 3.0f + id);
+        const int N = 48;
+        for (int k = 0; k < N; ++k) {
+            float a0 = (float)k / N * 2.0f * PI, a1 = (float)(k + 1) / N * 2.0f * PI;
+            const float corner[4][2] = {{a0, R - wdt}, {a1, R - wdt}, {a1, R + wdt}, {a0, R + wdt}};  // (angle, radius)
+            Vector3 q[4];
+            for (int j = 0; j < 4; ++j) {
+                float x = s.pos.x + cosf(corner[j][0]) * corner[j][1], z = s.pos.z + sinf(corner[j][0]) * corner[j][1];
+                q[j] = {x, Ocean().Height(x, z) + 0.4f, z};
+            }
+            rlColor4ub(60, 230, 110, (unsigned char)(150 * pulse));
+            for (const Vector3& v : q) rlVertex3f(v.x, v.y, v.z);
         }
     }
     rlEnd();
     rlDrawRenderBatchActive();
+    EndBlendMode();
     rlSetTexture(0);
     rlEnableBackfaceCulling();
 }
@@ -2720,6 +2808,7 @@ void Game::RenderWorld(float dt, bool menu) {
     DrawLighthouseBeams(cam);
     if (!menu) DrawTracers(cam);
     if (!menu) DrawHookLines();
+    if (!menu) DrawFleetRings();
     if (!menu && myId >= 0 && view[myId].present && OwnShipGhost() < 0.99f) {
         const NetShip& s = view[myId].s;
         rlDrawRenderBatchActive();
@@ -3002,6 +3091,7 @@ void Game::DrawHUD() {
     for (int id = 0; id < MAX_SHIPS; ++id) {
         if (!view[id].present || id == myId) continue;
         const NetShip& s = view[id].s;
+        if (s.leader == myId) continue;  // (your own escorts carry the FLEET marker, health and all)
         // is the ship under the reticle? screen rect of bow, stern, keel and masthead vs the ring
         bool under = false;
         {
@@ -3024,7 +3114,7 @@ void Game::DrawHUD() {
         float d = Vector3Distance(rv.pos, s.pos);
         float a = tagFade[id];
         bool on = s.flags & SF_ALIVE;
-        const std::string nm = NameOf(id);
+        const std::string nm = s.leader >= 0 ? std::string(s.leader == myId ? "YOUR ESCORT" : "ESCORT") : NameOf(id);
         Vector2 m = Measure(nm.c_str(), 17, true);
         Text(nm.c_str(), sp.x + 6, sp.y - 24, 17, A(on ? kText : kDim, a), true, Center);
         DrawCircleV({sp.x - m.x * 0.5f - 4, sp.y - 14}, 4.5f, A(TeamOf(id), a));
@@ -3098,8 +3188,14 @@ void Game::DrawHUD() {
             Label("PIRATE", sp.x, sp.y - 24, 10, kRed, Center);
             if (curMode == MODE_PIRATE) DrawPoly({sp.x, sp.y - 36}, 4, 5.0f, 45.0f, Scenery::PowerColor(PU_COUNT));  // has the treasure
             Text(TextFormat("%d m", (int)d), sp.x, sp.y + 11, 12, kRed, false, Center);
+        } else if (mine) {  // your own fleet: hard to miss among a bay full of colours
+            float k = Clamp(1.25f - d / 1200.0f, 0.6f, 1.0f);
+            DrawTriangle({sp.x - 11 * k, sp.y - 9 * k}, {sp.x, sp.y + 7 * k}, {sp.x + 11 * k, sp.y - 9 * k}, {0, 0, 0, 200});
+            DrawTriangle({sp.x - 8 * k, sp.y - 7 * k}, {sp.x, sp.y + 4 * k}, {sp.x + 8 * k, sp.y - 7 * k}, kGreen);
+            Label("FLEET", sp.x, sp.y - 24 * k, 10, kGreen, Center);
+            Bar({sp.x - 16, sp.y + 9 * k, 32, 4}, s.hp / s.maxHp, kGreen, Color{0, 0, 0, 150});
         } else {  // a friendly chevron
-            Color c = mine ? kGreen : TeamOf(id);
+            Color c = TeamOf(id);
             DrawTriangle({sp.x - 6, sp.y - 5}, {sp.x, sp.y + 4}, {sp.x + 6, sp.y - 5}, A(c, 0.9f));
         }
     }
@@ -4511,6 +4607,17 @@ void Game::Frame() {
         UpdateAtmosphere(dt, false);
         UpdateSound(dt, false);
         if (prof) mark[5] = GetTime();
+        if (getenv("BS_SHOTONHOOK") && myId >= 0 && view[myId].present && view[myId].s.hooked >= 0 && view[myId].s.hooked < MAX_SHIPS &&
+            view[view[myId].s.hooked].present) {  // (testing the grapple's looks: side on to the line)
+            const NetShip& a = view[myId].s;
+            const NetShip& b = view[a.hooked].s;
+            Vector3 mid = Vector3Lerp(a.pos, b.pos, 0.5f), along = Vector3Normalize(Vector3Subtract(b.pos, a.pos));
+            Vector3 side = Vector3Normalize(Vector3CrossProduct(along, {0, 1, 0}));
+            float L = Vector3Distance(a.pos, b.pos);
+            rv.pos = Vector3Add(mid, Vector3Add(Vector3Scale(side, 0.45f * L + 25.0f), {0, 9.0f, 0}));
+            rv.target = Vector3Add(mid, {0, 3.0f, 0});
+            rv.up = {0, 1, 0};
+        }
         RenderWorld(dt, false);
         DrawLanternHalos(false);
         if (prof) mark[6] = GetTime();
@@ -4528,6 +4635,14 @@ void Game::Frame() {
     }
     // automated screenshots: in a match, time since joining; in the menu, time since launch
     double shotClock = mode == Mode::Playing ? GetTime() - sessionStart : (opt.start == Options::Menu ? GetTime() : -1.0);
+    if (getenv("BS_SHOTONHOOK") && opt.shotTime > 0 && mode == Mode::Playing && myId >= 0 && view[myId].present) {
+        // (testing the grapple's looks: hold the shot until our own line has been fast for a moment)
+        static double fastSince = -1.0;
+        bool fast = view[myId].s.hooked >= 0;
+        if (!fast) fastSince = -1.0;
+        else if (fastSince < 0.0) fastSince = GetTime();
+        if (!(fast && GetTime() - fastSince > atof(getenv("BS_SHOTONHOOK")))) shotClock = 0.0;
+    }
     if (opt.shotTime > 0 && shotClock > opt.shotTime) {
         rlDrawRenderBatchActive();
         Image img = LoadImageFromScreen();

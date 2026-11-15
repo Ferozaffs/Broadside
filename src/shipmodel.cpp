@@ -482,11 +482,13 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     m = MatrixMultiply(m, MatrixScale(s, s * yscale, s));
     m = MatrixMultiply(m, MatrixTranslate(0, keel, 0));
     extFix = m;
+    extFit = s;
     extTop = size.y * s * yscale + keel;
     if (raw) {
         extFix = MatrixIdentity();
         extTop = bb.max.y;
         s = 1.0f;
+        extFit = 1.0f;
     }
     for (int i = 0; i < ext.materialCount; ++i) ext.materials[i].shader = lit;
     // raylib drops glTF material names; materials[i+1] corresponds to glTF material i, so read
@@ -758,7 +760,7 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
         if (lod == 2 && hasLo) { M = &extLo; isSail = &loSail; isRope = &loRope; }
         Matrix m = MatrixMultiply(extFix, model);
         rlDisableBackfaceCulling();  // sails and thin rigging are single-sided in most models
-        float flutter = 0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f);
+        float flutter = (0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f)) / fmaxf(0.01f, extFit);  // (metres, in the model's units)
         for (int i = 0; i < M->meshCount; ++i) {
             if ((*isRope)[i] && camDist > 280.0f) continue;  // sub-pixel rigging only shimmers
             Material& em = M->materials[M->meshMaterial[i]];
