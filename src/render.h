@@ -69,6 +69,7 @@ public:
     Vector3 ambient{0.55f, 0.6f, 0.68f};  // sky light on particles (0..1)
     Atmos atm;  // set before Begin each frame; sunDir/sunColor/ambient are taken from it
     Vector4 vortex{0, 0, 0, 0};  // maelstrom arena: xy centre (world xz), z = 1 when there is one
+    unsigned int SceneDepthTex() const { return sceneDepth; }  // this frame's resolved depth (after End)
 
 private:
     void CreateTargets(int w, int h);

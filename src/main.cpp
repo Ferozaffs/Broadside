@@ -404,6 +404,8 @@ public:
     void DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float sail, Color team, float flash, float hpFrac, bool alive,
                   Vector3 pos, Quaternion rot, float phase, float scale = 1.0f);
     Texture2D softTex{};
+    Shader haloShader{};  // far lantern halos: hidden behind whatever is nearer (sails, hulls, islands)
+    int haloLocAt = -1, haloLocDepth = -1, haloLocNF = -1;
     // wakes: each ship's recent track (redrawn into the renderer's wake map every frame), and foam patches
     struct WakePt { Vector2 p, d; double t; float spd; bool water; };
     std::deque<WakePt> wakeHist[MAX_SHIPS];
@@ -2902,6 +2904,31 @@ void Game::DrawLanternHalos(bool menu) {
     const Atmos& a = renderer.atm;
     if (a.lanterns < 0.3f) return;
     rlDrawRenderBatchActive();
+    // The halos are drawn on the finished frame, over everything: each one looks up the scene's depth where its
+    // lantern is and is dropped if something nearer is in the way (your own sails, another hull, an island).
+    if (haloShader.id == 0) {
+        static const char* fs =
+            "#version 330\n"
+            "in vec2 fragTexCoord; in vec4 fragColor;\n"
+            "uniform sampler2D uDepth; uniform vec3 uAt; uniform vec2 uNF;\n"
+            "out vec4 finalColor;\n"
+            "void main() {\n"
+            "    float z = texture(uDepth, uAt.xy).r * 2.0 - 1.0;\n"
+            "    float lin = 2.0 * uNF.x * uNF.y / (uNF.y + uNF.x - z * (uNF.y - uNF.x));\n"
+            "    if (lin < uAt.z - 3.0) discard;\n"
+            "    finalColor = fragColor;\n"
+            "}\n";
+        haloShader = LoadShaderFromMemory(nullptr, fs);
+        haloLocAt = GetShaderLocation(haloShader, "uAt");
+        haloLocDepth = GetShaderLocation(haloShader, "uDepth");
+        haloLocNF = GetShaderLocation(haloShader, "uNF");
+    }
+    BeginShaderMode(haloShader);
+    {
+        float nf[2] = {rv.nearZ, rv.farZ};
+        SetShaderValue(haloShader, haloLocNF, nf, SHADER_UNIFORM_VEC2);
+    }
+    const Texture2D depthTex = {renderer.SceneDepthTex(), rv.width, rv.height, 1, PIXELFORMAT_UNCOMPRESSED_R32};
     BeginBlendMode(BLEND_ADDITIVE);
     auto one = [&](Vector3 pos, Quaternion rot, Color team) {
         Vector3 spots[4];
@@ -2917,8 +2944,14 @@ void Game::DrawLanternHalos(bool menu) {
             if (vis < 0.03f) continue;
             float r = Clamp(2400.0f / fmaxf(d, 1.0f), 2.0f, 6.0f);
             Color c = {255, 176, 92, 255};
+            const Matrix& m = rv.viewProj;  // the lantern's distance along the view (clip w), against the depth there
+            float at[3] = {sp.x / fmaxf(1.0f, (float)rv.width), 1.0f - sp.y / fmaxf(1.0f, (float)rv.height),
+                           m.m3 * w.x + m.m7 * w.y + m.m11 * w.z + m.m15};
+            SetShaderValue(haloShader, haloLocAt, at, SHADER_UNIFORM_VEC3);
+            SetShaderValueTexture(haloShader, haloLocDepth, depthTex);
             DrawCircleGradient((int)sp.x, (int)sp.y, r * 2.2f, Fade(c, 0.22f * vis), Fade(c, 0.0f));
             DrawCircleGradient((int)sp.x, (int)sp.y, r * 0.7f, Fade({255, 236, 200, 255}, 0.7f * vis), Fade(c, 0.0f));
+            rlDrawRenderBatchActive();  // (the uniforms are per halo)
             (void)team;
         }
     };
@@ -2930,6 +2963,7 @@ void Game::DrawLanternHalos(bool menu) {
             if (view[id].present && (view[id].s.flags & SF_ALIVE)) one(view[id].s.pos, view[id].s.rot, ColorOf(id));
     }
     EndBlendMode();
+    EndShaderMode();
 }
 
 // ----------------------------------------------------------------------------
