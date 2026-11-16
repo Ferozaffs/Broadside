@@ -7,13 +7,17 @@
 #include "raymath.h"
 #include <cstdint>
 #include <string>
+#include <deque>
 #include <vector>
 
-constexpr int MAX_SHIPS = 64;  // captains plus their fleets
+// Ships (captains plus their fleets) and crewmen have no fixed number: the lists grow as they join. Ids travel in
+// 16 bits with the top values kept as markers (NO_SHIP, HOOK_ROCK), so the only ceiling is ~32000 at once.
+constexpr uint16_t NO_SHIP = 0xFFFF;   // event a / b, hook target: nobody
+constexpr int SHIP_ID_LIMIT = 32000;
+constexpr int CREW_ID_LIMIT = 32000;
 constexpr float SIM_DT = 1.0f / 60.0f;
 constexpr int CANNONS_PER_SIDE = 4;  // the frigate (and the low-poly stand-in model)
 constexpr int MAX_GUNS = 6;          // per side, any class
-constexpr int MAX_CREW = 32;         // crew mode: human crewmen across all ships
 constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 
 // ---- ship classes ---------------------------------------------------------------
@@ -258,7 +262,7 @@ void MakeStraitCourse(uint32_t seed, uint8_t arena, const std::vector<Rock>& roc
 constexpr float raceLineStep = 10.0f;
 // can a grappling hook bite at p (on or just under a rock surface, above the seabed)?
 bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
-constexpr uint8_t HOOK_ROCK = 64;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
+constexpr int16_t HOOK_ROCK = 32766;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
 // Wave-height multipliers for OceanCPU::SetDamp: full sea in open water, calm in the lee of the land
 std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false, float calmDist = tune::shoreCalmDist);
 float RockCoast(const Rock& k, float ang);       // coastline radius at a bearing from the centre
@@ -272,7 +276,7 @@ struct PlayerInput {
     uint8_t fireSeq = 0;
     uint8_t dashSeq = 0;      // skills: each new value is one press
     uint8_t hookSeq = 0;
-    uint8_t hookTarget = 255; // the ship the hook is fired at (client picks it from the reticle), or HOOK_ROCK...
+    uint16_t hookTarget = NO_SHIP; // the ship the hook is fired at (client picks it from the reticle), or HOOK_ROCK...
     Vector3 hookPoint{};      // ...and then the spot on the rock
     uint32_t seq = 0;  // client input sequence number (acked back in snapshots for prediction)
 };
@@ -285,7 +289,7 @@ struct PendingShot {
     bool recoil = true;
     bool ownAim = false;            // crew mode: a crewman laid this gun himself...
     Vector3 aim{};                  // ...this way
-    int8_t crew = -1;               // (and gets the credit)
+    int16_t crew = -1;              // (and gets the credit)
 };
 
 // ---- crew mode ----------------------------------------------------------------
@@ -305,7 +309,7 @@ struct CrewInput {
 struct Crewman {
     bool active = false;
     std::string name;
-    int8_t ship = -1;       // the ship we're aboard
+    int16_t ship = -1;      // the ship we're aboard
     Vector3 local{};
     float yaw = 0.0f;
     int8_t gun = -1;        // gun we're working
@@ -336,7 +340,7 @@ enum Order : uint8_t { ORDER_PORT = 0, ORDER_STARBOARD = 1, ORDER_PATCH = 2, ORD
 struct Ship {
     bool active = false;
     bool isBot = false;
-    uint8_t id = 0;
+    uint16_t id = 0;
     std::string name;
     // rigid body (pos = centre of mass)
     Vector3 pos{}, vel{}, angVel{};
@@ -361,7 +365,7 @@ struct Ship {
     int lastAttacker = -1;
     // side and fleet
     int8_t team = -1;     // teams / pirate mode (pirate side = 1); -1 in free-for-all
-    int8_t leader = -1;   // escorts: the captain they sail with
+    int16_t leader = -1;  // escorts: the captain they sail with
     uint8_t slot = 0;     // escorts: place in the formation
     float catchUp = 0.0f;  // escorts: extra speed while they're far off station
     float strayTime = 0.0f;  // escorts: how long they've been hopelessly far off station (then they rejoin)
@@ -384,7 +388,7 @@ struct Ship {
     // skills
     uint8_t lastDashSeq = 0, lastHookSeq = 0;
     float dashTimer = 0, dashCd = 0, hookCd = 0, hookTimer = 0, hookRest = 0;
-    int8_t hooked = -1;              // the ship our line is fast to (HOOK_ROCK: the rocks, at hookAnchor)
+    int16_t hooked = -1;             // the ship our line is fast to (HOOK_ROCK: the rocks, at hookAnchor)
     Vector3 hookAnchor{};
     Vector3 hookPos{}, hookVel{};    // prediction only: where that ship is (the client fills it in)
     float hookMass = 0;
@@ -408,13 +412,13 @@ struct Ship {
 struct Ball {
     float dmgMul = 1.0f;  // the gun it came out of
     uint16_t id = 0;
-    uint8_t owner = 0;
+    uint16_t owner = 0;
     bool inWater = false;
     bool airShot = false;
     float age = 0.0f;
     float waterTime = 0.0f;
     int skips = 0;
-    int8_t crew = -1;  // crew mode: the crewman who fired it
+    int16_t crew = -1;  // crew mode: the crewman who fired it
     Vector3 pos{}, vel{};
 };
 
@@ -441,7 +445,8 @@ enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SK
 
 struct GameEvent {
     EventType type;
-    uint8_t a = 0, b = 0, flags = 0;
+    uint16_t a = 0, b = 0;  // (ships, crewmen, or small numbers; NO_SHIP: nobody)
+    uint8_t flags = 0;
     Vector3 pos{};
     Vector3 dir{};
     float value = 0.0f;
@@ -473,10 +478,15 @@ public:
     void Step();  // one SIM_DT tick
     int AddShip(const std::string& name, bool bot, int cls = -1);  // cls -1: bots pick, players sail a frigate
     void RemoveShip(int id);
-    int CaptainOf(int id) const { return (id >= 0 && id < MAX_SHIPS && ships[id].leader >= 0) ? ships[id].leader : id; }
+    int CaptainOf(int id) const { return (id >= 0 && id < ShipCount() && ships[id].leader >= 0) ? ships[id].leader : id; }
     bool Enemies(const Ship& a, const Ship& b) const;
     bool FriendlyHarbour(const Ship& s, int h) const;
-    Ship* GetShip(int id) { return (id >= 0 && id < MAX_SHIPS && ships[id].active) ? &ships[id] : nullptr; }
+    Ship* GetShip(int id) { return (id >= 0 && id < ShipCount() && ships[id].active) ? &ships[id] : nullptr; }
+    int ShipCount() const { return (int)ships.size(); }
+    int CrewCount() const { return (int)crew.size(); }
+    void EnsureShips(int n);  // grow the list to at least n (inactive) ships
+    int NewShipSlot();        // a free ship slot (growing the list if they're all taken), -1 at SHIP_ID_LIMIT
+    int NewCrewSlot();
     // Client-side prediction: advance one ship by SIM_DT using its input, against `ocean` as it
     // currently stands. Same code path as the server, minus anything that spawns or damages.
     void PredictStep(Ship& s);
@@ -512,8 +522,7 @@ public:
     bool deckOnly = false;           // host: everyone plays from the deck (the client enforces it)
     bool skills = false;             // host: dash and grappling hook
     bool realistic = false;          // host: real ship handling (speeds, turning, no jumps); the wind still blows where it likes
-    // (only in the Isles: a race on a clock and the maelstrom's 28 m/s current need the arcade ship)
-    bool Real() const { return realistic && arena == ARENA_ISLES; }
+    bool Real() const { return realistic; }  // (any mode, any arena, skills or not: the host's call)
     void UpdateHooks(float dt);
     bool predicting = false;
     int AllowedClass(int want) const;  // want if allowed, else the nearest allowed one
@@ -530,9 +539,9 @@ public:
     }
     int ScoreLimit() const { return tune::scoreLimit[mode < MODE_COUNT ? mode : 0]; }
     uint32_t tick = 0;
-    Ship ships[MAX_SHIPS];
+    std::deque<Ship> ships;   // (a deque: growing it never moves a ship, so a Ship& held across AddShip stays good)
     // crew mode
-    Crewman crew[MAX_CREW];
+    std::deque<Crewman> crew;
     int AddCrew(const std::string& name);  // signs on aboard the ship that needs hands most; -1 if full
     void MoveCrew(int id, int ship);       // to another ship (-1: the next captain's ship round from the current one)
     void RemoveCrew(int id);

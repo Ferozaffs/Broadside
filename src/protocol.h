@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 19;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, 64 ships
+constexpr uint16_t PROTOCOL_VERSION = 19;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -115,7 +115,7 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     in.fireSeq = r.Get<uint8_t>();
     in.dashSeq = r.Get<uint8_t>();
     in.hookSeq = r.Get<uint8_t>();
-    in.hookTarget = r.Get<uint8_t>();
+    in.hookTarget = r.Get<uint16_t>();
     in.hookPoint = r.GetVec3();
     return r.ok;
 }
@@ -150,11 +150,12 @@ inline bool ReadCrewInput(ByteReader& r, CrewInput& in) {
 enum ShipFlags : uint8_t { SF_ALIVE = 1, SF_PIRATE = 2, SF_CREW = 4, SF_BOT = 8, SF_HELM = 16, SF_TRIM = 32 };  // (helm / sails: crew at the jobs)
 
 struct NetShip {
-    uint8_t id = 0, flags = 0;
+    uint16_t id = 0;
+    uint8_t flags = 0;
     float hp = 100, sail = 0, rudder = 0, submerged = 0, depthBelow = 0, airTime = 0, lastAirTime = 0;
     float reload[3] = {0, 0, 0};
     uint8_t cls = SC_FRIGATE;
-    int8_t hooked = -1;
+    int16_t hooked = -1;
     Vector3 hookAnchor{};  // when hooked == HOOK_ROCK
     float dashCd = 0, hookCd = 0, hookTimer = 0;
     float deadTimer = 0;
@@ -163,7 +164,8 @@ struct NetShip {
     float power[PU_COUNT] = {0, 0, 0};  // seconds left on each power-up
     uint32_t ack = 0;  // last input seq the server applied for this ship
     uint16_t kills = 0, deaths = 0;
-    int8_t team = -1, leader = -1;
+    int8_t team = -1;
+    int16_t leader = -1;
     float maxHp = 100;
     float unload = 0;  // pirate: unloading progress in the cove, 0..1
     uint16_t banked = 0;
@@ -175,7 +177,8 @@ struct NetShip {
 
 struct NetBall {
     uint16_t id = 0;
-    uint8_t owner = 0, inWater = 0;
+    uint16_t owner = 0;
+    uint8_t inWater = 0;
     Vector3 pos{}, vel{};
 };
 
@@ -185,15 +188,17 @@ struct NetCrate {
 };
 
 struct NetCrew {
-    uint8_t id = 0;
-    int8_t ship = -1, gun = -1, repair = -1;
+    uint16_t id = 0;
+    int16_t ship = -1;
+    int8_t gun = -1, repair = -1;
     Vector3 local{};  // hull space, or the world when overboard
     float yaw = 0, repairT = 0, gunReload = 0;
     bool overboard = false;
     uint8_t hits = 0, kills = 0, patches = 0;
 };
 struct NetLeak {
-    uint8_t ship = 0, slot = 0;
+    uint16_t ship = 0;
+    uint8_t slot = 0;
     Vector3 local{};
 };
 
@@ -223,7 +228,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(world.cove);
     w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
     w.Put((uint16_t)Clamp(world.raceClock * 20.0f, 0.0f, 65000.0f));
-    uint8_t n = 0;
+    uint16_t n = 0;
     for (auto& s : world.ships) n += (s.active && !s.stowed) ? 1 : 0;
     w.Put(n);
     for (auto& s : world.ships) {
@@ -246,7 +251,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(s.cls);
         for (int k = 0; k < 3; ++k) w.PutU8f(s.reload[k] / tune::reloadMax);
         w.Put(s.hooked);
-        if (s.hooked == (int8_t)HOOK_ROCK) w.PutVec3(s.hookAnchor);
+        if (s.hooked == HOOK_ROCK) w.PutVec3(s.hookAnchor);
         w.PutU8f(s.dashCd / tune::dashCooldown);
         w.PutU8f(s.hookCd / tune::hookCooldown);
         w.PutU8f(s.hookTimer / tune::hookTime);
@@ -265,7 +270,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.PutVec3(s.angVel);
         w.PutQuat(s.rot);
     }
-    uint16_t nb = (uint16_t)std::min<size_t>(world.balls.size(), 400);
+    uint16_t nb = (uint16_t)std::min<size_t>(world.balls.size(), 65535);
     w.Put(nb);
     for (uint16_t i = 0; i < nb; ++i) {
         const Ball& b = world.balls[i];
@@ -297,13 +302,13 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(c.z);
     }
     // crew mode: crewmen and the holes in their ships
-    uint8_t ncr = 0;
+    uint16_t ncr = 0;
     for (const Crewman& c : world.crew) ncr += c.active ? 1 : 0;
     w.Put(ncr);
-    for (int i = 0; i < MAX_CREW; ++i) {
+    for (int i = 0; i < (int)world.crew.size(); ++i) {
         const Crewman& c = world.crew[i];
         if (!c.active) continue;
-        w.Put((uint8_t)i);
+        w.Put((uint16_t)i);
         w.Put(c.ship);
         w.Put((uint8_t)(c.overboard ? 1 : 0));
         const float q = c.overboard ? 10.0f : 100.0f;  // (in the sea it's a world position: coarser)
@@ -321,7 +326,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         if (IsGunJob(c.gun) && c.ship >= 0) rl = world.ships[c.ship].gunReload[c.gun / MAX_GUNS][c.gun % MAX_GUNS];
         w.PutU8f(rl / tune::reloadMax);
     }
-    uint8_t nl = 0;
+    uint16_t nl = 0;
     for (const Ship& s : world.ships)
         if (s.active && s.crewCount > 0)
             for (const Leak& l : s.leaks) nl += l.active ? 1 : 0;
@@ -350,13 +355,13 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.cove = r.Get<uint8_t>();
     s.matchClock = r.Get<uint16_t>() / 10.0f;
     s.raceClock = r.Get<uint16_t>() / 20.0f;
-    uint8_t n = r.Get<uint8_t>();
-    s.ships.resize(n);
+    uint16_t n = r.Get<uint16_t>();
+    s.ships.resize(r.ok ? n : 0);
     for (auto& sh : s.ships) {
-        sh.id = r.Get<uint8_t>();
+        sh.id = r.Get<uint16_t>();
         sh.flags = r.Get<uint8_t>();
         sh.team = r.Get<int8_t>();
-        sh.leader = r.Get<int8_t>();
+        sh.leader = r.Get<int16_t>();
         sh.maxHp = (float)r.Get<uint8_t>();
         sh.unload = r.GetU8f();
         sh.banked = r.Get<uint16_t>();
@@ -369,8 +374,8 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.lastAirTime = r.Get<uint16_t>() / 100.0f;
         sh.cls = r.Get<uint8_t>();
         for (int k = 0; k < 3; ++k) sh.reload[k] = r.GetU8f() * tune::reloadMax;
-        sh.hooked = r.Get<int8_t>();
-        if (sh.hooked == (int8_t)HOOK_ROCK) sh.hookAnchor = r.GetVec3();
+        sh.hooked = r.Get<int16_t>();
+        if (sh.hooked == HOOK_ROCK) sh.hookAnchor = r.GetVec3();
         sh.dashCd = r.GetU8f() * tune::dashCooldown;
         sh.hookCd = r.GetU8f() * tune::hookCooldown;
         sh.hookTimer = r.GetU8f() * tune::hookTime;
@@ -390,10 +395,10 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.rot = r.GetQuat();
     }
     uint16_t nb = r.Get<uint16_t>();
-    s.balls.resize(nb);
+    s.balls.resize(r.ok ? nb : 0);
     for (auto& b : s.balls) {
         b.id = r.Get<uint16_t>();
-        b.owner = r.Get<uint8_t>();
+        b.owner = r.Get<uint16_t>();
         b.inWater = r.Get<uint8_t>();
         b.pos = r.GetVec3();
         b.vel.x = r.Get<int16_t>() / 100.0f;
@@ -415,11 +420,11 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         c.x = r.Get<float>();
         c.z = r.Get<float>();
     }
-    uint8_t ncr = r.Get<uint8_t>();
+    uint16_t ncr = r.Get<uint16_t>();
     s.crew.resize(r.ok ? ncr : 0);
     for (auto& c : s.crew) {
-        c.id = r.Get<uint8_t>();
-        c.ship = r.Get<int8_t>();
+        c.id = r.Get<uint16_t>();
+        c.ship = r.Get<int16_t>();
         c.overboard = r.Get<uint8_t>() != 0;
         const float q = c.overboard ? 10.0f : 100.0f;
         c.local.x = r.Get<int16_t>() / q;
@@ -434,10 +439,10 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         c.repairT = r.GetU8f() * tune::repairTime;
         c.gunReload = r.GetU8f() * tune::reloadMax;
     }
-    uint8_t nl = r.Get<uint8_t>();
+    uint16_t nl = r.Get<uint16_t>();
     s.leaks.resize(r.ok ? nl : 0);
     for (auto& l : s.leaks) {
-        l.ship = r.Get<uint8_t>();
+        l.ship = r.Get<uint16_t>();
         l.slot = r.Get<uint8_t>();
         l.local.x = r.Get<int16_t>() / 100.0f;
         l.local.y = r.Get<int16_t>() / 100.0f;
@@ -459,8 +464,8 @@ inline void WriteEvent(ByteWriter& w, const GameEvent& e) {
 }
 inline bool ReadEvent(ByteReader& r, GameEvent& e) {
     e.type = (EventType)r.Get<uint8_t>();
-    e.a = r.Get<uint8_t>();
-    e.b = r.Get<uint8_t>();
+    e.a = r.Get<uint16_t>();
+    e.b = r.Get<uint16_t>();
     e.flags = r.Get<uint8_t>();
     e.pos = r.GetVec3();
     e.dir = r.GetVec3();

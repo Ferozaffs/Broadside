@@ -965,12 +965,37 @@ void World::BuildArena() {
     for (const Rock& k : rocks) rockInner = fminf(rockInner, sqrtf(k.x * k.x + k.z * k.z) - k.r * 1.25f - 50.0f);
 }
 
+void World::EnsureShips(int n) {
+    n = std::min(n, SHIP_ID_LIMIT);
+    while ((int)ships.size() < n) {
+        ships.emplace_back();
+        ships.back().id = (uint16_t)(ships.size() - 1);
+    }
+}
+
+int World::NewShipSlot() {
+    for (int i = 0; i < (int)ships.size(); ++i)
+        if (!ships[i].active) return i;
+    if ((int)ships.size() >= SHIP_ID_LIMIT) return -1;
+    EnsureShips((int)ships.size() + 1);
+    return (int)ships.size() - 1;
+}
+
+int World::NewCrewSlot() {
+    for (int i = 0; i < (int)crew.size(); ++i)
+        if (!crew[i].active) return i;
+    if ((int)crew.size() >= CREW_ID_LIMIT) return -1;
+    crew.emplace_back();
+    return (int)crew.size() - 1;
+}
+
 int World::AddShip(const std::string& name, bool bot, int cls) {
-    for (int i = 0; i < MAX_SHIPS; ++i) {
-        if (ships[i].active) continue;
+    {
+        int i = NewShipSlot();
+        if (i < 0) return -1;
         ships[i] = Ship{};
         ships[i].active = true;
-        ships[i].id = (uint8_t)i;
+        ships[i].id = (uint16_t)i;
         ships[i].name = name;
         ships[i].isBot = bot;
         ships[i].fixedCls = cls >= 0;
@@ -986,11 +1011,10 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         if (fleets) SpawnFleet(ships[i]);
         return i;
     }
-    return -1;
 }
 
 void World::RemoveShip(int id) {
-    if (id < 0 || id >= MAX_SHIPS) return;
+    if (id < 0 || id >= ShipCount()) return;
     if (ships[id].active && ships[id].pirate) DropTreasure(ships[id]);
     for (Ship& e : ships)  // the fleet leaves with its captain
         if (e.active && e.leader == id) e.active = false;
@@ -1066,7 +1090,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
         int killer = v.lastAttacker;
         if (killer >= 0 && ships[killer].active && Enemies(ships[killer], v)) ships[CaptainOf(killer)].kills++;
         GameEvent e{EventType::Kill};
-        e.a = (uint8_t)(killer >= 0 ? killer : 255);
+        e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
         e.b = v.id;
         e.flags = EF_CRIPPLE;
         e.pos = v.pos;
@@ -1093,7 +1117,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (mode == MODE_TEAMS && ships[killer].team >= 0) teamScore[ships[killer].team]++;
         }
         GameEvent e{EventType::Kill};
-        e.a = (uint8_t)(killer >= 0 ? killer : 255);
+        e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
         e.b = v.id;
         e.pos = v.pos;
         events.push_back(e);
@@ -1168,7 +1192,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
             if (authoritative) {
                 GameEvent e{EventType::Hook};
                 e.a = s.id;
-                e.b = 255;
+                e.b = NO_SHIP;
                 e.flags = 1;
                 e.pos = s.pos;
                 events.push_back(e);
@@ -1176,7 +1200,7 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
         } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget == HOOK_ROCK) {
             // made fast to the rocks: the whole pull is on us
             if (!authoritative || (Vector3Distance(in.hookPoint, s.pos) < tune::hookRange * 1.15f && RockHookOk(rocks, in.hookPoint))) {
-                s.hooked = (int8_t)HOOK_ROCK;
+                s.hooked = HOOK_ROCK;
                 s.hookAnchor = in.hookPoint;
                 s.hookTimer = tune::hookTime;
                 s.hookCd = HookCooldown();
@@ -1190,14 +1214,14 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
                     events.push_back(e);
                 }
             }
-        } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget < MAX_SHIPS && in.hookTarget != s.id) {
+        } else if (skills && s.hookCd <= 0.0f && matchState == 0 && in.hookTarget < ShipCount() && in.hookTarget != s.id) {
             bool ok = true;
             if (authoritative) {
                 const Ship& t = ships[in.hookTarget];
                 ok = t.active && !t.stowed && t.alive && Vector3Distance(t.pos, s.pos) < tune::hookRange * 1.15f;
             }
             if (ok) {
-                s.hooked = (int8_t)in.hookTarget;
+                s.hooked = (int16_t)in.hookTarget;
                 s.hookTimer = tune::hookTime;
                 s.hookCd = HookCooldown();
                 s.hookRest = authoritative ? Vector3Distance(ships[in.hookTarget].pos, s.pos) : Vector3Distance(s.hookPos, s.pos);
@@ -1464,7 +1488,7 @@ void World::StepShip(Ship& s, float dt) {
         F = Vector3Add(F, Vector3Scale(Vector3Normalize({fwd.x, fwd.y * 0.3f, fwd.z}), tune::dashAccel * P.mass));
     }
     // prediction: a line to the rocks (same pull as UpdateHooks), or our end of one to another ship
-    if (predicting && s.hooked == (int8_t)HOOK_ROCK && s.alive) {
+    if (predicting && s.hooked == HOOK_ROCK && s.alive) {
         Vector3 d = Vector3Subtract(s.hookAnchor, s.pos);
         float len = Vector3Length(d);
         if (len > s.hookRest && len > 1e-3f) {
@@ -1473,7 +1497,7 @@ void World::StepShip(Ship& s, float dt) {
             float a = Clamp((len - s.hookRest) * tune::hookStiff - vin * 1.5f, 0.0f, tune::hookRockAccel) * Clamp((tune::hookRockSpeed - vin) / 6.0f, 0.0f, 1.0f);
             F = Vector3Add(F, Vector3Scale(n, a * P.mass));
         }
-    } else if (predicting && s.hooked >= 0 && s.hooked < MAX_SHIPS && s.alive) {
+    } else if (predicting && s.hooked >= 0 && s.hooked < ShipCount() && s.alive) {
         Vector3 d = Vector3Subtract(s.hookPos, s.pos);
         float len = Vector3Length(d);
         float rest = fmaxf(s.hookRest, tune::hookMinLen);
@@ -1531,9 +1555,9 @@ void World::StepShip(Ship& s, float dt) {
 void World::Collisions() {
     const float R = 5.0f;  // frigate units
     const float zs[3] = {-10.0f, 0.0f, 10.0f};
-    for (int a = 0; a < MAX_SHIPS; ++a) {
+    for (int a = 0; a < ShipCount(); ++a) {
         if (!ships[a].active || ships[a].stowed) continue;
-        for (int b = a + 1; b < MAX_SHIPS; ++b) {
+        for (int b = a + 1; b < ShipCount(); ++b) {
             if (!ships[b].active || ships[b].stowed) continue;
             Ship& A = ships[a];
             Ship& B = ships[b];
@@ -1726,7 +1750,7 @@ void World::UpdateBalls(float dt) {
             events.push_back(e);
         }
         // hit test against every ship (owner only after the ball has cleared the hull)
-        for (int s = 0; s < MAX_SHIPS && !dead; ++s) {
+        for (int s = 0; s < ShipCount() && !dead; ++s) {
             Ship& sh = ships[s];
             if (!sh.active || !sh.alive || sh.stowed) continue;
             if (s == b.owner && b.age < 0.4f) continue;
@@ -1757,10 +1781,10 @@ void World::UpdateBalls(float dt) {
             e.dir = Vector3Normalize(b.vel);
             e.value = dmg;
             events.push_back(e);
-            if (sh.alive && b.owner < MAX_SHIPS && ships[b.owner].active && Enemies(ships[b.owner], sh))
+            if (sh.alive && b.owner < ShipCount() && ships[b.owner].active && Enemies(ships[b.owner], sh))
                 ships[CaptainOf(b.owner)].statDamage += fminf(dmg, sh.hp);
             const bool wasAlive = sh.alive;
-            if (b.crew >= 0 && b.crew < MAX_CREW && crew[b.crew].active && wasAlive && Enemies(ships[b.owner], sh)) crew[b.crew].hits++;
+            if (b.crew >= 0 && b.crew < CrewCount() && crew[b.crew].active && wasAlive && Enemies(ships[b.owner], sh)) crew[b.crew].hits++;
             if (sh.crewCount > 0 && sh.alive) {  // crew mode: a hole the crew can patch (and that leaks until they do)
                 Vector3 hl = WorldToHull(sh.pos, sh.rot, hitPos, S);
                 Leak* slot = nullptr;
@@ -1776,7 +1800,7 @@ void World::UpdateBalls(float dt) {
                 } else *slot = {true, hl, fminf(dmg, sh.hp)};
             }
             Damage(sh, dmg, b.owner);
-            if (wasAlive && !sh.alive && b.crew >= 0 && b.crew < MAX_CREW && crew[b.crew].active) {  // that crewman's shot sank her
+            if (wasAlive && !sh.alive && b.crew >= 0 && b.crew < CrewCount() && crew[b.crew].active) {  // that crewman's shot sank her
                 crew[b.crew].kills++;
                 for (auto it = events.rbegin(); it != events.rend(); ++it)
                     if (it->type == EventType::Kill && it->b == sh.id) { it->value = (float)(b.crew + 1); break; }
@@ -1861,7 +1885,7 @@ void World::BotThink(Ship& s, float dt) {
                     }
                     break;
                 }
-            } else if (s.hooked >= 0 && s.hooked < MAX_SHIPS) {  // let go once it's no longer ahead
+            } else if (s.hooked >= 0 && s.hooked < ShipCount()) {  // let go once it's no longer ahead
                 const Ship& o = ships[s.hooked];
                 if (Vector3DotProduct(fwd, Vector3Subtract(o.pos, s.pos)) < 0.0f) in.hookSeq++;
             }
@@ -2067,7 +2091,7 @@ void World::BotThink(Ship& s, float dt) {
         // no dashing towards the eye
         if (in.dashSeq != dashBefore && closestOnRay(heading, 250.0f) < maelstrom::botKeepOut) in.dashSeq = dashBefore;
         // hauled clear on a line to a stack: let go rather than sit tied to the rock in the current
-        if (s.hooked == (int8_t)HOOK_ROCK && dc > maelstrom::botKeepOut - 30.0f &&
+        if (s.hooked == HOOK_ROCK && dc > maelstrom::botKeepOut - 30.0f &&
             Vector3Distance(s.pos, s.hookAnchor) < tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale + 15.0f)
             in.hookSeq++;
         // keep out of the funnel: from the rim in, steer out across the current, more the deeper we are
@@ -2225,16 +2249,14 @@ void World::PlaceEscort(Ship& e, const Ship& c, bool atHarbour, Vector2 hp) {
 
 void World::SpawnFleet(Ship& c) {
     for (int k = 0; k < tune::fleetSize; ++k) {
-        int j = -1;
-        for (int i = 0; i < MAX_SHIPS && j < 0; ++i)
-            if (!ships[i].active) j = i;
+        int j = NewShipSlot();  // (a deque: c stays where it is)
         if (j < 0) return;
         Ship& e = ships[j];
         e = Ship{};
         e.active = true;
-        e.id = (uint8_t)j;
+        e.id = (uint16_t)j;
         e.isBot = true;
-        e.leader = (int8_t)c.id;
+        e.leader = (int16_t)c.id;
         e.slot = (uint8_t)k;
         e.cls = e.nextCls = SC_GUNBOAT;  // fleets screen with gunboats
         e.fixedCls = true;
@@ -2266,12 +2288,12 @@ void World::SetPirate(int id) {
 void World::UpdateHooks(float dt) {
     for (Ship& s : ships) {
         if (!s.active || s.hooked < 0) continue;
-        if (s.hooked == (int8_t)HOOK_ROCK) {  // made fast to the rocks: reel ourselves in
+        if (s.hooked == HOOK_ROCK) {  // made fast to the rocks: reel ourselves in
             s.hookTimer -= dt;
             if (!s.alive || matchState != 0 || s.hookTimer <= 0.0f) {
                 GameEvent e{EventType::Hook};
                 e.a = s.id;
-                e.b = 255;
+                e.b = NO_SHIP;
                 e.flags = 1;
                 e.pos = s.pos;
                 events.push_back(e);
@@ -2287,7 +2309,7 @@ void World::UpdateHooks(float dt) {
             s.vel = Vector3Add(s.vel, Vector3Scale(n, a * dt));
             continue;
         }
-        if (s.hooked >= MAX_SHIPS) { s.hooked = -1; continue; }
+        if (s.hooked >= ShipCount()) { s.hooked = -1; continue; }
         Ship& t = ships[s.hooked];
         // the line holds for its full time: only a sinking, a stowed ship or the round's end lets go early
         bool gone = !s.alive || !t.active || !t.alive || t.stowed || matchState != 0;
@@ -2296,7 +2318,7 @@ void World::UpdateHooks(float dt) {
         if (gone || s.hookTimer <= 0.0f) {
             GameEvent e{EventType::Hook};
             e.a = s.id;
-            e.b = 255;
+            e.b = NO_SHIP;
             e.flags = 1;
             e.pos = s.pos;
             events.push_back(e);
@@ -2341,15 +2363,16 @@ int World::PickCrewShip() const {
 static const char* kBotCaptains[] = {"Cpt. Hawkins", "Cpt. Morrow", "Cpt. Vane", "Cpt. Teach", "Cpt. Kidd", "Cpt. Low"};
 
 int World::AddCrew(const std::string& name) {
-    for (int i = 0; i < MAX_CREW; ++i) {
-        if (crew[i].active) continue;
+    {
+        int i = NewCrewSlot();
+        if (i < 0) return -1;
         int ship = PickCrewShip();
         if (ship < 0) ship = AddShip(kBotCaptains[i % 6], true);  // nobody to sail with: a bot takes the helm
         if (ship < 0) return -1;
         crew[i] = Crewman{};
         crew[i].active = true;
         crew[i].name = name;
-        crew[i].ship = (int8_t)ship;
+        crew[i].ship = (int16_t)ship;
         crew[i].local = GunStation(ships[ship].cls, (i & 1), 1);  // sign on beside a gun
         ships[ship].crewCount++;
         return i;
@@ -2358,11 +2381,11 @@ int World::AddCrew(const std::string& name) {
 }
 
 void World::MoveCrew(int id, int ship) {
-    if (id < 0 || id >= MAX_CREW || !crew[id].active) return;
+    if (id < 0 || id >= CrewCount() || !crew[id].active) return;
     Crewman& c = crew[id];
     if (ship < 0) {  // the next captain's ship round from ours (friends only in teams)
-        for (int k = 1; k <= MAX_SHIPS && ship < 0; ++k) {
-            int n = (c.ship + k + MAX_SHIPS) % MAX_SHIPS;
+        for (int k = 1; k <= ShipCount() && ship < 0; ++k) {
+            int n = (c.ship + k + ShipCount()) % ShipCount();
             const Ship& s = ships[n];
             if (!s.active || s.leader >= 0 || n == c.ship) continue;
             if (mode == MODE_TEAMS && c.ship >= 0 && ships[c.ship].active && s.team != ships[c.ship].team) continue;
@@ -2370,7 +2393,7 @@ void World::MoveCrew(int id, int ship) {
         }
     }
     if (ship < 0 || !ships[ship].active) return;
-    c.ship = (int8_t)ship;
+    c.ship = (int16_t)ship;
     c.gun = c.repair = -1;
     c.overboard = false;
     c.local = GunStation(ships[ship].cls, id & 1, 1);
@@ -2378,9 +2401,9 @@ void World::MoveCrew(int id, int ship) {
 }
 
 void World::RemoveCrew(int id) {
-    if (id < 0 || id >= MAX_CREW || !crew[id].active) return;
+    if (id < 0 || id >= CrewCount() || !crew[id].active) return;
     Crewman& c = crew[id];
-    if (c.ship >= 0 && c.ship < MAX_SHIPS) ships[c.ship].crewCount = std::max(0, ships[c.ship].crewCount - 1);
+    if (c.ship >= 0 && c.ship < ShipCount()) ships[c.ship].crewCount = std::max(0, ships[c.ship].crewCount - 1);
     c = Crewman{};
 }
 
@@ -2389,13 +2412,14 @@ void World::UpdateCrew(float dt) {
     for (const Crewman& c : crew)
         if (c.active && c.ship >= 0 && ships[c.ship].active) ships[c.ship].crewCount++;
     for (Ship& s : ships) s.crewed = s.crewCount > 0;
-    for (Crewman& c : crew) {
+    for (int ci = 0; ci < (int)crew.size(); ++ci) {
+        Crewman& c = crew[ci];
         if (!c.active) continue;
         if (c.ship < 0 || !ships[c.ship].active) {  // our ship's gone (its captain left): find another
             int n = PickCrewShip();
-            if (n < 0) n = AddShip(kBotCaptains[&c - crew], true);
+            if (n < 0) n = AddShip(kBotCaptains[ci % 6], true);
             if (n < 0) continue;
-            c.ship = (int8_t)n;
+            c.ship = (int16_t)n;
             ships[n].crewCount++;
             c.gun = c.repair = -1;
             c.local = GunStation(ships[n].cls, 0, 1);
@@ -2437,7 +2461,7 @@ void World::UpdateCrew(float dt) {
                 if (s.gunReload[side][idx] <= 0.0f) {
                     s.gunReload[side][idx] = ReloadTime(s, side);
                     PendingShot p{0.01f, side, idx};
-                    p.crew = (int8_t)(&c - crew);
+                    p.crew = (int16_t)ci;
                     p.ownAim = true;
                     p.aim = Vector3Length(in.aim) > 0.1f ? Vector3Normalize(in.aim) : Vector3{0, 0, 1};
                     s.pending.push_back(p);
@@ -2456,7 +2480,7 @@ void World::UpdateCrew(float dt) {
                 s.hp = fminf(s.maxHp, s.hp + l.dmg * tune::leakRestore);
                 GameEvent e{EventType::Repair};
                 e.a = s.id;
-                e.b = (uint8_t)(&c - crew);
+                e.b = (uint16_t)ci;
                 e.pos = HullToWorld(s.pos, s.rot, l.local, C.scale);
                 e.value = l.dmg * tune::leakRestore;
                 events.push_back(e);
@@ -2542,11 +2566,11 @@ void World::EndRound(bool byLimit) {
     GameEvent e{EventType::MatchEnd};
     e.flags = byLimit ? 1 : 0;
     if (mode == MODE_TEAMS) {
-        e.a = 255;
-        e.b = teamScore[0] == teamScore[1] ? 255 : (teamScore[0] > teamScore[1] ? 0 : 1);
+        e.a = NO_SHIP;
+        e.b = teamScore[0] == teamScore[1] ? NO_SHIP : (teamScore[0] > teamScore[1] ? 0 : 1);
     } else {
-        e.a = (uint8_t)(best >= 0 && ScoreOf(ships[best]) > 0 ? best : 255);
-        e.b = 255;
+        e.a = (uint16_t)(best >= 0 && ScoreOf(ships[best]) > 0 ? best : NO_SHIP);
+        e.b = NO_SHIP;
     }
     events.push_back(e);
     // awards: 0 most sinkings, 1 most damage, 2 longest air, 3 biggest spin, 4 most treasure, 5 most groundings, 6 fewest losses
@@ -2560,8 +2584,8 @@ void World::EndRound(bool byLimit) {
         }
         if (pick < 0 || (!lowest && pv <= 0.0f)) return;
         GameEvent a{EventType::Award};
-        a.a = (uint8_t)pick;
-        a.b = (uint8_t)id;
+        a.a = (uint16_t)pick;
+        a.b = (uint16_t)id;
         a.value = pv;
         events.push_back(a);
     };
@@ -2802,7 +2826,7 @@ void World::PredictStep(Ship& s) {
     UpdateAirTime(s, dt, false);
     if (s.hooked >= 0) {  // the line reels in and gives out like on the server
         s.hookTimer -= dt;
-        float minLen = s.hooked == (int8_t)HOOK_ROCK ? tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale : tune::hookMinLen;
+        float minLen = s.hooked == HOOK_ROCK ? tune::hookMinLen + hull::halfLength * ClassOf(s.cls).scale : tune::hookMinLen;
         s.hookRest = fmaxf(minLen, s.hookRest - tune::hookReel * dt);
         if (s.hookTimer <= 0.0f) s.hooked = -1;
     }

@@ -208,7 +208,7 @@ public:
     ShipModel classModel[SC_COUNT];   // ...and any class with its own (assets/ship_<class>)
     ShipModel& ModelOf(int cls) { return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel; }
     const ShipModel& ModelOf(int cls) const { return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel; }
-    const ShipModel& DeckModel() const { return ModelOf(myId >= 0 && myId < MAX_SHIPS && view[myId].present ? view[myId].s.cls : SC_FRIGATE); }
+    const ShipModel& DeckModel() const { return ModelOf(myId >= 0 && myId < NumShips() && view[myId].present ? view[myId].s.cls : SC_FRIGATE); }
     void SetLod(int lod) { shipModel.forceLod = lod; for (ShipModel& m : classModel) m.forceLod = lod; }
     OceanGPU oceanGpu;
     uint32_t oceanSeed = 0;
@@ -250,12 +250,12 @@ public:
     // the Shipwright: our own paint, everyone else's (by ship: escorts wear their leader's), and the editor
     Livery myLivery;
     LiveryGpu myLiveryGpu;
-    LiveryGpu shipLivery[MAX_SHIPS];
+    std::deque<LiveryGpu> shipLivery;
     Shipyard yard;
     Vector3 yardPos{};
     const LiveryGpu* LiveryFor(int id) const {
-        if (id < 0 || id >= MAX_SHIPS) return nullptr;
-        int o = view[id].s.leader >= 0 && view[id].s.leader < MAX_SHIPS ? view[id].s.leader : id;
+        if (id < 0 || id >= NumShips()) return nullptr;
+        int o = view[id].s.leader >= 0 && view[id].s.leader < NumShips() ? view[id].s.leader : id;
         if (shipLivery[o].on) return &shipLivery[o];
         if (getenv("BS_LIVERYALL") && myLiveryGpu.on) return &myLiveryGpu;  // (testing: everyone in our paint)
         return nullptr;
@@ -269,12 +269,15 @@ public:
     std::deque<Snapshot> snaps;
     double clockOffset = 0;
     bool clockInit = false;
-    struct Info { std::string name; bool bot = false; bool present = false; int leader = -1; } info[MAX_SHIPS];
-    ViewShip view[MAX_SHIPS];
-    float prevAir[MAX_SHIPS] = {};
-    float hitFlash[MAX_SHIPS] = {};
-    float tagFade[MAX_SHIPS] = {};
-    double lastAground[MAX_SHIPS] = {};  // name tags fade in only while the ship is under the reticle
+    struct Info { std::string name; bool bot = false; bool present = false; int leader = -1; };
+    // Per-ship client state. There's no fixed number of ships: these grow together (GrowShips) whenever a ship id
+    // turns up that we haven't seen. Deques, so growing never moves what's already there.
+    std::deque<Info> info;
+    std::deque<ViewShip> view;
+    std::deque<float> prevAir;
+    std::deque<float> hitFlash;
+    std::deque<float> tagFade;
+    std::deque<double> lastAground;  // name tags fade in only while the ship is under the reticle
     std::vector<NetBall> viewBalls;
     double renderTime = 0;
     double sessionStart = 0;
@@ -326,8 +329,8 @@ public:
     int crewId = -1;                 // our crewman (-1: we're a captain)
     bool IsCrew() const { return crewId >= 0; }
     struct CrewView { bool present = false; NetCrew c; };
-    CrewView crewView[MAX_CREW];
-    std::string crewNames[MAX_CREW];
+    std::deque<CrewView> crewView;
+    std::deque<std::string> crewNames;
     std::vector<NetLeak> leakView;
     Vector3 crewLocal{};
     float crewFoot = 3.0f, crewYaw = 0.0f, crewPitch = 0.0f;
@@ -355,8 +358,8 @@ public:
     void ComeAboard(Vector3 local, const char* msg);
     // walk cycles for the figures others see
     struct Gait { Vector3 last{}; float phase = 0.0f, speed = 0.0f; int ship = -1; };
-    Gait crewGait[MAX_CREW];
-    bool prevOverboard[MAX_CREW] = {};
+    std::deque<Gait> crewGait;
+    std::deque<bool> prevOverboard;
     void SetRole(int r);
     // deck path search (the crew autopilot): distance field to a goal cell over the deck map
     std::vector<int> pathDist, pathCells;
@@ -384,16 +387,17 @@ public:
     void DrawCrewHUD(float W, float H);
     int curArena = ARENA_ISLES, oceanArena = -1, menuArena = -1;
     bool InEye(Vector3 p) const { return curArena == ARENA_MAELSTROM && p.x * p.x + p.z * p.z < maelstrom::eye * maelstrom::eye * 2.25f; }
-    uint8_t dashSeq = 0, hookSeq = 0, hookAim = 255;
+    uint8_t dashSeq = 0, hookSeq = 0;
+    uint16_t hookAim = NO_SHIP;
     Vector3 hookPoint{};
     int HookCandidate(Vector3 dir) const;
     bool RockCandidate(Vector3 dir, Vector3& at) const;  // a rock face under the reticle within hook range
     void DrawHookLines();
-    bool IsEscort(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].present && view[id].s.leader >= 0; }
+    bool IsEscort(int id) const { return id >= 0 && id < NumShips() && view[id].present && view[id].s.leader >= 0; }
     void DrawFleetRings();  // a green ring on the water round each of your escorts
     void PickClass(int c);
     void DrawClassCards(Rectangle area, bool keys, bool row);
-    float ScaleOf(int id) const { return id >= 0 && id < MAX_SHIPS ? ClassOf(view[id].s.cls).scale : 1.0f; }
+    float ScaleOf(int id) const { return id >= 0 && id < NumShips() ? ClassOf(view[id].s.cls).scale : 1.0f; }
     int curMode = MODE_FFA;
     bool curFleets = false;
     uint16_t teamScore[2] = {0, 0};
@@ -446,7 +450,7 @@ public:
     Vector3 wind{};
     // where each ship has been hit, in hull space, so damage stays where the shots landed
     struct HullHit { Vector3 local; float radius; };
-    std::vector<HullHit> hullHits[MAX_SHIPS];
+    std::deque<std::vector<HullHit>> hullHits;
     std::vector<Vector3> HitPointsWorld(int id, const NetShip& s) const;
     void ShipDamageFx(int id, const NetShip& s, float dt);
     void DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float sail, Color team, float flash, float hpFrac, bool alive,
@@ -456,10 +460,36 @@ public:
     int haloLocAt = -1, haloLocDepth = -1, haloLocNF = -1;
     // wakes: each ship's recent track (redrawn into the renderer's wake map every frame), and foam patches
     struct WakePt { Vector2 p, d; double t; float spd; bool water; };
-    std::deque<WakePt> wakeHist[MAX_SHIPS];
+    std::deque<std::deque<WakePt>> wakeHist;
     struct FoamPatch { float x, z, r0, r1; double t0; float life, amt; };
     std::vector<FoamPatch> foamPatches;
-    bool prevAlive[MAX_SHIPS] = {};
+    std::deque<bool> prevAlive;
+    int NumShips() const { return (int)view.size(); }
+    void GrowShips(int n) {
+        n = std::min(n, SHIP_ID_LIMIT);
+        if (n > (int)view.size()) {
+            shipLivery.resize(n);
+            info.resize(n);
+            view.resize(n);
+            prevAir.resize(n, 0.0f);
+            hitFlash.resize(n, 0.0f);
+            tagFade.resize(n, 0.0f);
+            lastAground.resize(n, 0.0);
+            hullHits.resize(n);
+            wakeHist.resize(n);
+            prevAlive.resize(n, false);
+        }
+        pred.EnsureShips(n);  // (the prediction world mirrors the ships we can see)
+    }
+    int NumCrew() const { return (int)crewView.size(); }
+    void GrowCrew(int n) {
+        n = std::min(n, CREW_ID_LIMIT);
+        if (n <= (int)crewView.size()) return;
+        crewView.resize(n);
+        crewNames.resize(n);
+        crewGait.resize(n);
+        prevOverboard.resize(n, false);
+    }
     void UpdateWake(int id, Vector3 pos, Quaternion rot, Vector3 vel, bool water);
     void AddFoam(Vector3 p, float r0, float r1, float life, float amt) {
         if (foamPatches.size() < 400) foamPatches.push_back({p.x, p.z, r0, r1, GetTime(), life, amt});
@@ -520,29 +550,29 @@ private:
     }
     // the colour a ship flies (sails, pennant), and a readable version for text on the dark HUD
     Color ColorOf(int id) const {
-        if (id < 0 || id >= MAX_SHIPS) return ui::kDim;
+        if (id < 0 || id >= NumShips()) return ui::kDim;
         const NetShip& s = view[id].s;
         if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
         return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
     }
     Color TeamOf(int id) const {
-        if (id >= 0 && id < MAX_SHIPS && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
+        if (id >= 0 && id < NumShips() && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
         return ColorOf(id);
     }
-    bool IsCarrier(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].present && (view[id].s.flags & SF_PIRATE); }
+    bool IsCarrier(int id) const { return id >= 0 && id < NumShips() && view[id].present && (view[id].s.flags & SF_PIRATE); }
     int Carrier() const {
-        for (int id = 0; id < MAX_SHIPS; ++id)
+        for (int id = 0; id < NumShips(); ++id)
             if (IsCarrier(id)) return id;
         return -1;
     }
     bool IsEnemy(int id) const {
-        if (myId < 0 || id == myId || id < 0 || id >= MAX_SHIPS) return false;
+        if (myId < 0 || id == myId || id < 0 || id >= NumShips()) return false;
         const NetShip &a = view[myId].s, &b = view[id].s;
         if (curMode != MODE_TEAMS) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
-    bool IsCaptain(int id) const { return id >= 0 && id < MAX_SHIPS && view[id].s.leader < 0; }
+    bool IsCaptain(int id) const { return id >= 0 && id < NumShips() && view[id].s.leader < 0; }
     Color HarbourColor(int i) const {  // flag on the harbour: who may use it
         int owner = HarbourOwner(curMode, i);
         if (curMode == MODE_PIRATE && i == cove) return kPirate;  // the delivery harbour flies the black flag
@@ -552,9 +582,9 @@ private:
     float hitMarker = 0.0f;
     bool hitMarkerGold = false;
     std::string NameOf(int id) const {
-        if (id < 0 || id >= MAX_SHIPS) return "the sea";
+        if (id < 0 || id >= NumShips()) return "the sea";
         int lead = info[id].leader >= 0 ? info[id].leader : view[id].s.leader;
-        if (lead >= 0 && lead < MAX_SHIPS && lead != id) {  // an escort: no name of its own
+        if (lead >= 0 && lead < NumShips() && lead != id) {  // an escort: no name of its own
             if (lead == myId) return "your escort";
             std::string cap = info[lead].name.empty() ? std::string(TextFormat("Ship %d", lead)) : info[lead].name;
             return cap + "'s escort";
@@ -800,7 +830,9 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
     uint8_t type = r.Get<uint8_t>();
     switch (type) {
         case MSG_WELCOME: {
-            myId = r.Get<uint8_t>();
+            myId = r.Get<uint16_t>();
+            if (myId >= SHIP_ID_LIMIT) myId = -1;
+            else GrowShips(myId + 1);
             uint32_t seed = r.Get<uint32_t>();
             curTod = r.Get<uint8_t>();
             curWeather = r.Get<uint8_t>();
@@ -815,8 +847,9 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             curArena = r.Get<uint8_t>();
             if (curArena >= ARENA_COUNT) curArena = ARENA_ISLES;
             {
-                uint8_t cid = r.Get<uint8_t>();
-                crewId = r.ok && cid < MAX_CREW ? cid : -1;
+                uint16_t cid = r.Get<uint16_t>();
+                if (r.ok && cid < CREW_ID_LIMIT) GrowCrew(cid + 1);
+                crewId = r.ok && cid < NumCrew() ? cid : -1;
                 crewPlaced = false;
                 crewGun = crewRepair = -1;
                 for (auto& cv : crewView) cv.present = false;
@@ -865,12 +898,13 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case MSG_PLAYER_INFO: {
-            uint8_t id = r.Get<uint8_t>();
+            uint16_t id = r.Get<uint16_t>();
             bool bot = r.Get<uint8_t>() != 0;
             std::string name = r.GetString();
-            int8_t leader = r.Get<int8_t>();
+            int16_t leader = r.Get<int16_t>();
             std::vector<uint8_t> liv = r.GetBlob();
-            if (id < MAX_SHIPS) {
+            if (r.ok && id < SHIP_ID_LIMIT) GrowShips(id + 1);
+            if (r.ok && id < NumShips()) {
                 Livery l;
                 if (!liv.empty() && l.Decode(liv.data(), liv.size())) {
                     shipLivery[id].Set(l);
@@ -887,8 +921,8 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case MSG_PLAYER_LEFT: {
-            uint8_t id = r.Get<uint8_t>();
-            if (id < MAX_SHIPS) {
+            uint16_t id = r.Get<uint16_t>();
+            if (id < NumShips()) {
                 if (info[id].leader < 0) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
                 info[id].present = false;
                 shipLivery[id].Clear();
@@ -901,12 +935,14 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case MSG_ROLE: {  // the server moved us: crew <-> captain, or to another ship
-            uint8_t cid = r.Get<uint8_t>();
-            uint8_t ship = r.Get<uint8_t>();
+            uint16_t cid = r.Get<uint16_t>();
+            uint16_t ship = r.Get<uint16_t>();
             if (!r.ok) break;
-            crewId = cid < MAX_CREW ? cid : -1;
+            if (cid < CREW_ID_LIMIT) GrowCrew(cid + 1);
+            if (ship < SHIP_ID_LIMIT) GrowShips(ship + 1);
+            crewId = cid < NumCrew() ? cid : -1;
             roleSel = crewId >= 0 ? ROLE_CREW : ROLE_CAPTAIN;
-            myId = ship < MAX_SHIPS ? ship : -1;
+            myId = ship < NumShips() ? ship : -1;
             predValid = false;
             history.clear();
             crewPlaced = false;
@@ -918,17 +954,18 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             break;
         }
         case MSG_CREW_INFO: {
-            uint8_t id = r.Get<uint8_t>();
+            uint16_t id = r.Get<uint16_t>();
             std::string name = r.GetString();
-            if (id < MAX_CREW) {
+            if (r.ok && id < CREW_ID_LIMIT) GrowCrew(id + 1);
+            if (r.ok && id < NumCrew()) {
                 crewNames[id] = name;
                 if ((int)id != crewId && mode == Mode::Playing) Feed3(name, "  signs on as crew", "", ui::kText, ui::kDim);
             }
             break;
         }
         case MSG_CREW_LEFT: {
-            uint8_t id = r.Get<uint8_t>();
-            if (id < MAX_CREW) {
+            uint16_t id = r.Get<uint16_t>();
+            if (id < NumCrew()) {
                 if (!crewNames[id].empty()) Feed3(crewNames[id], "  went ashore", "", ui::kText, ui::kDim);
                 crewView[id].present = false;
             }
@@ -970,7 +1007,8 @@ void Game::Interpolate() {
     float extra = (a == b) ? (float)Clamp(renderTime - a->time, 0.0, 0.25) : 0.0f;
 
     for (const NetShip& sb : b->ships) {
-        if (sb.id >= MAX_SHIPS) continue;
+        if (sb.id >= SHIP_ID_LIMIT) continue;
+        GrowShips(sb.id + 1);
         ViewShip& v = view[sb.id];
         v.present = true;
         v.s = sb;
@@ -986,7 +1024,8 @@ void Game::Interpolate() {
     }
     for (auto& cv : crewView) cv.present = false;
     for (const NetCrew& cb : b->crew) {
-        if (cb.id >= MAX_CREW) continue;
+        if (cb.id >= CREW_ID_LIMIT) continue;
+        GrowCrew(cb.id + 1);
         CrewView& cv = crewView[cb.id];
         cv.present = true;
         cv.c = cb;
@@ -1006,7 +1045,7 @@ void Game::Interpolate() {
                 crewOverboard = false;
             }
     }
-    for (int k = 0; k < MAX_CREW; ++k) {  // someone else went over the side
+    for (int k = 0; k < NumCrew(); ++k) {  // someone else went over the side
         bool ob = crewView[k].present && crewView[k].c.overboard;
         if (ob && !prevOverboard[k] && k != crewId && !crewNames[k].empty()) Feed3(crewNames[k], "  went overboard!", "", ui::kText, ui::kRed);
         prevOverboard[k] = ob;
@@ -1074,12 +1113,12 @@ void Game::UpdateInput(float dt) {
                 Send(w.buf, true);
             }
         if (curSkills && IsKeyPressed(KEY_E) && myId >= 0 && view[myId].present) {
-            if (view[myId].s.hooked >= 0) { hookAim = 255; hookSeq++; }  // cut the line
+            if (view[myId].s.hooked >= 0) { hookAim = NO_SHIP; hookSeq++; }  // cut the line
             else {
                 Vector3 dir = Vector3Normalize(Vector3Subtract(rv.target, rv.pos)), at;
                 int t = HookCandidate(dir);
                 bool rock = t < 0 && RockCandidate(dir, at);
-                if (t >= 0 && view[myId].s.hookCd <= 0.0f) { hookAim = (uint8_t)t; hookSeq++; }
+                if (t >= 0 && view[myId].s.hookCd <= 0.0f) { hookAim = (uint16_t)t; hookSeq++; }
                 else if (rock && view[myId].s.hookCd <= 0.0f) { hookAim = HOOK_ROCK; hookPoint = at; hookSeq++; }
                 else if (t < 0 && !rock) Feed("Nothing to hook: put the reticle on a ship or a rock within 150 m", ui::kDim);
             }
@@ -1103,7 +1142,7 @@ void Game::UpdateInput(float dt) {
         }
         if (getenv("BS_AIMTEST") && myId >= 0 && view[myId].present) {  // look just off the nearest enemy
             float best = 1e9f;
-            for (int id = 0; id < MAX_SHIPS; ++id) {
+            for (int id = 0; id < NumShips(); ++id) {
                 if (id == myId || !view[id].present) continue;
                 Vector3 d = Vector3Subtract(view[id].s.pos, rv.pos);
                 float L = Vector2Length({d.x, d.z});
@@ -1139,11 +1178,11 @@ void Game::UpdateInput(float dt) {
         pred.ocean.Update(predTime);
         if (predValid) {
             predShip.input = tickIn;
-            if (predShip.hooked >= 0 && predShip.hooked < MAX_SHIPS && view[predShip.hooked].present) {
+            if (predShip.hooked >= 0 && predShip.hooked < NumShips() && view[predShip.hooked].present) {
                 predShip.hookPos = view[predShip.hooked].s.pos;
                 predShip.hookVel = view[predShip.hooked].s.vel;
                 predShip.hookMass = powf(ClassOf(view[predShip.hooked].s.cls).scale, 3.0f);
-            } else if (tickIn.hookTarget < MAX_SHIPS && view[tickIn.hookTarget].present) {
+            } else if (tickIn.hookTarget < NumShips() && view[tickIn.hookTarget].present) {
                 predShip.hookPos = view[tickIn.hookTarget].s.pos;
                 predShip.hookVel = view[tickIn.hookTarget].s.vel;
             }
@@ -1165,7 +1204,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     pred.mode = (uint8_t)curMode;
     pred.fleets = curFleets;
     pred.cove = cove;
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         Ship& o = pred.ships[id];
         const ViewShip& v = view[id];
         o.id = id;
@@ -1208,8 +1247,8 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     // the brain's own way out of a maelstrom: grapple a stack (or let go of it), dash clear
     static double lastBrainSkill = 0;
     if (curSkills && GetTime() - lastBrainSkill > 0.5) {
-        if (me.input.hookSeq != 0 && (me.input.hookTarget == HOOK_ROCK || me.hooked == (int8_t)HOOK_ROCK)) {
-            hookAim = me.hooked == (int8_t)HOOK_ROCK ? 255 : HOOK_ROCK;
+        if (me.input.hookSeq != 0 && (me.input.hookTarget == HOOK_ROCK || me.hooked == HOOK_ROCK)) {
+            hookAim = me.hooked == HOOK_ROCK ? NO_SHIP : (uint16_t)HOOK_ROCK;
             hookPoint = me.input.hookPoint;
             hookSeq++;
             lastBrainSkill = GetTime();
@@ -1223,7 +1262,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     const NetShip& my = view[myId].s;
     int tgt = -1;
     float best = 1e9f, bestScore = 1e9f;
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present || !(view[id].s.flags & SF_ALIVE) || !IsEnemy(id)) continue;
         float d = Vector3Distance(view[id].s.pos, my.pos);
         float sc = (curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) ? d * 0.4f : d;
@@ -1234,7 +1273,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     if (curSkills && tgt >= 0) {
         static double lastSkill = 0;
         if (GetTime() - lastSkill > 1.0) {
-            if (my.hooked < 0 && my.hookCd <= 0.0f && best < tune::hookRange * 0.8f) { hookAim = (uint8_t)tgt; hookSeq++; lastSkill = GetTime(); }
+            if (my.hooked < 0 && my.hookCd <= 0.0f && best < tune::hookRange * 0.8f) { hookAim = (uint16_t)tgt; hookSeq++; lastSkill = GetTime(); }
             else if (my.dashCd <= 0.0f && best > 180.0f && best < 400.0f) { dashSeq++; lastSkill = GetTime(); }
         }
     }
@@ -1267,7 +1306,7 @@ void Game::Autopilot(float dt, PlayerInput& in) {
     if (my.airTime > 0) apMaxAlt = fmaxf(apMaxAlt, my.pos.y - Ocean().Height(my.pos.x, my.pos.z));
     if ((my.flags & SF_ALIVE) && GetTime() - apEscortT > 1.0) {
         apEscortT = GetTime();
-        for (int id = 0; id < MAX_SHIPS; ++id)
+        for (int id = 0; id < NumShips(); ++id)
             if (view[id].present && view[id].s.leader == myId && (view[id].s.flags & SF_ALIVE)) {
                 apEscortSum += Vector3Distance(view[id].s.pos, my.pos);
                 apEscortN++;
@@ -1282,7 +1321,7 @@ void Game::AutopilotReport() {
            GetTime() - sessionStart, apPulls, my.kills, my.deaths, my.hp, my.maxHp, my.banked, apJumps, apMaxAir, apMaxAlt);
     if (apEscortN) printf(", escorts avg %.0f m from us", apEscortSum / apEscortN);
     printf("\n");
-    for (int id = 0; id < MAX_SHIPS; ++id)
+    for (int id = 0; id < NumShips(); ++id)
         if (view[id].present && view[id].s.leader < 0)
             printf("   %-18s kills %2d deaths %2d banked %d%s\n", info[id].name.c_str(), view[id].s.kills, view[id].s.deaths,
                    view[id].s.banked, id == myId ? "  <- us" : "");
@@ -1389,7 +1428,7 @@ void Game::DrawResults(float W, float H) {
 
     // standings
     std::vector<int> order;
-    for (int id = 0; id < MAX_SHIPS; ++id)
+    for (int id = 0; id < NumShips(); ++id)
         if (view[id].present && IsCaptain(id)) order.push_back(id);
     auto score = [&](int id) { return curMode == MODE_PIRATE ? (int)view[id].s.banked : (int)view[id].s.kills; };
     const bool race = curMode == MODE_RACE;
@@ -1570,7 +1609,7 @@ int Game::HookCandidate(Vector3 dir) const {
     const NetShip& me = view[myId].s;
     int best = -1;
     float bestScore = 1e9f;
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& o = view[id].s;
         if (Vector3Distance(o.pos, me.pos) > tune::hookRange) continue;
@@ -1616,12 +1655,12 @@ void Game::DrawHookLines() {
         col(k1); rlVertex3f(p1.x + side.x, p1.y + side.y, p1.z + side.z);
     };
     const float pitch = 0.9f;  // m along the chain per link
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present) continue;
         const NetShip& s = view[id].s;
         int t = s.hooked;
-        bool rock = t == (int8_t)HOOK_ROCK;
-        if (!rock && (t < 0 || t >= MAX_SHIPS || !view[t].present)) continue;
+        bool rock = t == HOOK_ROCK;
+        if (!rock && (t < 0 || t >= NumShips() || !view[t].present)) continue;
         Vector3 a = HullToWorld(s.pos, s.rot, {0, 3.0f, hull::halfLength}, ClassOf(s.cls).scale);
         Vector3 b = rock ? s.hookAnchor : HullToWorld(view[t].s.pos, view[t].s.rot, {0, 3.0f, 0}, ClassOf(view[t].s.cls).scale);
         float len = Vector3Distance(a, b);
@@ -1703,7 +1742,7 @@ void Game::DrawFleetRings() {
     BeginBlendMode(BLEND_ADDITIVE);
     rlBegin(RL_QUADS);
     const float t = (float)GetTime();
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (id == myId || !view[id].present || view[id].s.leader != myId || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& s = view[id].s;
         float R = 16.0f * ClassOf(s.cls).scale + 6.0f, d = Vector3Distance(rv.pos, s.pos);
@@ -1800,7 +1839,7 @@ int Game::RacePosition(int id) const {
         return pred.RaceS(s.pos.x, s.pos.z);  // (the furthest along the course)
     };
     int pos = 1;
-    for (int i = 0; i < MAX_SHIPS; ++i)
+    for (int i = 0; i < NumShips(); ++i)
         if (i != id && view[i].present && IsCaptain(i) && key(i) > key(id)) ++pos;
     return pos;
 }
@@ -1810,7 +1849,7 @@ int Game::RacePosition(int id) const {
 bool Game::ReticlePoint(Vector3 dir, Vector3& out) {
     float best = 1e9f;
     // ships: ray against each hull box (in hull space)
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& o = view[id].s;
         Quaternion inv = QuaternionInvert(o.rot);
@@ -1928,7 +1967,7 @@ Vector3 Game::SolveAim(Vector3 dir, int crewGun) {
     float lag = (float)Clamp(predTime - renderTime, 0.0, 0.5);  // others are drawn a little in the past
     float bestK = 0.0f;
     Vector3 bestLead{};
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         if (!IsEnemy(id)) continue;
         const NetShip& o = view[id].s;
@@ -1999,7 +2038,7 @@ void Game::Reconcile() {
     // start from the authoritative state...
     Ship s = predShip;
     s.active = true;
-    s.id = (uint8_t)myId;
+    s.id = (uint16_t)myId;
     s.alive = true;
     s.pos = ns->pos;
     s.vel = ns->vel;
@@ -2016,8 +2055,8 @@ void Game::Reconcile() {
     s.hookCd = ns->hookCd;
     if (ns->hooked != s.hooked) {
         s.hooked = ns->hooked;
-        if (s.hooked >= 0 && s.hooked < MAX_SHIPS && view[s.hooked].present) s.hookRest = Vector3Distance(view[s.hooked].s.pos, ns->pos);
-        if (s.hooked == (int8_t)HOOK_ROCK) s.hookRest = Vector3Distance(ns->hookAnchor, ns->pos);
+        if (s.hooked >= 0 && s.hooked < NumShips() && view[s.hooked].present) s.hookRest = Vector3Distance(view[s.hooked].s.pos, ns->pos);
+        if (s.hooked == HOOK_ROCK) s.hookRest = Vector3Distance(ns->hookAnchor, ns->pos);
     }
     s.hookAnchor = ns->hookAnchor;
     s.hookTimer = ns->hookTimer;
@@ -2194,7 +2233,7 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
             static float mOther;
             int near = -1;
             float nd = 1e9f;
-            for (int k = 0; k < MAX_SHIPS; ++k)
+            for (int k = 0; k < NumShips(); ++k)
                 if (k != myId && view[k].present && (view[k].s.flags & SF_ALIVE)) {
                     float d = Vector3Distance(view[k].s.pos, me.pos);
                     if (d < nd) { nd = d; near = k; }
@@ -2342,7 +2381,7 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::Fire: {
             fx.CannonFire(e.pos, e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
             sfx::Play(sfx::Cannon, e.pos, e.b == 2 ? 0.35f : 0.55f,
-                      e.a < MAX_SHIPS && view[e.a].present ? (view[e.a].s.cls == SC_LINE ? 0.82f : view[e.a].s.cls == SC_CUTTER ? 1.18f : 1.0f) : 1.0f);
+                      e.a < NumShips() && view[e.a].present ? (view[e.a].s.cls == SC_LINE ? 0.82f : view[e.a].s.cls == SC_CUTTER ? 1.18f : 1.0f) : 1.0f);
             if (e.a == myId) shake = fmaxf(shake, 0.35f);
             break;
         }
@@ -2379,7 +2418,7 @@ void Game::PlayEvent(const GameEvent& e) {
             hitFlash[e.b] = 1.0f;
             sfx::Play(sfx::Hit, e.pos, (e.flags & EF_PLUNGING) ? 0.9f : 0.75f, (e.flags & EF_PLUNGING) ? 0.85f : 1.0f);
             fx.Explosion(e.pos, e.dir, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 1.4f : 1.0f);
-            if (e.b < MAX_SHIPS && view[e.b].present) {
+            if (e.b < NumShips() && view[e.b].present) {
                 const NetShip& v = view[e.b].s;
                 Vector3 local = WorldToHull(v.pos, v.rot, e.pos, ClassOf(v.cls).scale);
                 auto& hh = hullHits[e.b];
@@ -2406,7 +2445,7 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.flags & EF_CRIPPLE) {  // a race: crippled, not sunk
                 fx.Explosion(e.pos, {0, 1, 0}, 1.6f);
                 sfx::Play(sfx::Hit, e.pos, 1.0f, 0.8f);
-                if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  is crippled", "", TeamOf(e.b), ui::kText);
+                if (e.a == NO_SHIP || e.a == e.b) Feed3(NameOf(e.b), "  is crippled", "", TeamOf(e.b), ui::kText);
                 else Feed3(NameOf(e.a), "  crippled  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
                 if (e.b == myId) {
                     flash = fmaxf(flash, 0.4f);
@@ -2418,15 +2457,15 @@ void Game::PlayEvent(const GameEvent& e) {
             sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
             sfx::Play(sfx::Sink, e.pos, 0.9f);
             if (IsEscort(e.b)) break;  // (escorts are filler: no feed lines, no callouts)
-            if (e.a < MAX_SHIPS && e.a != e.b && myId >= 0 && view[e.a].present && (e.a == myId || view[e.a].s.leader == myId)) {
+            if (e.a < NumShips() && e.a != e.b && myId >= 0 && view[e.a].present && (e.a == myId || view[e.a].s.leader == myId)) {
                 sfx::PlayFlat(sfx::Confirm, 0.85f, 0.6f);
                 floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("SUNK %s", TextToUpper(NameOf(e.b).c_str())), ui::kGold, 2.6f});
             }
             if (InEye(e.pos)) {  // the maelstrom took it
-                if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  was swallowed by the maelstrom", "", TeamOf(e.b), ui::kText);
+                if (e.a == NO_SHIP || e.a == e.b) Feed3(NameOf(e.b), "  was swallowed by the maelstrom", "", TeamOf(e.b), ui::kText);
                 else Feed3(NameOf(e.a), "  fed the maelstrom  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
-            } else if (e.a == 255 || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
-            else if (e.value >= 1.0f && (int)e.value - 1 < MAX_CREW && !crewNames[(int)e.value - 1].empty()) {  // a crewman's own gun did it
+            } else if (e.a == NO_SHIP || e.a == e.b) Feed3(NameOf(e.b), "  went down with the ship", "", TeamOf(e.b), ui::kText);
+            else if (e.value >= 1.0f && (int)e.value - 1 < NumCrew() && !crewNames[(int)e.value - 1].empty()) {  // a crewman's own gun did it
                 int k = (int)e.value - 1;
                 Feed3(crewNames[k] + " (" + NameOf(e.a) + ")", "  sank  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
                 if (k == crewId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("YOU SANK %s", TextToUpper(NameOf(e.b).c_str())), ui::kGold, 2.6f});
@@ -2453,7 +2492,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 for (int i = 0; i < 30; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(6, 16), Rnd(-6, 6)}, Rnd(0.8f, 1.6f), Rnd(0.5f, 1.1f), 0.6f, {235, 245, 250, 220}, 0);
                 if (e.a == myId) shake = fmaxf(shake, fminf(1.6f, 0.5f + e.value * 0.06f));
                 sfx::Play(sfx::RockHit, e.pos, Clamp(0.3f + e.value * 0.04f, 0.3f, 1.0f), 0.8f);
-                if (e.value > 6.0f && e.a < MAX_SHIPS && IsCaptain(e.a) && GetTime() - lastAground[e.a] > 30.0) {  // once is news, five times is spam
+                if (e.value > 6.0f && e.a < NumShips() && IsCaptain(e.a) && GetTime() - lastAground[e.a] > 30.0) {  // once is news, five times is spam
                     lastAground[e.a] = GetTime();
                     Feed3(NameOf(e.a), "  ran aground", "", TeamOf(e.a), ui::kText);
                 }
@@ -2519,7 +2558,7 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::NewPirate:
-            if (e.a < MAX_SHIPS) {
+            if (e.a < NumShips()) {
                 Feed3(NameOf(e.a), "  now flies the black flag", "", kPirateText, ui::kText);
                 if (e.a == myId) { banner = "YOU ARE THE PIRATE"; bannerTime = GetTime(); }
                 else if (e.b == myId) { banner = "YOU'VE JOINED THE NAVY"; bannerTime = GetTime(); }
@@ -2535,7 +2574,7 @@ void Game::PlayEvent(const GameEvent& e) {
             for (int i = 0; i < 24; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(4, 10), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
             break;
         case EventType::MatchEnd: {
-            winShip = e.a < MAX_SHIPS ? e.a : -1;
+            winShip = e.a < NumShips() ? e.a : -1;
             winTeam = e.b < 2 ? e.b : -1;
             winByLimit = e.flags & 1;
             awards.clear();
@@ -2545,7 +2584,7 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::Award:
-            if (e.a < MAX_SHIPS) awards.push_back({e.a, e.b, e.value});
+            if (e.a < NumShips()) awards.push_back({e.a, e.b, e.value});
             break;
         case EventType::RaceGate:
             if (e.a == myId && e.b < pred.course.size()) {
@@ -2584,7 +2623,7 @@ void Game::PlayEvent(const GameEvent& e) {
             sfx::PlayFlat(sfx::Chime, 0.5f, e.b >= 60 ? 0.7f : 1.2f);
             break;
         case EventType::Dash:
-            if (e.a < MAX_SHIPS && view[e.a].present) {
+            if (e.a < NumShips() && view[e.a].present) {
                 const NetShip& d = view[e.a].s;
                 for (int i = 0; i < 26; ++i) {
                     Vector3 p = HullToWorld(d.pos, d.rot, {Rnd(-3, 3), 0.0f, Rnd(-14, -4)}, ClassOf(d.cls).scale);
@@ -2594,11 +2633,11 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::Hook:
-            if (e.a < MAX_SHIPS && e.b < MAX_SHIPS) {
+            if (e.a < NumShips() && e.b < NumShips()) {
                 sfx::Play(sfx::Hit, view[e.b].present ? view[e.b].s.pos : e.pos, 0.35f, 1.6f);
                 if (e.b == myId) Feed3(NameOf(e.a), "  has a grappling line on you!", "", TeamOf(e.a), ui::kGold);
                 else if (e.a == myId) Feed3("Line fast to  ", "", NameOf(e.b), ui::kText, TeamOf(e.b));
-            } else if (e.a < MAX_SHIPS && e.b == HOOK_ROCK) {  // made fast to the rocks
+            } else if (e.a < NumShips() && e.b == HOOK_ROCK) {  // made fast to the rocks
                 sfx::Play(sfx::RockHit, e.dir, 0.35f, 1.5f);
                 if (e.a == myId) Feed("Line fast to the rocks: haul away!", ui::kText);
             } else if (e.a == myId && (e.flags & 1)) {
@@ -2606,7 +2645,7 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::OrderGiven:
-            if (e.b >= ORDER_COUNT || e.a >= MAX_SHIPS) break;
+            if (e.b >= ORDER_COUNT || e.a >= NumShips()) break;
             if (IsCrew() && e.a == myId) {
                 crewOrder = e.b;
                 crewOrderTime = GetTime();
@@ -2622,7 +2661,7 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         case EventType::Respawn:
             if (e.a == myId) camInit = false;
-            if (e.a < MAX_SHIPS) hullHits[e.a].clear();
+            if (e.a < NumShips()) hullHits[e.a].clear();
             break;
     }
 }
@@ -2630,7 +2669,7 @@ void Game::PlayEvent(const GameEvent& e) {
 void Game::SpawnShipFx(float dt) {
     // crew mode: water spurting out of every open hole (the pumps can't keep up)
     for (const NetLeak& l : leakView) {
-        if (l.ship >= MAX_SHIPS || !view[l.ship].present) continue;
+        if (l.ship >= NumShips() || !view[l.ship].present) continue;
         const NetShip& S = view[l.ship].s;
         float sc = ClassOf(S.cls).scale;
         Vector3 p = HullToWorld(S.pos, S.rot, l.local, sc);
@@ -2660,7 +2699,7 @@ void Game::SpawnShipFx(float dt) {
             for (const Vector3& p : spots) hullHits[myId].push_back({p, 2.0f});
         }
     }
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present) continue;
         const NetShip& s = view[id].s;
         float speed = Vector3Length(s.vel);
@@ -2994,7 +3033,7 @@ void Game::DrawWakeMap(bool menu) {
     double now = GetTime();
     if (menu && mode != Mode::Shipyard)  // the menu's backdrop battle gets wakes too
         for (const Ship& s : menuWorld.ships)
-            if (s.active && s.id < MAX_SHIPS) UpdateWake(s.id, s.pos, s.rot, s.vel, s.airTime <= 0.0f);
+            if (s.active && s.id < NumShips()) UpdateWake(s.id, s.pos, s.rot, s.vel, s.airTime <= 0.0f);
     renderer.BeginWake();
     rlSetTexture(softTex.id);
     rlBegin(RL_QUADS);
@@ -3024,10 +3063,10 @@ void Game::DrawWakeMap(bool menu) {
     };
     const float kTan = 0.354f;  // tan(19.47 deg)
     std::vector<RP> armL, armR, trail;
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         const std::deque<WakePt>& h = wakeHist[id];
         if (h.empty()) continue;
-        bool present = menu ? (id < (int)(sizeof(menuWorld.ships) / sizeof(menuWorld.ships[0])) && menuWorld.ships[id].active) : view[id].present;
+        bool present = menu ? (id < menuWorld.ShipCount() && menuWorld.ships[id].active) : view[id].present;
         if (!present) continue;
         Vector3 pos, vel;
         Quaternion rot;
@@ -3137,7 +3176,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             for (const Ball& b : menuWorld.balls) shipModel.DrawBall(renderer, b.pos);
     } else {
         Vector3 look = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
-        for (int id = 0; id < MAX_SHIPS; ++id) {
+        for (int id = 0; id < NumShips(); ++id) {
             if (!view[id].present) continue;
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
@@ -3494,7 +3533,7 @@ void Game::DrawLanternHalos(bool menu) {
         for (const Ship& s : menuWorld.ships)
             if (s.active && s.alive && mode != Mode::Shipyard) one(s.pos, s.rot, kPalette[s.id % 8]);
     } else {
-        for (int id = 0; id < MAX_SHIPS; ++id)
+        for (int id = 0; id < NumShips(); ++id)
             if (view[id].present && (view[id].s.flags & SF_ALIVE)) one(view[id].s.pos, view[id].s.rot, ColorOf(id));
     }
     EndBlendMode();
@@ -3543,7 +3582,7 @@ void Game::DrawHUD() {
     }
 
     // ---- name tags ----
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present || id == myId) continue;
         const NetShip& s = view[id].s;
         if (s.leader >= 0) continue;  // (escorts are just there to fill the sea: no tags)
@@ -3625,7 +3664,7 @@ void Game::DrawHUD() {
         Text(TextFormat("%d m", (int)d), sp.x, sp.y + 13, 12, gold, false, Center);
     }
     // ---- friends and the pirate: always marked ----
-    for (int id = 0; id < MAX_SHIPS && myId >= 0; ++id) {
+    for (int id = 0; id < NumShips() && myId >= 0; ++id) {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& s = view[id].s;
         bool pirate = s.flags & SF_PIRATE;
@@ -3691,14 +3730,14 @@ void Game::DrawHUD() {
         int gate = std::min<int>(me->raceGate, total);
         std::string t;
         int captains = 0;
-        for (int id = 0; id < MAX_SHIPS; ++id) captains += view[id].present && IsCaptain(id);
+        for (int id = 0; id < NumShips(); ++id) captains += view[id].present && IsCaptain(id);
         if (me->racePlace)
             t = TextFormat("FINISHED %s   \xC2\xB7   %s", Ordinal(me->racePlace), RaceTimeStr(me->raceTime).c_str());
         else
             t = TextFormat("%s OF %d   \xC2\xB7   %d m TO GO   \xC2\xB7   %s", Ordinal(RacePosition(myId)), captains,
                            (int)fmaxf(0.0f, strait::finishZ - pred.RaceS(me->pos.x, me->pos.z)), RaceTimeStr(fmaxf(0.0f, raceClock - tune::raceCountdown)).c_str());
         bool someoneHome = false;
-        for (int id = 0; id < MAX_SHIPS; ++id) someoneHome |= view[id].present && view[id].s.racePlace == 1;
+        for (int id = 0; id < NumShips(); ++id) someoneHome |= view[id].present && view[id].s.racePlace == 1;
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
@@ -3756,7 +3795,7 @@ void Game::DrawHUD() {
         if (bannerRight > 0) t = TextFormat("%d:%02d   \xC2\xB7   FIRST TO %d", secs / 60, secs % 60, lim);  // short beside a banner
         else if (curMode != MODE_TEAMS) {  // who's ahead
             int lead = -1;
-            for (int id = 0; id < MAX_SHIPS; ++id) {
+            for (int id = 0; id < NumShips(); ++id) {
                 if (!view[id].present || !IsCaptain(id)) continue;
                 int sc = curMode == MODE_PIRATE ? view[id].s.banked : view[id].s.kills;
                 int ls = lead < 0 ? -1 : (curMode == MODE_PIRATE ? view[lead].s.banked : view[lead].s.kills);
@@ -3918,7 +3957,7 @@ void Game::DrawHUD() {
     float py = H - 24 - 134 - 10;
     if (me && curFleets) {
         int afloat = 0, sinking = 0;
-        for (int id = 0; id < MAX_SHIPS; ++id)
+        for (int id = 0; id < NumShips(); ++id)
             if (view[id].present && view[id].s.leader == myId) ((view[id].s.flags & SF_ALIVE) ? afloat : sinking)++;
         py -= 38;
         Rectangle r = {24, py, 336, 32};
@@ -4074,12 +4113,12 @@ void Game::DrawHUD() {
     if (IsKeyDown(KEY_TAB) || opt.showScores) {
         std::vector<int> order;
         for (int side = (curMode != MODE_TEAMS ? -1 : 0); side <= (curMode != MODE_TEAMS ? -1 : 1); ++side)
-            for (int id = 0; id < MAX_SHIPS; ++id)
+            for (int id = 0; id < NumShips(); ++id)
                 if (view[id].present && IsCaptain(id) && (side < 0 || view[id].s.team == side)) order.push_back(id);
         if (curMode == MODE_PIRATE)
             std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return view[a].s.banked > view[b].s.banked; });
         int rows = (int)order.size(), crewRows = 0;
-        for (int k = 0; k < MAX_CREW; ++k)
+        for (int k = 0; k < NumCrew(); ++k)
             if (crewView[k].present) ++crewRows;
         bool booty = curMode == MODE_PIRATE;
         float rh = 40.0f, ch = 26.0f;  // row heights, squeezed when a big game won't fit the screen
@@ -4096,7 +4135,7 @@ void Game::DrawHUD() {
         float pw = booty ? 640 : 560, ph = 92 + rows * rh + crewRows * ch;
         Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
         Panel(r, {10, 16, 24, 220}, 14);
-        Label(TextFormat("CAPTAIN   \xC2\xB7   %s%s%s", TextToUpper(kModeNames[curMode]), curFleets ? " WITH FLEETS" : "", curRealistic && curArena == ARENA_ISLES ? "   \xC2\xB7   REALISTIC" : ""), r.x + 28, r.y + 26, 12, kDim);
+        Label(TextFormat("CAPTAIN   \xC2\xB7   %s%s%s", TextToUpper(kModeNames[curMode]), curFleets ? " WITH FLEETS" : "", curRealistic ? "   \xC2\xB7   REALISTIC" : ""), r.x + 28, r.y + 26, 12, kDim);
         if (booty) Label("BANKED", r.x + pw - 240, r.y + 26, 12, kDim, Center);
         Label("SUNK", r.x + pw - 150, r.y + 26, 12, kDim, Center);
         Label("LOST", r.x + pw - 60, r.y + 26, 12, kDim, Center);
@@ -4113,7 +4152,7 @@ void Game::DrawHUD() {
             Text(TextFormat("%d", s.kills), r.x + pw - 150, y, fs, kText, true, Center, false);
             Text(TextFormat("%d", s.deaths), r.x + pw - 60, y, fs, kDim, false, Center, false);
             ++row;
-            for (int k = 0; k < MAX_CREW; ++k) {  // the hands aboard: their own sinkings, hits and patches
+            for (int k = 0; k < NumCrew(); ++k) {  // the hands aboard: their own sinkings, hits and patches
                 if (!crewView[k].present || crewView[k].c.ship != id) continue;
                 const NetCrew& c = crewView[k].c;
                 float cy = r.y + 58 + row * rh + crewDrawn * ch - 4.0f;
@@ -4205,9 +4244,9 @@ void Game::DrawMenu() {
     // bot stepper
     Rectangle st = {x + mw + 8, y + bh + 8, 128, bh};
     DrawRectangleRounded(st, 0.4f, 8, {255, 255, 255, 14});
-    // (no limit but the berths: one at a time up to 10, then fives; with fleets each captain brings three escorts)
+    // (no limit: one at a time up to 10, then fives)
     if (Button({st.x + 4, st.y + 7, 36, 40}, "-")) botCount = std::max(0, botCount <= 10 ? botCount - 1 : botCount - 5);
-    if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = std::min(MAX_SHIPS - 1, botCount < 10 ? botCount + 1 : botCount + 5);
+    if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = botCount < 10 ? botCount + 1 : botCount + 5;
     Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 4, 24, kText, true, Center, false);
     Label("BOTS", st.x + st.width * 0.5f, st.y + bh - 20, 9, kDim, Center);
     // match settings for hosting (the backdrop previews them)
@@ -4242,11 +4281,7 @@ void Game::DrawMenu() {
     y += row;
     {  // how the ships handle
         static const char* const kHandling[] = {"Arcade", "Realistic"};
-        bool applies = modeSel != MODE_RACE && arenaSel == ARENA_ISLES;
-        Label(!handlingSel ? "HANDLING   \xC2\xB7   OVER THE TOP"
-              : applies    ? "HANDLING   \xC2\xB7   REAL SPEEDS AND TURNING, NO JUMPS"
-                           : "HANDLING   \xC2\xB7   ARCADE ANYWAY IN RACES AND THE MAELSTROM",
-              x + 2, y, 11, kDim);
+        Label(handlingSel ? "HANDLING   \xC2\xB7   REAL SPEEDS AND TURNING, NO JUMPS" : "HANDLING   \xC2\xB7   OVER THE TOP", x + 2, y, 11, kDim);
         Segmented({x, y + 18, fw, 40}, kHandling, 2, handlingSel);
     }
     y += row;
@@ -4331,7 +4366,7 @@ int Game::NearLeak() const {
     return best;
 }
 int Game::GunCrewman(int ship, int gun) const {  // which human works this gun (-1: the ship's own gun crew)
-    for (int i = 0; i < MAX_CREW; ++i)
+    for (int i = 0; i < NumCrew(); ++i)
         if (crewView[i].present && crewView[i].c.ship == ship && crewView[i].c.gun == gun) return i;
     return -1;
 }
@@ -4722,7 +4757,7 @@ void Game::CrewAutopilot(float dt, float& mx, float& mz) {
     } else apLeakGoal = -1;
     int tgt = -1;
     float best = 900.0f;
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present || !(view[id].s.flags & SF_ALIVE) || !IsEnemy(id)) continue;
         float d = Vector3Distance(view[id].s.pos, S.pos);
         if (d < best) { best = d; tgt = id; }
@@ -4870,7 +4905,7 @@ void Game::DrawFigures() {
         part(figHead, {0, 1.62f, 0}, {214, 172, 140, 255});
         part(figHat, {0, 1.74f, 0}, {30, 30, 34, 255});
     };
-    for (int id = 0; id < MAX_SHIPS; ++id) {
+    for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
         const NetShip& S = view[id].s;
         if (Vector3Distance(S.pos, rv.pos) > 220.0f || view[id].s.leader >= 0) continue;
@@ -4881,7 +4916,7 @@ void Game::DrawFigures() {
                 Vector3 st = StationSpot(ModelOf(S.cls), GunStation(S.cls, side, i));
                 // a human standing on the spot: the gun crew makes room (and we never stand inside one)
                 bool crowded = id == myId && IsCrew() && !crewOverboard && Vector2Distance({crewLocal.x, crewLocal.z}, {st.x, st.z}) * C.scale < 1.6f;
-                for (int k = 0; k < MAX_CREW && !crowded; ++k)
+                for (int k = 0; k < NumCrew() && !crowded; ++k)
                     if (crewView[k].present && k != crewId && crewView[k].c.ship == id && !crewView[k].c.overboard &&
                         Vector2Distance({crewView[k].c.local.x, crewView[k].c.local.z}, {st.x, st.z}) * C.scale < 1.2f)
                         crowded = true;
@@ -4893,7 +4928,7 @@ void Game::DrawFigures() {
                 figure(HullToWorld(S.pos, S.rot, st, C.scale), q, {44, 56, 84, 255}, true, 0.0f, 0.0f);
             }
     }
-    for (int i = 0; i < MAX_CREW; ++i) {
+    for (int i = 0; i < NumCrew(); ++i) {
         if (!crewView[i].present || i == crewId) continue;
         const NetCrew& c = crewView[i].c;
         Gait& g = crewGait[i];
@@ -4903,10 +4938,10 @@ void Game::DrawFigures() {
             figWork = false;
             figOffset = 0.0f;
             figOutfit = i;
-            figure(c.local, q, c.ship >= 0 && c.ship < MAX_SHIPS ? TeamOf(c.ship) : ui::kText, false, 1.0f, g.phase);
+            figure(c.local, q, c.ship >= 0 && c.ship < NumShips() ? TeamOf(c.ship) : ui::kText, false, 1.0f, g.phase);
             continue;
         }
-        if (c.ship < 0 || c.ship >= MAX_SHIPS || !view[c.ship].present) continue;
+        if (c.ship < 0 || c.ship >= NumShips() || !view[c.ship].present) continue;
         const NetShip& S = view[c.ship].s;
         // stride from how fast they move over the deck
         float moved = g.ship == c.ship ? Vector2Distance({c.local.x, c.local.z}, {g.last.x, g.last.z}) * ClassOf(S.cls).scale : 0.0f;
@@ -5077,7 +5112,7 @@ void Game::Frame() {
         worst = fmaxf(worst, ft);
         if (GetTime() - since > 5.0) {
             int ships = 0, near = 0;
-            for (int i = 0; i < MAX_SHIPS; ++i)
+            for (int i = 0; i < NumShips(); ++i)
                 if (view[i].present) {
                     ++ships;
                     if (Vector3Distance(view[i].s.pos, rv.pos) < 220.0f) ++near;
@@ -5120,6 +5155,8 @@ void Game::Frame() {
             menuWorld.Step();
             menuWorld.events.clear();
         }
+        GrowShips(menuWorld.ShipCount());
+        menuWorld.EnsureShips(1);
         // slow orbit around the battle
         const Ship& s = menuWorld.ships[0];
         float a = (float)GetTime() * 0.05f;
@@ -5204,7 +5241,7 @@ void Game::Frame() {
         UpdateAtmosphere(dt, false);
         UpdateSound(dt, false);
         if (prof) mark[5] = GetTime();
-        if (getenv("BS_SHOTONHOOK") && myId >= 0 && view[myId].present && view[myId].s.hooked >= 0 && view[myId].s.hooked < MAX_SHIPS &&
+        if (getenv("BS_SHOTONHOOK") && myId >= 0 && view[myId].present && view[myId].s.hooked >= 0 && view[myId].s.hooked < NumShips() &&
             view[view[myId].s.hooked].present) {  // (testing the grapple's looks: side on to the line)
             const NetShip& a = view[myId].s;
             const NetShip& b = view[a.hooked].s;
@@ -5265,6 +5302,7 @@ void Game::Frame() {
 // ============================================================================
 void Game::OpenShipyard() {
     yard.Open(myLivery, classSel >= 0 && classSel < SC_PLAYABLE ? classSel : SC_FRIGATE);
+    menuWorld.EnsureShips(1);
     yardPos = menuWorld.ships[0].pos;  // (open water: a ship was just there)
     if (arenaSel == ARENA_MAELSTROM) yardPos = {0.0f, 0.0f, -520.0f};
     yardPos.y = 0.0f;

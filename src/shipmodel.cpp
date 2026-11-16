@@ -991,6 +991,8 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
         float flutter = (0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f)) / fmaxf(0.01f, extFit);  // (metres, in the model's units)
         for (int i = 0; i < M->meshCount; ++i) {
             if ((*isRope)[i] && camDist > 280.0f) continue;  // sub-pixel rigging only shimmers
+            static const int dbgHide = getenv("BS_HIDEPART") ? atoi(getenv("BS_HIDEPART")) : 0;  // (debugging: 1 no sails, 2 sails only, 3 no ropes)
+            if ((dbgHide == 1 && (*isSail)[i]) || (dbgHide == 2 && !(*isSail)[i]) || (dbgHide == 3 && (*isRope)[i])) continue;
             Material& em = M->materials[M->meshMaterial[i]];
             Color keep = em.maps[MATERIAL_MAP_DIFFUSE].color;
             Color c = (*isSail)[i] ? (painted && !teamSails ? keep : ColorTint(keep, ColorLerp(WHITE, team, 0.55f))) : ColorTint(keep, tint);

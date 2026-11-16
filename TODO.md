@@ -408,15 +408,29 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   the beam, then hard over): cutter 89 -> 18 deg, frigate 76 -> 9, ship of the line 18 -> 5; turn heel 31-35 -> 14-21 deg.
   Full simtest vs v0.13: jumps and duels alike, the worst roll in the jump run up.y 0.34 -> 0.94. Tuning switches:
   BS_HEEL, BS_ROLLDAMP, BS_ROLLRIGHT.
-- [x] Realistic handling (host option, `--realistic`, protocol 19): World::Real() (the Isles only). Top speed x0.21,
+- [x] Realistic handling (host option, `--realistic`, protocol 19): World::Real(). Top speed x0.21,
   1.5 m/s astern, drive 0.6 m/s^2 / scale^2, turn rate x0.07 needing way on, slow yaw response, no planing throw, no
   breach kick, no slide carry, ball shove x0.02, recoil x0.1. Bots pace escorts / lead the treasure carrier by the real
   speeds. `BS_HANDLINGTEST=1`: cutter 14 kn, frigate 12.5, line 10; 60/95/160 m turning circles. Realistic duels
   (`BS_ONLYDUELS=1 BS_NOMODES=1 BS_REAL=1`) end in 1.5-2.5 min, no groundings. Host + autopilot client: prediction
   error avg 1 cm.
-- [x] Up to 64 ships (MAX_SHIPS 32 -> 64, crew 24 -> 32, 64 peers), bot stepper to 63, 24 bot names then numbered;
-  TAB scores squeeze/cut to fit; a big race field lines up six abreast. `BS_CROWDTEST=1`: 63 bots, server tick ~3 ms.
-  40 bots in practice: 46-61 fps on the GTX 1060. A snapshot of 64 ships is ~7 KB (30 Hz): ~1.8 Mbit/s per client.
+- [x] No ship / player limit (user: "I said no limit on bots as well, computers will have more performance in the future"):
+  World::ships / crew are std::deques that grow (NewShipSlot / NewCrewSlot; a deque so a Ship& survives AddShip), the
+  client's per-ship tables grow on first sight of an id (Game::GrowShips / GrowCrew, also pred.EnsureShips). Ship and
+  crew ids are 16 bits on the wire (NO_SHIP = 0xFFFF, HOOK_ROCK = 32766, SHIP_ID_LIMIT 32000); 4095 peers (ENet's max).
+  Bot stepper uncapped; 24 bot names then numbered; TAB scores squeeze/cut to fit; a big race field lines up six abreast.
+  `BS_CROWDTEST=1 BS_CROWD=n`: 63 bots ~3 ms a tick, 100 ~4.6 ms, 100 captains with fleets (400 ships) ~12 ms.
+  40 bots in practice: 46-61 fps on the GTX 1060. A snapshot is ~115 bytes a ship at 30 Hz, to every client.
+- [x] Realistic handling in every mode and arena, with or without skills (user: "We should not limit the users").
+
+## Far-ship model artifacts (2026-11-16, user: "the current ones seems to have some rendering artifacts ... at the front of the frigate")
+- [x] ship_lo.glb (every ship beyond 320 m, and every ship's shadow) had its ropes squeezed to a few triangles each; the
+  strands fused into flat sheets: a plank-like slab beside the bow (the anchor cables) and a grey wedge by the jib, and
+  their shadows on our own ship's bow (the shadow pass draws ship_lo with ropes for ships within 280 m).
+  tools/blend_to_game_ship.py now drops the rigging from the low level (distant ships never drew it); ship_lo is 34k
+  triangles (was 56k). Found with BS_HIDEPART=1/2/3 (no sails / sails only / no ropes) and BS_PARTDUMP=<file>
+  (per-part triangles and bounds) - neither the hull budget nor small parts were it.
+- The frigate's anchors are near-black iron in the model (base colour ~2% grey): crude up close, by design.
 
 ## Rooms (2026-11-16, user: "online play just like i did in qwop-row with room names")
 - [x] src/rooms.cpp: the host's server lists its room on PeerJS's cloud signalling server (wss://0.peerjs.com, as qwop-row's

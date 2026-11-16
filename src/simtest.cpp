@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <chrono>
 
+static constexpr int MAX_SHIPS = 256;  // (the tests size their tables by this; the game itself has no limit)
+
 static float Heading(const Ship& s) {
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
     return atan2f(f.x, f.z);
@@ -245,7 +247,8 @@ int RunSimTest() {
             g.Init(11, 0, 0, MODE_FFA, fleets != 0);
             g.realistic = getenv("BS_REAL") != nullptr;
             int added = 0;
-            for (int i = 0; i < MAX_SHIPS - 1; ++i)
+            const int want = getenv("BS_CROWD") ? atoi(getenv("BS_CROWD")) : 63;
+            for (int i = 0; i < want; ++i)
                 if (g.AddShip(TextFormat("bot%d", i), true) >= 0) ++added; else break;
             int ships = 0;
             for (const Ship& s : g.ships) ships += s.active ? 1 : 0;
@@ -1037,6 +1040,7 @@ duels:
             World g;
             g.rounds = false;
             g.Init(seed, 0, 0, MODE_RACE, false, (uint8_t)course);
+            g.realistic = getenv("BS_REAL") != nullptr;
             g.skills = true;
             if (const char* dir = getenv("BS_RACEMAP")) {  // top down, 4 m a pixel: land, shallows, sea, the racing line
                 const int N = 900;
@@ -1100,7 +1104,7 @@ duels:
                 for (const GameEvent& e : g.events) {
                     if (e.type == EventType::Kill && (e.flags & EF_CRIPPLE)) cripples++;
                     if (e.type == EventType::Dash) dashes++;
-                    if (e.type == EventType::Hook && e.b != 255) hooks++;
+                    if (e.type == EventType::Hook && e.b != NO_SHIP) hooks++;
                     if (e.type == EventType::Ram && (e.flags & EF_ROCK)) { rockHits++; bigRock += e.value > 8.0f; }
                 }
                 g.events.clear();
@@ -1141,6 +1145,7 @@ duels:
         const uint8_t arena = getenv("BS_ARENA") ? (uint8_t)atoi(getenv("BS_ARENA")) : ARENA_ISLES;  // 1: the maelstrom
         g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1, 0, 0, (uint8_t)m, true, arena);
         g.skills = getenv("BS_SKILLS") != nullptr;  // dash and grappling hook on
+        g.realistic = getenv("BS_REAL") != nullptr;
         int swallowed = 0, fed = 0, inFunnel = 0, samples = 0, rockAt[3] = {}, rockEscort = 0, rockHarbour = 0, stuck = 0;
         float stuckT[MAX_SHIPS] = {};
         int dashes = 0, hookups = 0;

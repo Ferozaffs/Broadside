@@ -7,6 +7,7 @@
 #include <string>
 #include "sim.h"
 #include <atomic>
+#include <deque>
 #include <thread>
 
 class GameServer {
@@ -32,10 +33,10 @@ private:
     rooms::Host room;
     uint16_t port = 0;
     World world;
-    static constexpr int kMaxPeers = 64;  // players (captains and crew) at once
+    static constexpr int kMaxPeers = 4095;  // players (captains and crew) at once: ENet's own ceiling (12-bit peer ids)
     int peerShip[kMaxPeers];
     int peerCrew[kMaxPeers];
     std::vector<uint8_t> peerLivery[kMaxPeers];  // each captain's paint (Livery::Encode), passed on with their ship's info
     void SendCrewInfo(int crewId, int toPeer);
-    bool announced[MAX_SHIPS] = {};
+    std::deque<bool> announced;  // (grows with the world's ship list)
 };

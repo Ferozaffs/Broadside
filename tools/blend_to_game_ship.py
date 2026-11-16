@@ -108,6 +108,13 @@ for name, me, is_hull in parts:
         dropped += 1
         bpy.data.meshes.remove(me)
         continue
+    # ...and all the rigging. Distant ships never draw it, so it was only ever seen in shadows (every ship's shadow is
+    # drawn with this level), and squeezed this hard a rope's strands fuse into flat sheets: a plank-like slab of shadow
+    # across the bow from the anchor cables. Real rope shadows are thinner than a shadow-map texel anyway.
+    if DETAIL < 0.5 and is_rope:
+        dropped += 1
+        bpy.data.meshes.remove(me)
+        continue
     ob = bpy.data.objects.new(name + "_g", me)
     col.objects.link(ob)
     ratio = min(1.0, budget / max(1, tris))
@@ -152,6 +159,16 @@ for ob in kept:
     key = "rope" if m0.startswith("rope") else "metal" if m0.startswith("metal") else "sail" if any(k in m0 for k in SAIL_MATS) else ("hull" if ob.name[:-2] in hull_names else "other")
     stats[key] += len(me.loop_triangles)
 print("[convert] tris by category:", dict(stats))
+if os.environ.get("BS_PARTDUMP"):  # (debugging a level of detail: every part's triangles and bounds after decimation)
+    with open(os.environ["BS_PARTDUMP"], "w") as f:
+        for ob in kept:
+            me = ob.data
+            if not me.vertices:
+                continue
+            lo = [min(v.co[i] for v in me.vertices) for i in range(3)]
+            hi = [max(v.co[i] for v in me.vertices) for i in range(3)]
+            f.write("%s\t%d\t%s\t%s\t%s\n" % (ob.name, len(me.loop_triangles), " ".join("%.2f" % x for x in lo), " ".join("%.2f" % x for x in hi),
+                                            ",".join(m.name for m in me.materials if m)))
 
 # keep only the game ship in the scene
 for ob in list(bpy.context.scene.objects):

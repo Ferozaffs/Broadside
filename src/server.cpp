@@ -34,7 +34,8 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
         if (world.AddShip(nm, true) < 0) break;
     }
     world.events.clear();
-    for (int i = 0; i < MAX_SHIPS; ++i) announced[i] = world.ships[i].active;
+    announced.assign(world.ships.size(), false);
+    for (int i = 0; i < world.ShipCount(); ++i) announced[i] = world.ships[i].active;
     running = true;
     thread = std::thread([this] { Run(); });
     printf("[server] listening on UDP %u, seed %u, %d bot(s)\n", port, seed, bots);
@@ -57,7 +58,7 @@ void GameServer::SendPlayerInfo(int id, int toPeer) {
     const Ship& s = world.ships[id];
     ByteWriter w;
     w.Put(MSG_PLAYER_INFO);
-    w.Put((uint8_t)id);
+    w.Put((uint16_t)id);
     w.Put((uint8_t)(s.isBot ? 1 : 0));
     w.PutString(s.name);
     w.Put(s.leader);
@@ -73,20 +74,21 @@ void GameServer::SendPlayerInfo(int id, int toPeer) {
 void GameServer::SendCrewInfo(int id, int toPeer) {
     ByteWriter w;
     w.Put(MSG_CREW_INFO);
-    w.Put((uint8_t)id);
+    w.Put((uint16_t)id);
     w.PutString(world.crew[id].name);
     if (toPeer < 0) net.Broadcast(w.buf.data(), w.buf.size(), true);
     else net.Send((uint32_t)toPeer, w.buf.data(), w.buf.size(), true);
 }
 
 void GameServer::AnnounceShips() {
-    for (int i = 0; i < MAX_SHIPS; ++i) {
+    if ((int)announced.size() < world.ShipCount()) announced.resize(world.ShipCount(), false);
+    for (int i = 0; i < world.ShipCount(); ++i) {
         bool on = world.ships[i].active;
         if (on && !announced[i]) SendPlayerInfo(i, -1);
         if (!on && announced[i]) {
             ByteWriter w;
             w.Put(MSG_PLAYER_LEFT);
-            w.Put((uint8_t)i);
+            w.Put((uint16_t)i);
             net.Broadcast(w.buf.data(), w.buf.size(), true);
         }
         announced[i] = on;
@@ -131,7 +133,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         }
         ByteWriter w;
         w.Put(MSG_WELCOME);
-        w.Put((uint8_t)id);
+        w.Put((uint16_t)id);
         w.Put(world.oceanParams.seed);
         w.Put(world.timeOfDay);
         w.Put(world.weather);
@@ -142,13 +144,13 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put((uint8_t)(world.deckOnly ? 1 : 0));
         w.Put((uint8_t)(world.skills ? 1 : 0));
         w.Put(world.arena);
-        w.Put((uint8_t)(crewId >= 0 ? crewId : 255));
+        w.Put((uint16_t)(crewId >= 0 ? crewId : NO_SHIP));
         w.Put((uint8_t)(world.realistic ? 1 : 0));
         net.Send(peer, w.buf.data(), w.buf.size(), true);
-        for (int i = 0; i < MAX_SHIPS; ++i)
+        for (int i = 0; i < world.ShipCount() && i < (int)announced.size(); ++i)
             if (world.ships[i].active && announced[i] && (i != id || crewId >= 0)) SendPlayerInfo(i, (int)peer);
         AnnounceShips();  // the new captain (and fleet) to everyone
-        for (int i = 0; i < MAX_CREW; ++i)
+        for (int i = 0; i < world.CrewCount(); ++i)
             if (world.crew[i].active && i != crewId) SendCrewInfo(i, (int)peer);
         if (crewId >= 0) {
             SendCrewInfo(crewId, -1);
@@ -164,8 +166,8 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         auto tell = [&](int crewId, int ship) {
             ByteWriter w;
             w.Put(MSG_ROLE);
-            w.Put((uint8_t)(crewId >= 0 ? crewId : 255));
-            w.Put((uint8_t)ship);
+            w.Put((uint16_t)(crewId >= 0 ? crewId : NO_SHIP));
+            w.Put((uint16_t)ship);
             net.Send(peer, w.buf.data(), w.buf.size(), true);
         };
         if (want == 2 && peerCrew[peer] >= 0) {  // crew: over to another ship
@@ -197,7 +199,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
             peerCrew[peer] = -1;
             ByteWriter lw;
             lw.Put(MSG_CREW_LEFT);
-            lw.Put((uint8_t)c);
+            lw.Put((uint16_t)c);
             net.Broadcast(lw.buf.data(), lw.buf.size(), true);
             int s = world.AddShip(name, false, SC_FRIGATE);
             if (s < 0) return;
@@ -212,7 +214,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         uint8_t order = r.Get<uint8_t>();
         if (id < 0 || !r.ok || order >= ORDER_COUNT) return;
         GameEvent e{EventType::OrderGiven};
-        e.a = (uint8_t)id;
+        e.a = (uint16_t)id;
         e.b = order;
         e.pos = world.ships[id].pos;
         world.events.push_back(e);
@@ -256,7 +258,7 @@ void GameServer::Run() {
                 peerCrew[e.peer] = -1;
                 ByteWriter w;
                 w.Put(MSG_CREW_LEFT);
-                w.Put((uint8_t)id);
+                w.Put((uint16_t)id);
                 net.Broadcast(w.buf.data(), w.buf.size(), true);
             } else if (e.type == NetEvent::Disconnect && e.peer < (uint32_t)kMaxPeers && peerShip[e.peer] >= 0) {
                 int id = peerShip[e.peer];

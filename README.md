@@ -108,13 +108,14 @@ Landlubber for the captain who found the most rocks), and 18 seconds later a fre
 
 **Host options** (menu, below the game settings):
 
-- **Bots**: any number up to a full house of 64 ships (- / + steps by one up to 10, then by five). With fleets each
-  captain brings three escorts, so 16 captains fill it.
+- **Bots**: as many as you like (- / + steps by one up to 10, then by five). There's no ship or player limit: the
+  game grows to fit, and your PC (and the host's upload) is what decides how many is too many. With fleets each
+  captain brings three escorts.
 - **Handling**: Arcade (over the top: 60-knot jumps off the swells), or Realistic: an age-of-sail ship. Top speeds of
   about 15 kn (cutter), 12 kn (frigate) and 10 kn (ship of the line), several seconds to gather way, a turning circle of
   60-160 m, no turning at all without way on, no jumps, and a ball hit or your own broadside barely moves the hull.
-  The wind is the one thing left arcade: you can sail any course, no tacking. Races and the Maelstrom stay arcade (a
-  race is against the clock, and the whirlpool's current runs faster than a real ship sails).
+  The wind is the one thing left arcade: you can sail any course, no tacking. It works in every mode and arena and
+  with skills on or off. (Mind the Maelstrom: its current runs faster than a real ship sails.)
 - **Ships allowed**: which of cutter / frigate / ship of the line players may pick. Bots keep to them too.
 - **Camera**: Free, or Deck to make everyone play from the quarterdeck (first person).
 - **Skills**: Dash (Shift) and grappling hook (E). A hooked line reels the two ships together for 7 seconds; the
