@@ -65,6 +65,8 @@ void Shipyard::Orbit() {
         dist += (gGoalDist - dist) * k;
         if (fabsf(gGoalYaw - yaw) < 0.002f && fabsf(gGoalDist - dist) < 0.05f) gGlide = false;
     }
+    static const float spin = getenv("BS_YARDSPIN") ? (float)atof(getenv("BS_YARDSPIN")) : 0.0f;  // (recordings: rad/s round her)
+    yaw += spin * dt;
     if (overUI) return;
     Vector2 d = GetMouseDelta();
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {

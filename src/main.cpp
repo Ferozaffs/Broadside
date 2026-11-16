@@ -5284,7 +5284,7 @@ void Game::Frame() {
         UnloadImage(img);
         quit = true;
     }
-    if (!opt.recordPath.empty() && mode == Mode::Playing) RecordFrame();
+    if (!opt.recordPath.empty() && (mode == Mode::Playing || (mode == Mode::Shipyard && getenv("BS_RECYARD")))) RecordFrame();  // (BS_RECYARD: film the Shipwright)
     const double swapFrom = GetTime();
     EndDrawing();
     if (getenv("BS_PERFLOG") && mode == Mode::Playing && GetTime() - sessionStart > 3.0) {  // (where a slow frame went)
