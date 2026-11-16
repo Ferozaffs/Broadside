@@ -15,6 +15,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
         printf("[server] could not bind UDP port %u\n", port);
         return false;
     }
+    this->port = port;
     for (int& p : peerShip) p = -1;
     for (int& p : peerCrew) p = -1;
     for (auto& l : peerLivery) l.clear();
@@ -33,7 +34,12 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     return true;
 }
 
+void GameServer::OpenRoom(const std::string& name) {
+    if (running) room.Start(name, net.Raw(), port, PROTOCOL_VERSION);
+}
+
 void GameServer::Stop() {
+    room.Stop();
     if (!running) return;
     running = false;
     if (thread.joinable()) thread.join();

@@ -401,6 +401,20 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - Not done: editing the meshes freely / splicing hull and rig between the models (the line ship is one atlas without
   separate hull and rig parts; see the reply of 2026-11-16).
 
+## Rooms (2026-11-16, user: "online play just like i did in qwop-row with room names")
+- [x] src/rooms.cpp: the host's server lists its room on PeerJS's cloud signalling server (wss://0.peerjs.com, as qwop-row's
+  PeerJS does) as "broadside-<name>"; a joiner sends the room its card (protocol version, public address from STUN
+  asked on the game's own ENet socket, LAN address), the room answers with its own, both punch UDP at each other
+  ("BSPUNCH!", eaten by the ENet intercept like the STUN answers) and ENet connects. The cards ride inside a
+  CANDIDATE message: the cloud server re-checks message shapes and hangs up on an OFFER without a real SDP.
+  A missing room comes back as EXPIRE -> "No room called ...". Another protocol version -> says so.
+- Tested on one PC: host + `--join <room>` finds the room and joins over the LAN address (the host's punch shows
+  the way in). Through the router's own public address (BS_ROOMPUB=1) it doesn't get in: this router doesn't loop
+  back (NAT loopback), which says nothing about two homes. Not yet tested between two homes.
+- No relay (TURN): two strict routers (symmetric NAT / CGNAT on both sides) can't meet; the address + UPnP is the
+  fallback. Switches: `--room NAME` (host / dedicated server), BS_NOROOM=1, BS_ROOMLOG=1 (signalling trace),
+  BS_ROOMPUB=1 (join by the public address even on one network).
+
 ## Known issues / next
 - Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;
   it now stands on the model's quarterdeck (ShipModel::DeckAt) behind the rail. Figures closer than 2.2 m to the

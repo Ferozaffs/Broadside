@@ -60,6 +60,7 @@ bool NetServer::Start(uint16_t port, int maxClients) {
     addr.host = ENET_HOST_ANY;
     addr.port = port;
     host = enet_host_create(&addr, (size_t)maxClients, 2, 0, 0);
+    rooms::Hook(host);
     return host != nullptr;
 }
 
@@ -121,7 +122,23 @@ bool NetClient::Connect(const char* hostname, uint16_t port) {
     return true;
 }
 
+bool NetClient::ConnectRoom(const std::string& name, int protocol) {
+    Disconnect();
+    ENetHost* h = enet_host_create(nullptr, 1, 2, 0, 0);
+    if (!h) return false;
+    rooms::Hook(h);
+    host = h;
+    peer = nullptr;
+    connected = false;
+    failure.clear();
+    looking = true;
+    room.Start(name, h, protocol);
+    return true;
+}
+
 void NetClient::Disconnect() {
+    room.Stop();
+    looking = false;
     if (peer && connected) {
         enet_peer_disconnect_now((ENetPeer*)peer, 0);
         enet_host_flush((ENetHost*)host);
@@ -132,6 +149,24 @@ void NetClient::Disconnect() {
 }
 
 void NetClient::Poll(std::vector<NetEvent>& out) {
+    if (looking && host) {
+        uint32_t ip = 0;
+        uint16_t port = 0;
+        int r = room.Result(ip, port);
+        if (r < 0) {
+            failure = room.Describe();
+            looking = false;
+        } else if (r > 0) {
+            ENetAddress a;
+            a.host = ip;
+            a.port = port;
+            ENetPeer* np = enet_host_connect((ENetHost*)host, &a, 2, 0);
+            if (np) enet_peer_timeout(np, 0, 4000, 8000);
+            peer = np;
+            looking = false;
+            if (!np) failure = "Couldn't start the connection";
+        }
+    }
     ENetPeer* p = (ENetPeer*)peer;
     PollHost((ENetHost*)host, out, &p, &connected);
     peer = p;

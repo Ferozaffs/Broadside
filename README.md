@@ -16,11 +16,16 @@ Download the latest zip from [Releases](../../releases), unzip it anywhere and r
 (Windows, needs an OpenGL 4.3 GPU).
 
 - **Practice**: play against bots.
-- **Host**: the game asks your router to open **UDP port 27615** (UPnP) and shows the address friends should
-  type at the top left (**F2** copies it). If the router has UPnP switched off, the game says so: switch it on in
-  the router's settings, or forward UDP 27615 to your PC by hand. Allow `broadside.exe` through Windows Firewall
-  when asked. Friends on the same network use the "same network" address.
-- **Join**: type the host's IP address.
+- **Host**: your game gets a **room name** like `salty-kraken-42`, shown at the top left (**F2** copies it). Send
+  it to your friends. Allow `broadside.exe` through Windows Firewall when asked.
+- **Join**: type the room name (or the host's IP address, which still works).
+
+Rooms work like qwop-row's: the room is listed on PeerJS's free public signalling server, and the two games swap
+addresses there and open a direct path through both routers (UDP hole punching). Nothing goes through a relay. A
+few routers won't let that through, mostly mobile and some fibre carriers that share one public address between
+many homes. Then use the address instead: the game also asks the router to open **UDP port 27615** (UPnP) and shows
+that address too. If UPnP is off, switch it on in the router's settings or forward UDP 27615 to the host's PC by
+hand. Friends on the same network get the "same network" address.
 
 Everyone must run the same version.
 

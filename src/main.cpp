@@ -40,6 +40,7 @@ struct Options {
     enum Start { Menu, Host, Join, Practice, Dedicated } start = Menu;
     std::string name = "Captain";
     std::string address = "127.0.0.1";
+    std::string room;  // --room NAME: the room's name when hosting (otherwise one is made up)
     uint16_t port = DEFAULT_PORT;
     int bots = 0;
     bool demo = false;         // scripted inputs (for automated testing)
@@ -83,7 +84,8 @@ static void ParseArgs(int argc, char** argv, Options& o) {
             size_t c = addr.find(':');
             if (c != std::string::npos) { o.port = (uint16_t)atoi(addr.c_str() + c + 1); addr = addr.substr(0, c); }
             o.address = addr;
-        } else if (a == "--port") o.port = (uint16_t)atoi(next("27615").c_str());
+        } else if (a == "--room") o.room = next("");
+        else if (a == "--port") o.port = (uint16_t)atoi(next("27615").c_str());
         else if (a == "--bots") o.bots = atoi(next("2").c_str());
         else if (a == "--time") {
             std::string t = next("noon");
@@ -235,6 +237,7 @@ public:
 
     // menu
     std::string nameBuf, addrBuf;
+    bool joiningRoom = false;  // the join field held a room's name, not an address
     int focus = -1;
     int botCount = 2;
     std::string status;
@@ -685,9 +688,17 @@ void Game::StartSession(bool host, int bots, bool open) {
             upnp::Start(opt.port);
             portOpened = true;
         }
+        if (open && !getenv("BS_NOROOM")) server.OpenRoom(opt.room.empty() ? rooms::NewName() : opt.room);
     }
     const char* addr = host ? "127.0.0.1" : addrBuf.c_str();
-    if (!net.Connect(addr, opt.port)) {
+    joiningRoom = !host && rooms::LooksLikeRoom(addrBuf);
+    if (joiningRoom) {
+        if (!net.ConnectRoom(rooms::Clean(addrBuf), PROTOCOL_VERSION)) {
+            status = "Couldn't start looking for the room";
+            mode = Mode::Menu;
+            return;
+        }
+    } else if (!net.Connect(addr, opt.port)) {
         status = TextFormat("Could not resolve %s", addr);
         server.Stop();
         mode = Mode::Menu;
@@ -3982,10 +3993,25 @@ void Game::DrawHUD() {
     Text(TextFormat("%s  \xC2\xB7  %u ms  \xC2\xB7  %d fps", server.Running() ? "HOSTING" : "ONLINE", net.RoundTripMs() + 2 * opt.fakeLagMs,
                     GetFPS()),
          24, 20, 15, A(kDim, 0.9f));
+    float yy = 40;
+    rooms::State rs = server.Room().GetState();
+    if (rs != rooms::State::Idle) {
+        std::string rn = server.Room().Name(), rd = server.Room().Describe();
+        if (rs == rooms::State::Open) {
+            Text(TextFormat("ROOM  %s", rn.c_str()), 24, yy, 20, kGold, true);
+            Text(rd.empty() ? "friends type it under Join   \xC2\xB7   F2 copies" : rd.c_str(), 24, yy + 25, 13, A(kDim, 0.9f));
+        } else {
+            Text(rd.c_str(), 24, yy, 14, rs == rooms::State::Failed ? kGold : A(kDim, 0.9f));
+        }
+        yy += rs == rooms::State::Open ? 50 : 26;
+        if (rs == rooms::State::Open && IsKeyPressed(KEY_F2)) {
+            SetClipboardText(rn.c_str());
+            Feed(TextFormat("Copied %s - send it to your friends", rn.c_str()), kGold);
+        }
+    }
     if (portOpened) {
         upnp::State us = upnp::GetState();
         std::string ext = upnp::ExternalIp(), lan = upnp::LocalIp();
-        float yy = 40;
         if (us == upnp::State::Mapped && !ext.empty() && !upnp::CarrierNat()) {
             Text(TextFormat("FRIENDS JOIN  %s%s", ext.c_str(), opt.port == DEFAULT_PORT ? "" : TextFormat(":%u", opt.port)), 24, yy, 17, kGold, true);
             Text(TextFormat("F2 copies   \xC2\xB7   same network: %s", lan.c_str()), 24, yy + 22, 13, A(kDim, 0.9f));
@@ -3997,7 +4023,7 @@ void Game::DrawHUD() {
             if (!l2.empty()) { yy += 18; Text(l2.c_str(), 24, yy, 13, A(kText, 0.85f)); }
             if (!lan.empty()) Text(TextFormat("same network: %s   \xC2\xB7   F2 copies", lan.c_str()), 24, yy + 20, 13, A(kDim, 0.9f));
         }
-        if (IsKeyPressed(KEY_F2)) {
+        if (IsKeyPressed(KEY_F2) && rs != rooms::State::Open) {
             std::string a = us == upnp::State::Mapped && !ext.empty() && !upnp::CarrierNat() ? ext : lan;
             if (!a.empty()) {
                 if (opt.port != DEFAULT_PORT) a += TextFormat(":%u", opt.port);
@@ -4133,8 +4159,11 @@ void Game::DrawMenu() {
 
     y = y0 + head;
     if (mode == Mode::Connecting) {
-        Label("CONNECTING", x + 2, y, 13, kGold);
-        Text(server.Running() ? "Starting local server..." : TextFormat("%s : %u", addrBuf.c_str(), opt.port), x, y + 22, 28, kText, true);
+        Label(joiningRoom ? "JOINING ROOM" : "CONNECTING", x + 2, y, 13, kGold);
+        Text(server.Running() ? "Starting local server..."
+                              : joiningRoom ? rooms::Clean(addrBuf).c_str() : TextFormat("%s : %u", addrBuf.c_str(), opt.port),
+             x, y + 22, 28, kText, true);
+        if (joiningRoom) Text(net.Looking() ? net.RoomStatus().c_str() : "Connecting...", x + 64, y + 68, 16, kDim);
         float dots = fmodf((float)GetTime() * 3.0f, 3.0f);
         for (int i = 0; i < 3; ++i) DrawCircle((int)x + 8 + i * 16, (int)y + 76, 4, i <= dots ? kGold : kTrack);
         if (Button({x, y + 104, 200, 50}, "Cancel")) Disconnect("");
@@ -4144,11 +4173,11 @@ void Game::DrawMenu() {
     if (compact) {
         float half = (fw - 8) * 0.5f;
         TextField({x, y + 24, half, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
-        TextField({x + half + 8, y + 24, half, 50}, addrBuf, 1, focus, TextFormat("SERVER  \xC2\xB7  UDP %u", opt.port), 64);
+        TextField({x + half + 8, y + 24, half, 50}, addrBuf, 1, focus, "ROOM OR ADDRESS", 64);
         y += 100;
     } else {
         TextField({x, y + 24, fw, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
-        TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
+        TextField({x, y + 116, fw, 50}, addrBuf, 1, focus, TextFormat("ROOM NAME, OR ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
         y += 192;
     }
     // two columns: the wide one on the left, a narrow one (128) on the right
@@ -5036,7 +5065,11 @@ void Game::Frame() {
     if (mode == Mode::Menu || mode == Mode::Connecting || mode == Mode::Shipyard) {
         if (mode == Mode::Connecting) {
             PollNet();
-            if (mode == Mode::Connecting && GetTime() - connectStart > 6.0) Disconnect("Connection timed out");
+            if (mode == Mode::Connecting && net.Looking()) connectStart = GetTime();
+            if (mode == Mode::Connecting && !net.Failure().empty()) Disconnect(net.Failure());
+            if (mode == Mode::Connecting && GetTime() - connectStart > (joiningRoom ? 8.0 : 6.0))
+                Disconnect(joiningRoom ? "Found the room but couldn't get through (some routers won't) - ask the host for their address"
+                                       : "Connection timed out");
         }
         if (menuWeather != weatherSel || menuArena != arenaSel) {  // rebuild the backdrop battle on the chosen sea
             menuWeather = weatherSel;
@@ -5276,6 +5309,7 @@ static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
     if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena)) return 1;
+    if (!o.room.empty()) srv.OpenRoom(o.room);  // (--room NAME: friends join by the name)
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();
