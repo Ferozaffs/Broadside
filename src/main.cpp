@@ -266,6 +266,7 @@ public:
     float DeckGlass() const { return DeckView() > 0.5f && !getenv("BS_NOGLASS") ? aimZoom : 0.0f; }
     bool OwnShipLate() const { return OwnShipGhost() < 0.99f || DeckGlass() > 0.01f; }  // drawn after the water, see-through
     bool lanternFxOff = false;  // (a ship drawn a second time: its lantern glows are already in)
+    bool figInView = false;  // (BS_DECKLOG: a sailor within 7 m in the middle of the view this frame)
     float DeckView() const { float u = Clamp(camDist / 22.0f, 0.0f, 1.0f); return 1.0f - u * u * (3.0f - 2.0f * u); }  // 1 = on deck
     Vector3 camTarget{};
     bool camInit = false;
@@ -2188,9 +2189,11 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         // (testing the deck view: how much of the far sea and sky in the middle of the screen our own ship hides, from
         // where we stand and from other spots on the quarterdeck, looking the same way; every half second)
         static double t0 = 0;
-        static long framesUnder, framesAll;  // (and how often the eye is in the sea)
+        static long framesUnder, framesAll, framesFig;  // (and how often the eye is in the sea, or a sailor's in the way)
         framesAll++;
         if (rv.pos.y < Ocean().Height(rv.pos.x, rv.pos.z) + 0.2f) framesUnder++;
+        if (figInView) framesFig++;
+        figInView = false;
         enum { kCands = 7 };
         static const char* const kName[kCands] = {"now", "old (1.5 m to starboard)", "rail we look over", "far rail", "centreline",
                                                    "half a metre from the rail", "rail, 1 m higher"};
@@ -2239,7 +2242,8 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
             }
             static int prints = 0;
             if (++prints % 10 == 0 && nRays[0] > 0) {
-                printf("[deckblock] eye in the sea %.1f%% of frames\n", 100.0 * framesUnder / fmax(1.0, (double)framesAll));
+                printf("[deckblock] eye in the sea %.1f%% of frames, a sailor within 7 m in the middle of the view %.1f%%\n",
+                       100.0 * framesUnder / fmax(1.0, (double)framesAll), 100.0 * framesFig / fmax(1.0, (double)framesAll));
                 for (int c = 0; c < kCands; ++c)
                     printf("[deckblock] %-26s hides %4.1f%% of the far view (sails %4.1f%%)\n", kName[c], 100.0 * nBlocked[c] / fmax(1.0, (double)nRays[c]), 100.0 * nSail[c] / fmax(1.0, (double)nRays[c]));
                 fflush(stdout);
@@ -4690,6 +4694,12 @@ void Game::DrawFigures() {
     auto figure = [&](Vector3 foot, Quaternion q, Color shirt, bool bot, float swing, float phase) {
         float camD = Vector3Distance(Vector3Add(foot, {0, 1.0f, 0}), rv.pos);
         if (camD > 260.0f || camD < 2.2f) return;  // (not one standing in the camera)
+        if (DeckView() > 0.99f && camD < 10.0f) {
+            float c = Vector3DotProduct(Vector3Normalize(Vector3Subtract(Vector3Add(foot, {0, 1.0f, 0}), rv.pos)),
+                                        Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
+            if (DeckGlass() > 0.5f && c > cosf(16.0f * DEG2RAD)) return;  // (the spyglass looks past a sailor close by, as past the sails)
+            if (getenv("BS_DECKLOG") && camD < 7.0f && c > cosf(18.0f * DEG2RAD)) figInView = true;  // (testing: one in the way)
+        }
         if (crewOutfits > 0) {  // the animated sailor: running while they move, working at a gun or a hole, else idling
             if (bot && camD > 140.0f) return;  // (a gun crew that far off is a few pixels)
             int anim = swing > 0.25f ? CrewModel::RUN : (figWork ? CrewModel::WORK : CrewModel::IDLE);
