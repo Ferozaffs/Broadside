@@ -2781,12 +2781,20 @@ void Game::DrawTrajectory() {
     }
 }
 
-// Lantern spots in hull space: two stern lanterns, the bow, and the main masthead
-static void LanternSpots(float mastTop, Vector3 out[4]) {
+// Lantern spots in hull space: two stern lanterns, the bow, and the main masthead. They were placed for the frigate; a
+// model of another length takes them along to its own stern and stem (where the Shipwright's parts go: the frigate's
+// are at the constants below, so she keeps them where they were).
+static void LanternSpots(const ShipModel& model, Vector3 out[4]) {
     out[0] = {1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[1] = {-1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[2] = {0.0f, hull::DeckHeight(15.0f) + 1.8f, 16.4f};
-    out[3] = {0.0f, mastTop - 1.5f, 0.75f};  // hung on the fore side of the mast
+    out[3] = {0.0f, model.MastTop() - 1.5f, 0.75f};  // hung on the fore side of the mast
+    if (!model.HasExternal()) return;
+    Vector3 st = model.PartAnchor(1), bow = model.PartAnchor(0);
+    Vector3 dst = {0.0f, st.y - 5.49f, st.z + 17.19f}, dbow = {0.0f, bow.y - 2.95f, bow.z - 16.21f};
+    out[0] = Vector3Add(out[0], dst);
+    out[1] = Vector3Add(out[1], dst);
+    out[2] = Vector3Add(out[2], dbow);
 }
 
 std::vector<Vector3> Game::HitPointsWorld(int id, const NetShip& s) const {
@@ -2817,7 +2825,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     Vector4 lights[4];
     int nl = 0;
     Vector3 spots[4];
-    LanternSpots(model.MastTop(), spots);
+    LanternSpots(model, spots);
     spots[3] = model.RigPoint(spots[3], liv);  // (the masthead lantern goes where her masthead is)
     const bool greatLantern = liv && liv->on && liv->stern == STERN_LANTERN;
     const Vector3 greatAt = Vector3Add(model.PartAnchor(1), {0.0f, 1.45f, 0.0f});
@@ -3441,7 +3449,7 @@ void Game::DrawLanternHalos(bool menu) {
     BeginBlendMode(BLEND_ADDITIVE);
     auto one = [&](Vector3 pos, Quaternion rot, Color team) {
         Vector3 spots[4];
-        LanternSpots(shipModel.MastTop(), spots);
+        LanternSpots(shipModel, spots);
         for (int i = 0; i < 4; ++i) {
             Vector3 w = HullToWorld(pos, rot, spots[i]);
             if (w.y < Ocean().Height(w.x, w.z)) continue;
