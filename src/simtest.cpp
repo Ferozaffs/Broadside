@@ -1,6 +1,7 @@
 // Headless physics test harness: `broadside --simtest`
 #include "sim.h"
 #include "maelstrom.h"
+#include "livery.h"
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
@@ -11,7 +12,71 @@ static float Heading(const Ship& s) {
 }
 static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateByQuaternion({0, 0, 1}, s.rot)); }
 
+// the Shipwright's livery on the wire: it must come back exactly, fit the limit, and refuse anything damaged
+static int LiveryTest() {
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
+        fails += ok ? 0 : 1;
+    };
+    Livery a;
+    check(a.IsDefault() && a.Encode().size() < 20, "an unpainted ship is a handful of bytes");
+    a.hull = {150, 30, 30, 255};
+    a.sail = {40, 40, 44, 255};
+    a.logoWhere = LOGO_MAIN;
+    for (int y = 40; y < 120; ++y)
+        for (int x = 60; x < 180; ++x) a.px[y * kSailW + x] = (x / 10 + y / 10) % 2 ? Color{200, 20, 20, 255} : Color{250, 250, 250, 255};
+    std::vector<uint8_t> e = a.Encode();
+    Livery b;
+    bool same = b.Decode(e.data(), e.size()) && b.hull.r == 150 && b.hull.a == 255 && b.trim.a == 0 && b.sail.b == 44 && b.logoWhere == LOGO_MAIN;
+    for (int k = 0; k < kSailW * kSailH && same; ++k)
+        same = a.px[k].a == b.px[k].a && (!a.px[k].a || (a.px[k].r == b.px[k].r && a.px[k].g == b.px[k].g && a.px[k].b == b.px[k].b));
+    printf("  (a checkered picture: %zu bytes)\n", e.size());
+    check(same, "a painted ship comes back exactly");
+    // noise: every pixel a different colour - too many colours and too big until it's simplified
+    Livery n;
+    uint32_t h = 12345;
+    for (Color& c : n.px) {
+        h = h * 1664525u + 1013904223u;
+        c = {(unsigned char)(h >> 8), (unsigned char)(h >> 16), (unsigned char)(h >> 24), 255};
+    }
+    check(n.Encode().empty(), "more than 255 colours won't encode as they are");
+    n.Simplify();
+    std::vector<uint8_t> ne = n.Encode();
+    printf("  (noise, simplified: %zu bytes)\n", ne.size());
+    check(!ne.empty() && (int)ne.size() <= kLiveryMaxBytes, "simplified, noise fits the limit");
+    // a photo: smooth shading with grain all over - it must keep its picture (coarser) rather than lose it
+    Livery ph;
+    for (int y = 0; y < kSailH; ++y)
+        for (int x = 0; x < kSailW; ++x) {
+            h = h * 1664525u + 1013904223u;
+            int g = (int)((h >> 24) % 24);
+            ph.px[y * kSailW + x] = {(unsigned char)std::min(255, x + g), (unsigned char)std::min(255, y + 60 + g), (unsigned char)std::min(255, 200 - y / 2 + g), 255};
+        }
+    ph.Simplify();
+    std::vector<uint8_t> pe = ph.Encode();
+    printf("  (a photo, simplified: %zu bytes)\n", pe.size());
+    check(ph.AnyPaint() && !pe.empty() && (int)pe.size() <= kLiveryMaxBytes, "a photo keeps its picture and fits the limit");
+    // damaged data: every truncation and a flipped byte in the header must be refused (or at least not crash)
+    int refused = 0;
+    for (size_t cut = 0; cut + 1 < e.size(); ++cut) {
+        Livery t;
+        refused += t.Decode(e.data(), cut) ? 0 : 1;
+    }
+    check(refused == (int)e.size() - 1, "every truncated livery is refused");
+    std::vector<uint8_t> bad = e;
+    bad[0] = 9;
+    Livery t;
+    check(!t.Decode(bad.data(), bad.size()), "an unknown version is refused");
+    bad = e;
+    bad[13] = 7;  // where the picture goes: out of range
+    check(!t.Decode(bad.data(), bad.size()), "a bad placement is refused");
+    printf("livery test: %d failure(s)\n", fails);
+    return fails ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_LIVERYTEST")) return LiveryTest();
     if (getenv("BS_ONLYDUELS")) goto duels;
     if (getenv("BS_HOOKTEST")) {  // a frigate hooks a ship of the line (and a cutter) 120 m off; both sit still
         for (int tc : {SC_LINE, SC_CUTTER}) {

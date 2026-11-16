@@ -4,6 +4,7 @@ in vec3 vertexNormal;
 in vec4 vertexColor;
 in vec4 vertexBoneIds;      // skinned meshes (the crew): four bones and weights per vertex
 in vec4 vertexBoneWeights;
+in vec2 vertexTexCoord2;    // sails: where on the painted canvas (x also says what kind of sail), y < 0: not painted
 uniform mat4 boneMatrices[128];
 uniform float uSkinned;     // 1 while drawing a skinned mesh
 uniform mat4 mvp;
@@ -17,6 +18,7 @@ out vec3 vNormal;
 out vec4 vColor;
 out vec2 vUV;
 out vec3 vObj;  // model-space position: stable noise coordinates for damage
+out vec2 vSail;
 
 void main() {
     vec3 p = vertexPosition;
@@ -49,5 +51,6 @@ void main() {
     vNormal = normalize((matNormal * vec4(n, 0.0)).xyz);
     vColor = col;
     vUV = vertexTexCoord;
+    vSail = vertexTexCoord2;
     gl_Position = mvp * vec4(p, 1.0);
 }

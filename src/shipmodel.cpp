@@ -1,4 +1,5 @@
 #include "shipmodel.h"
+#include "livery.h"
 #include "pak_key.h"
 #include "render.h"
 #include "rlgl.h"
@@ -7,7 +8,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <map>
 #include <queue>
+#include <unordered_map>
 #include <unordered_map>
 #include <cstring>
 #include <string>
@@ -446,6 +450,19 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
                 else if (k == "yscale") yscale = (float)atof(v.c_str());  // stretch a shallow hull to the physics hull's depth
                 else if (k == "flip") flip = atoi(v.c_str()) != 0;
                 else if (k == "raw") raw = atoi(v.c_str()) != 0;  // already in hull space (tools/blend_to_game_ship.py)
+                else if (k == "paint_hull" || k == "paint_trim" || k == "paint_key") {  // livery: which materials take the paint
+                    std::vector<std::string>& dst = k == "paint_hull" ? paintHull : k == "paint_trim" ? paintTrim : paintKey;
+                    dst.clear();
+                    size_t p = 0;
+                    while (p <= v.size()) {
+                        size_t c = v.find(',', p);
+                        std::string key = v.substr(p, c == std::string::npos ? std::string::npos : c - p);
+                        while (!key.empty() && (key.back() == '\r' || key.back() == ' ')) key.pop_back();
+                        if (!key.empty()) dst.push_back(TextToLower(key.c_str()));
+                        if (c == std::string::npos) break;
+                        p = c + 1;
+                    }
+                }
                 else if (k == "sails") {
                     sailKeys.clear();
                     size_t p = 0;
@@ -537,14 +554,188 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
     TraceLog(LOG_WARNING, "Ship model: %s  meshes %d  materials %d  triangles %ld  size %.1f x %.1f x %.1f -> scale %.3f", path.c_str(),
              ext.meshCount, ext.materialCount, tris, size.x, size.y, size.z, s);
     hasExt = true;
+    ClassifyPaint(ext, matNames, extIsSail, extPaint, extRef);
+    BuildSailCanvas(ext, extIsSail, extCanvas);
     {
         std::vector<bool> skip(ext.meshCount);
         for (int i = 0; i < ext.meshCount; ++i) skip[i] = extIsSail[i] || extIsRope[i];
         BuildDeckMap(ext, extFix, skip);
     }
     hasHi = LoadLod(dir, "ship_hi", lit, sailKeys, extHi, hiSail, hiRope);
+    if (hasHi) ClassifyPaint(extHi, lodNames, hiSail, hiPaint, hiRef);
     hasLo = LoadLod(dir, "ship_lo", lit, sailKeys, extLo, loSail, loRope);
+    if (hasLo) ClassifyPaint(extLo, lodNames, loSail, loPaint, loRef);
+    if (hasHi) BuildSailCanvas(extHi, hiSail, hiCanvas);
+    if (hasLo) BuildSailCanvas(extLo, loSail, loCanvas);
     return true;
+}
+
+// ---- livery --------------------------------------------------------------------------------------------------------
+// The paint keeps the grain of the wood and the seams of the canvas: the shader scales the new colour by how bright
+// the texture is there against how bright it is on the whole (ref). A texture shared by the whole hull (an atlas) is
+// painted by its colours instead: its blues are the hull's colour, its golds the trim's (the same test as ship.frag).
+static float Smooth(float a, float b, float x) { float t = Clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+static void KeyWeights(float r, float g, float b, float& blue, float& gold) {
+    float mx = fmaxf(r, fmaxf(g, b)), mn = fminf(r, fminf(g, b)), d = mx - mn;
+    float sat = mx > 1e-4f ? d / mx : 0.0f, h = 0.0f;
+    if (d > 1e-4f) {
+        if (mx == r) h = fmodf((g - b) / d + 6.0f, 6.0f);
+        else if (mx == g) h = (b - r) / d + 2.0f;
+        else h = (r - g) / d + 4.0f;
+    }
+    h *= 60.0f;
+    blue = Smooth(0.16f, 0.28f, sat) * Smooth(178.0f, 192.0f, h) * (1.0f - Smooth(248.0f, 262.0f, h)) * Smooth(0.06f, 0.12f, mx);
+    gold = Smooth(0.38f, 0.52f, sat) * Smooth(20.0f, 28.0f, h) * (1.0f - Smooth(52.0f, 60.0f, h)) * Smooth(0.42f, 0.55f, mx);
+}
+
+void ShipModel::ClassifyPaint(const Model& m, const std::vector<std::string>& names, const std::vector<bool>& sail,
+                              std::vector<uint8_t>& paint, std::vector<float>& ref) {
+    paint.assign(m.meshCount, 0);
+    ref.assign(m.meshCount, 0.5f);
+    struct Lum { float all, blue, gold; };
+    static std::map<std::pair<unsigned, uint32_t>, Lum> cache;  // (texture, colour) -> brightness
+    auto measure = [&](const Material& mt) {
+        const MaterialMap& mm = mt.maps[MATERIAL_MAP_DIFFUSE];
+        Color c = mm.color;
+        auto key = std::make_pair(mm.texture.id, (uint32_t)c.r | (uint32_t)c.g << 8 | (uint32_t)c.b << 16);
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+        Lum L{0.5f, 0.3f, 0.6f};
+        if (mm.texture.id > 0 && mm.texture.width > 1) {
+            Image img = LoadImageFromTexture(mm.texture);
+            ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+            ImageResize(&img, 256, 256);
+            const unsigned char* px = (const unsigned char*)img.data;
+            double sa = 0, sb = 0, wb = 0, sg = 0, wg = 0;
+            for (int k = 0; k < 256 * 256; ++k) {
+                float r = px[k * 4] / 255.0f * c.r / 255.0f, g = px[k * 4 + 1] / 255.0f * c.g / 255.0f, b = px[k * 4 + 2] / 255.0f * c.b / 255.0f;
+                float l = 0.299f * r + 0.587f * g + 0.114f * b, bw, gw;
+                KeyWeights(px[k * 4] / 255.0f, px[k * 4 + 1] / 255.0f, px[k * 4 + 2] / 255.0f, bw, gw);
+                sa += l; sb += l * bw; wb += bw; sg += l * gw; wg += gw;
+            }
+            UnloadImage(img);
+            L.all = (float)(sa / 65536.0);
+            if (wb > 50) L.blue = (float)(sb / wb);
+            if (wg > 50) L.gold = (float)(sg / wg);
+        } else {
+            L.all = (0.299f * c.r + 0.587f * c.g + 0.114f * c.b) / 255.0f;
+        }
+        L.all = fmaxf(L.all, 0.03f);
+        cache[key] = L;
+        return L;
+    };
+    auto any = [](const std::string& n, const std::vector<std::string>& keys, bool exact) {
+        for (const auto& k : keys)
+            if (exact ? n == k : n.rfind(k, 0) == 0) return true;
+        return false;
+    };
+    for (int i = 0; i < m.meshCount; ++i) {
+        int mi = m.meshMaterial[i] - 1;
+        std::string n = mi >= 0 && mi < (int)names.size() ? TextToLower(names[mi].c_str()) : "";
+        const Material& mt = m.materials[m.meshMaterial[i]];
+        if (sail[i]) paint[i] = 4;
+        else if (any(n, paintHull, false)) paint[i] = 1;
+        else if (any(n, paintTrim, false)) paint[i] = 2;
+        else if (any(n, paintKey, true)) paint[i] = 3;
+        if (!paint[i]) continue;
+        Lum L = measure(mt);
+        ref[i] = L.all;
+        if (paint[i] == 3) { keyBlue = fmaxf(L.blue, 0.03f); keyGold = fmaxf(L.gold, 0.03f); }
+    }
+}
+
+// Each piece of sail cloth gets coordinates on the painted canvas: its outline seen from astern (a square sail) or
+// from starboard (a fore-and-aft sail), stretched to fill the canvas. texcoords2.x carries the kind of sail too:
+// u + 0 square, u + 2 fore-and-aft, u + 4 the main course (the biggest square sail); y < 0: too small to paint.
+void ShipModel::BuildSailCanvas(Model& M, const std::vector<bool>& sail, std::vector<bool>& canvas) {
+    canvas.assign(M.meshCount, false);
+    struct Piece { int mesh; std::vector<int> verts; BoundingBox bb; float area; bool square; };
+    std::vector<Piece> pieces;
+    for (int mi = 0; mi < M.meshCount; ++mi) {
+        if (!sail[mi]) continue;
+        Mesh& m = M.meshes[mi];
+        const int vc = m.vertexCount;
+        auto idx = [&](int t, int k) { return m.indices ? (int)m.indices[t * 3 + k] : t * 3 + k; };
+        // weld by position, then join the triangles into pieces of cloth
+        std::unordered_map<uint64_t, int> welded;
+        std::vector<int> wid(vc);
+        for (int v = 0; v < vc; ++v) {
+            Vector3 p = {m.vertices[v * 3], m.vertices[v * 3 + 1], m.vertices[v * 3 + 2]};
+            uint64_t key = ((uint64_t)(int64_t)lroundf(p.x * 200) & 0x1FFFFF) | (((uint64_t)(int64_t)lroundf(p.y * 200) & 0x1FFFFF) << 21) |
+                           (((uint64_t)(int64_t)lroundf(p.z * 200) & 0x1FFFFF) << 42);
+            wid[v] = welded.emplace(key, (int)welded.size()).first->second;
+        }
+        std::vector<int> parent(welded.size());
+        for (size_t k = 0; k < parent.size(); ++k) parent[k] = (int)k;
+        std::function<int(int)> find = [&](int a) { while (parent[a] != a) a = parent[a] = parent[parent[a]]; return a; };
+        for (int t = 0; t < m.triangleCount; ++t)
+            for (int k = 1; k < 3; ++k) {
+                int a = find(wid[idx(t, 0)]), b = find(wid[idx(t, k)]);
+                if (a != b) parent[a] = b;
+            }
+        std::unordered_map<int, int> pieceOf;
+        for (int v = 0; v < vc; ++v) {
+            int root = find(wid[v]);
+            auto it = pieceOf.find(root);
+            if (it == pieceOf.end()) {
+                it = pieceOf.emplace(root, (int)pieces.size()).first;
+                pieces.push_back({mi, {}, {{1e9f, 1e9f, 1e9f}, {-1e9f, -1e9f, -1e9f}}, 0.0f, true});
+            }
+            Piece& pc = pieces[it->second];
+            pc.verts.push_back(v);
+            Vector3 p = Vector3Transform({m.vertices[v * 3], m.vertices[v * 3 + 1], m.vertices[v * 3 + 2]}, extFix);
+            pc.bb.min = Vector3Min(pc.bb.min, p);
+            pc.bb.max = Vector3Max(pc.bb.max, p);
+        }
+        for (int t = 0; t < m.triangleCount; ++t) {
+            Vector3 a = Vector3Transform({m.vertices[idx(t, 0) * 3], m.vertices[idx(t, 0) * 3 + 1], m.vertices[idx(t, 0) * 3 + 2]}, extFix);
+            Vector3 b = Vector3Transform({m.vertices[idx(t, 1) * 3], m.vertices[idx(t, 1) * 3 + 1], m.vertices[idx(t, 1) * 3 + 2]}, extFix);
+            Vector3 c = Vector3Transform({m.vertices[idx(t, 2) * 3], m.vertices[idx(t, 2) * 3 + 1], m.vertices[idx(t, 2) * 3 + 2]}, extFix);
+            pieces[pieceOf[find(wid[idx(t, 0)])]].area += 0.5f * Vector3Length(Vector3CrossProduct(Vector3Subtract(b, a), Vector3Subtract(c, a)));
+        }
+    }
+    // (a two-sided sail is two pieces in the same place: both get painted, and the bigger of them is "the main course")
+    int main = -1;
+    for (int k = 0; k < (int)pieces.size(); ++k) {
+        Piece& pc = pieces[k];
+        Vector3 sz = Vector3Subtract(pc.bb.max, pc.bb.min);
+        pc.square = sz.x >= sz.z;
+        if (pc.square && pc.area > 4.0f && (main < 0 || pc.area > pieces[main].area * 1.02f)) main = k;
+    }
+    for (int k = 0; k < (int)pieces.size(); ++k) {
+        Piece& pc = pieces[k];
+        Mesh& m = M.meshes[pc.mesh];
+        if (!m.texcoords2) {
+            m.texcoords2 = (float*)MemAlloc((unsigned)m.vertexCount * 2 * sizeof(float));
+            for (int v = 0; v < m.vertexCount; ++v) { m.texcoords2[v * 2] = 0.0f; m.texcoords2[v * 2 + 1] = -10.0f; }
+        }
+        Vector3 sz = Vector3Subtract(pc.bb.max, pc.bb.min);
+        bool paintable = pc.area > 1.5f && sz.y > 0.8f;
+        float kind = !pc.square ? 2.0f : (main >= 0 && pc.area >= pieces[main].area * 0.98f && fabsf(pc.bb.min.y - pieces[main].bb.min.y) < 0.5f) ? 4.0f : 0.0f;
+        for (int v : pc.verts) {
+            Vector3 p = Vector3Transform({m.vertices[v * 3], m.vertices[v * 3 + 1], m.vertices[v * 3 + 2]}, extFix);
+            float u = pc.square ? (pc.bb.max.x - p.x) / fmaxf(sz.x, 1e-3f) : (p.z - pc.bb.min.z) / fmaxf(sz.z, 1e-3f);
+            float w = (pc.bb.max.y - p.y) / fmaxf(sz.y, 1e-3f);
+            m.texcoords2[v * 2] = Clamp(u, 0.0f, 1.0f) + kind;
+            m.texcoords2[v * 2 + 1] = paintable ? Clamp(w, 0.0f, 1.0f) : -10.0f;
+        }
+        canvas[pc.mesh] = true;
+    }
+    // the meshes are already on the GPU: attach the coordinates to their VAOs (attribute 5)
+    for (int mi = 0; mi < M.meshCount; ++mi) {
+        if (!canvas[mi]) continue;
+        Mesh& m = M.meshes[mi];
+        rlEnableVertexArray(m.vaoId);
+        if (m.vboId[5] == 0) m.vboId[5] = rlLoadVertexBuffer(m.texcoords2, m.vertexCount * 2 * (int)sizeof(float), false);
+        else rlUpdateVertexBuffer(m.vboId[5], m.texcoords2, m.vertexCount * 2 * (int)sizeof(float), 0);
+        rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2, 2, RL_FLOAT, false, 0, 0);
+        rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD2);
+        rlDisableVertexArray();
+    }
+    int nSq = 0, nFa = 0;
+    for (auto& pc : pieces)
+        if (pc.area > 1.5f) { nSq += pc.square; nFa += !pc.square; }
+    TraceLog(LOG_INFO, "Ship model: %d square and %d fore-and-aft sails to paint", nSq, nFa);
 }
 
 // Crew mode: rasterise the model into a walkable deck map. Upward faces below the tops give the floor (the highest
@@ -712,6 +903,7 @@ bool ShipModel::LoadLod(const std::string& dir, const char* base, Shader lit, co
     }
     Model m = LoadModel(path.c_str());
     std::vector<std::string> names = ReadGltfMaterialNames(path);
+    lodNames = names;
     if (isPak) {
         SetLoadFileDataCallback(nullptr);
         g_pakGlb.clear();
@@ -766,7 +958,7 @@ static Matrix TRS(Vector3 t, Matrix r, Vector3 s) {
 }
 
 void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, float flash, float hpFrac, bool lanterns,
-                     float camDist, float phase) {
+                     float camDist, float phase, const LiveryGpu* liv, bool teamSails) {
     r.SetLitParams(flash, 0.0f);
     Color tint = ColorBrightness(WHITE, -0.45f * (1.0f - hpFrac));
     auto T = [&](Color c) { return ColorTint(c, tint); };
@@ -781,8 +973,13 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
         Model* M = &ext;
         const std::vector<bool>* isSail = &extIsSail;
         const std::vector<bool>* isRope = &extIsRope;
-        if (lod == 0 && hasHi) { M = &extHi; isSail = &hiSail; isRope = &hiRope; }
-        if (lod == 2 && hasLo) { M = &extLo; isSail = &loSail; isRope = &loRope; }
+        const std::vector<uint8_t>* paint = &extPaint;
+        const std::vector<float>* ref = &extRef;
+        const std::vector<bool>* canvas = &extCanvas;
+        if (lod == 0 && hasHi) { M = &extHi; isSail = &hiSail; isRope = &hiRope; paint = &hiPaint; ref = &hiRef; canvas = &hiCanvas; }
+        if (lod == 2 && hasLo) { M = &extLo; isSail = &loSail; isRope = &loRope; paint = &loPaint; ref = &loRef; canvas = &loCanvas; }
+        const bool painted = liv && liv->on && (int)paint->size() == M->meshCount;
+        if (painted) r.SetLivery(liv);
         Matrix m = MatrixMultiply(extFix, model);
         rlDisableBackfaceCulling();  // sails and thin rigging are single-sided in most models
         float flutter = (0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f)) / fmaxf(0.01f, extFit);  // (metres, in the model's units)
@@ -790,7 +987,8 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
             if ((*isRope)[i] && camDist > 280.0f) continue;  // sub-pixel rigging only shimmers
             Material& em = M->materials[M->meshMaterial[i]];
             Color keep = em.maps[MATERIAL_MAP_DIFFUSE].color;
-            Color c = (*isSail)[i] ? ColorTint(keep, ColorLerp(WHITE, team, 0.55f)) : ColorTint(keep, tint);
+            Color c = (*isSail)[i] ? (painted && !teamSails ? keep : ColorTint(keep, ColorLerp(WHITE, team, 0.55f))) : ColorTint(keep, tint);
+            if (painted) r.SetPaintMesh((*paint)[i], (*ref)[i], keyBlue, keyGold, (*canvas)[i]);
             c.a = (unsigned char)(c.a * alpha);
             em.maps[MATERIAL_MAP_DIFFUSE].color = c;
             if ((*isSail)[i]) r.SetSail(flutter, phase);
@@ -799,6 +997,7 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
             em.maps[MATERIAL_MAP_DIFFUSE].color = keep;
         }
         rlEnableBackfaceCulling();
+        if (painted) r.SetLivery(nullptr);
         Part(cube, TRS({0, extTop + 0.6f, 0.0f}, I, {0.15f, 1.2f, 3.2f}), model, team);  // team pennant
         (void)sail;
         (void)lanterns;

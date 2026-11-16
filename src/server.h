@@ -27,6 +27,7 @@ private:
     World world;
     int peerShip[64];
     int peerCrew[64];
+    std::vector<uint8_t> peerLivery[64];  // each captain's paint (Livery::Encode), passed on with their ship's info
     void SendCrewInfo(int crewId, int toPeer);
     bool announced[MAX_SHIPS] = {};
 };

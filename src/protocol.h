@@ -6,16 +6,16 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 17;  // 15: race mode, 16: the strait, 17: more courses
+constexpr uint16_t PROTOCOL_VERSION = 18;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
 enum MsgType : uint8_t {
-    MSG_HELLO = 1,        // C->S  version, name
+    MSG_HELLO = 1,        // C->S  version, name, class, role, livery (u16 length + Livery::Encode)
     MSG_INPUT = 2,        // C->S  input (unreliable)
     MSG_WELCOME = 3,      // S->C  your id, ocean seed, time of day, weather, mode, fleets, server time
     MSG_SNAPSHOT = 4,     // S->C  world state (unreliable)
-    MSG_PLAYER_INFO = 5,  // S->C  id, isBot, name, leader
+    MSG_PLAYER_INFO = 5,  // S->C  id, isBot, name, leader, livery (u16 length, 0: none)
     MSG_PLAYER_LEFT = 6,  // S->C  id
     MSG_EVENT = 7,        // S->C  game event (reliable)
     MSG_REJECT = 8,       // S->C  reason string
@@ -48,6 +48,14 @@ struct ByteWriter {
     }
 };
 
+// a length-prefixed blob (a livery)
+inline void PutBlob(std::vector<uint8_t>& buf, const std::vector<uint8_t>& b) {
+    uint16_t n = (uint16_t)std::min<size_t>(b.size(), 65535);
+    buf.push_back((uint8_t)(n & 255));
+    buf.push_back((uint8_t)(n >> 8));
+    buf.insert(buf.end(), b.begin(), b.begin() + n);
+}
+
 struct ByteReader {
     const uint8_t* p;
     size_t n, pos = 0;
@@ -68,6 +76,13 @@ struct ByteReader {
         return QuaternionNormalize(q);
     }
     float GetU8f() { return Get<uint8_t>() / 255.0f; }
+    std::vector<uint8_t> GetBlob() {
+        uint16_t len = Get<uint16_t>();
+        if (!ok || pos + len > n) { ok = false; return {}; }
+        std::vector<uint8_t> b(p + pos, p + pos + len);
+        pos += len;
+        return b;
+    }
     std::string GetString() {
         uint8_t len = Get<uint8_t>();
         std::string s;

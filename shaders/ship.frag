@@ -5,6 +5,7 @@ in vec3 vNormal;
 in vec4 vColor;
 in vec2 vUV;
 in vec3 vObj;
+in vec2 vSail;
 uniform sampler2D texture0;
 uniform float uSailWave;      // > 0 while drawing sails
 uniform float uDamage;        // 0 pristine .. 1 sinking
@@ -22,7 +23,28 @@ uniform float uProp;          // > 0: weathered scenery (harbours)
 uniform vec4 uGhost;          // w > 0: our own ship seen through the spyglass on deck: eye (xyz) and how see-through (w)...
 uniform vec4 uGhostDir;       // ...what's in a cone round the line of sight (xyz, w = cos of the cone's half angle) goes faint
 uniform float uGhostPass;     // 0: the solid parts only, 1: the faint parts only (drawn after, without depth)
+// the captain's livery (the Shipwright): colours in sRGB, a = 1 where they're painted
+uniform vec4 uPaintHull, uPaintTrim, uPaintSail;
+uniform vec4 uPaint;          // x: what this mesh is (0 nothing, 1 hull, 2 trim, 3 hull and trim by colour, 4 sail cloth;
+                              // + 8 when it carries canvas coordinates), y: its usual brightness, z / w: the keyed blues' and golds'
+uniform float uLogoMode;      // the picture on the sails: 0 none, 1 the main course, 2 every square sail, 3 every sail
+uniform sampler2D uLogo;
 out vec4 fragColor;
+
+// a texture's blues (the hull's colour) and golds (the trim) - the same test as ShipModel's KeyWeights
+vec2 KeyWeights(vec3 c) {
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), d = mx - mn;
+    float sat = mx > 1e-4 ? d / mx : 0.0, h = 0.0;
+    if (d > 1e-4) {
+        if (mx == c.r) h = mod((c.g - c.b) / d + 6.0, 6.0);
+        else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+        else h = (c.r - c.g) / d + 4.0;
+    }
+    h *= 60.0;
+    float blue = smoothstep(0.16, 0.28, sat) * smoothstep(178.0, 192.0, h) * (1.0 - smoothstep(248.0, 262.0, h)) * smoothstep(0.06, 0.12, mx);
+    float gold = smoothstep(0.38, 0.52, sat) * smoothstep(20.0, 28.0, h) * (1.0 - smoothstep(52.0, 60.0, h)) * smoothstep(0.42, 0.55, mx);
+    return vec2(blue, gold);
+}
 
 float H3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float N3(vec3 x) {
@@ -121,6 +143,34 @@ void main() {
         if (cd < 0.8 && Bayer4(gl_FragCoord.xy) > clamp((cd - 0.3) / 0.5, 0.0, 1.0)) discard;
     }
     vec3 base = pow(colDiffuse.rgb * vColor.rgb * tex.rgb, vec3(2.2));
+    if (uPaint.x > 0.5) {
+        // the livery: the new colour keeps the grain and seams (scaled by how bright the texture is here)
+        vec3 s = colDiffuse.rgb * vColor.rgb * tex.rgb;
+        float lum = dot(s, vec3(0.299, 0.587, 0.114));
+        float kind = mod(uPaint.x, 8.0);
+        vec3 c = s;
+        if (kind < 1.5 && uPaintHull.a > 0.5) c = uPaintHull.rgb * clamp(lum / uPaint.y, 0.3, 1.6);
+        else if (kind > 1.5 && kind < 2.5 && uPaintTrim.a > 0.5) c = uPaintTrim.rgb * clamp(lum / uPaint.y, 0.3, 1.6);
+        else if (kind > 2.5 && kind < 3.5) {
+            vec2 w = KeyWeights(tex.rgb);
+            if (uPaintHull.a > 0.5) c = mix(c, uPaintHull.rgb * clamp(lum / uPaint.z, 0.3, 1.6), w.x);
+            if (uPaintTrim.a > 0.5) c = mix(c, uPaintTrim.rgb * clamp(lum / uPaint.w, 0.3, 1.6), w.y);
+        } else if (kind > 3.5 && uPaintSail.a > 0.5) c = uPaintSail.rgb * clamp(lum / uPaint.y, 0.3, 1.25);
+        base = pow(min(c, vec3(1.0)), vec3(2.2));
+        // the picture on the sails
+        if (uLogoMode > 0.5 && uPaint.x > 7.5 && vSail.y >= 0.0) {
+            float k = floor(vSail.x / 2.0);  // 0 square, 1 fore-and-aft, 2 the main course
+            float u = vSail.x - 2.0 * k;
+            bool show = uLogoMode > 2.5 || (uLogoMode > 1.5 && k != 1.0) || k == 2.0;
+            if (show) {
+                vec4 L = texture(uLogo, vec2(u, vSail.y));
+                if (L.a > 0.01) {
+                    vec3 lc = pow(L.rgb / L.a, vec3(2.2)) * clamp(lum / uPaint.y, 0.35, 1.1);
+                    base = mix(base, lc, smoothstep(0.3, 0.6, L.a));
+                }
+            }
+        }
+    }
 
     // ---- battle damage ----
     float dn = F3(vObj * 0.35);

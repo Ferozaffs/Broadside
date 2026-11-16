@@ -1,5 +1,6 @@
 #include "render.h"
 #include "gl43.h"
+#include "livery.h"
 #include "rlgl.h"
 #include <cmath>
 #include <cstdint>
@@ -85,6 +86,12 @@ void Renderer::Init() {
     locGhostPass = GetShaderLocation(litShader, "uGhostPass");
     locShadowPass = GetShaderLocation(litShader, "uShadowPass");
     locProp = GetShaderLocation(litShader, "uProp");
+    locPaintHull = GetShaderLocation(litShader, "uPaintHull");
+    locPaintTrim = GetShaderLocation(litShader, "uPaintTrim");
+    locPaintSail = GetShaderLocation(litShader, "uPaintSail");
+    locPaint = GetShaderLocation(litShader, "uPaint");
+    locLogoMode = GetShaderLocation(litShader, "uLogoMode");
+    locLogo = GetShaderLocation(litShader, "uLogo");
 
     // four independent tiling fractal noises, one per channel
     {
@@ -597,6 +604,32 @@ void Renderer::SetGhost(Vector3 eye, Vector3 dir, float cosCone, float amount, i
     SetShaderValue(litShader, locGhostDir, d, SHADER_UNIFORM_VEC4);
 }
 void Renderer::SetProp(float amount) { SetShaderValue(litShader, locProp, &amount, SHADER_UNIFORM_FLOAT); }
+
+void Renderer::SetLivery(const LiveryGpu* liv) {
+    auto col = [&](int loc, Color c) {
+        float v[4] = {c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, liv && c.a ? 1.0f : 0.0f};
+        SetShaderValue(litShader, loc, v, SHADER_UNIFORM_VEC4);
+    };
+    Color none{0, 0, 0, 0};
+    col(locPaintHull, liv ? liv->hull : none);
+    col(locPaintTrim, liv ? liv->trim : none);
+    col(locPaintSail, liv ? liv->sail : none);
+    logoMode = liv && liv->logo.id && liv->logoWhere ? (float)liv->logoWhere : 0.0f;
+    SetShaderValue(litShader, locLogoMode, &logoMode, SHADER_UNIFORM_FLOAT);
+    if (logoMode > 0.0f) {
+        int unit = 13;
+        SetShaderValue(litShader, locLogo, &unit, SHADER_UNIFORM_INT);
+        ActiveTexture(TEXTURE0 + 13);
+        BindTexture(TEXTURE_2D, liv->logo.id);
+        ActiveTexture(TEXTURE0);
+    }
+    if (!liv) SetPaintMesh(0, 0.5f, 0.3f, 0.6f, false);
+}
+
+void Renderer::SetPaintMesh(int kind, float ref, float keyBlue, float keyGold, bool canvas) {
+    float p[4] = {(float)kind + (canvas ? 8.0f : 0.0f), ref, keyBlue, keyGold};
+    SetShaderValue(litShader, locPaint, p, SHADER_UNIFORM_VEC4);
+}
 
 void Renderer::SetDamage(float damage, const Vector4* hits, int count) {
     count = count < 0 ? 0 : (count > 12 ? 12 : count);

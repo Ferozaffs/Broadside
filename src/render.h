@@ -7,6 +7,8 @@
 #include "raymath.h"
 #include <vector>
 
+struct LiveryGpu;
+
 struct RenderView {
     Vector3 pos, target;
     Vector3 up{0, 1, 0};  // tilted a little on deck, so you feel the ship roll
@@ -62,6 +64,13 @@ public:
     void SetGhost(Vector3 eye, Vector3 dir, float cosCone, float amount, int pass = 0);
     void SetProp(float amount);   // weathered scenery props (grain, grime line at the sea)
     int locProp = -1;
+    // a captain's paint for the ship about to be drawn (nullptr: none, after it), then per mesh what it is to the paint
+    // (ShipModel: 0 nothing, 1 hull, 2 trim, 3 both by colour, 4 sail cloth), how bright it usually is, and whether it
+    // carries canvas coordinates for the picture on the sails
+    void SetLivery(const LiveryGpu* liv);
+    void SetPaintMesh(int kind, float ref, float keyBlue, float keyGold, bool canvas);
+    int locPaintHull = -1, locPaintTrim = -1, locPaintSail = -1, locPaint = -1, locLogoMode = -1, locLogo = -1;
+    float logoMode = 0.0f;
     int locShore = -1, locShadowPass = -1, locGhost = -1, locGhostDir = -1, locGhostPass = -1;
     int locDamage = -1, locHits = -1, locHitCount = -1, locLights = -1, locLightCount = -1;
     int msaaSamples = 4;

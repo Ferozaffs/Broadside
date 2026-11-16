@@ -12,6 +12,8 @@
 #include "rlgl.h"
 #include "server.h"
 #include "shipmodel.h"
+#include "shipyard.h"
+#include "livery.h"
 #include "crewmodel.h"
 #include "ui.h"
 #include "fx.h"
@@ -162,7 +164,7 @@ static const char* Ordinal(int n) {
     return n >= 1 && n <= 3 ? k[n] : TextFormat("%dTH", n);
 }
 
-enum class Mode { Menu, Connecting, Playing };
+enum class Mode { Menu, Connecting, Playing, Shipyard };
 
 
 struct FeedLine {  // "<a><mid><b>" with a/b in their own colours (usually team colours)
@@ -240,6 +242,22 @@ public:
     bool helloSent = false;
     World menuWorld;
     double menuAcc = 0;
+    // the Shipwright: our own paint, everyone else's (by ship: escorts wear their leader's), and the editor
+    Livery myLivery;
+    LiveryGpu myLiveryGpu;
+    LiveryGpu shipLivery[MAX_SHIPS];
+    Shipyard yard;
+    Vector3 yardPos{};
+    const LiveryGpu* LiveryFor(int id) const {
+        if (id < 0 || id >= MAX_SHIPS) return nullptr;
+        int o = view[id].s.leader >= 0 && view[id].s.leader < MAX_SHIPS ? view[id].s.leader : id;
+        if (shipLivery[o].on) return &shipLivery[o];
+        if (getenv("BS_LIVERYALL") && myLiveryGpu.on) return &myLiveryGpu;  // (testing: everyone in our paint)
+        return nullptr;
+    }
+    void OpenShipyard();
+    void YardCamera();
+    void DrawYardShip();
 
     // session
     int myId = -1;
@@ -550,6 +568,10 @@ private:
 void Game::Init() {
     nameBuf = opt.name;
     addrBuf = opt.address;
+    {
+        std::string lp = getenv("BS_LIVERY") ? getenv("BS_LIVERY") : LiveryPath();
+        if (myLivery.Load(lp)) TraceLog(LOG_WARNING, "Livery: %s", lp.c_str());
+    }
     botCount = opt.bots > 0 ? opt.bots : 2;
     ui::Init();
     renderer.Init();
@@ -569,6 +591,7 @@ void Game::Init() {
             if (classModel[c].LoadExternal(d.c_str(), renderer.litShader)) TraceLog(LOG_WARNING, "Ship model: the %s sails as %s", ClassOf(c).name, d.c_str());
         }
     }
+    if (!myLivery.IsDefault()) myLiveryGpu.Set(myLivery);
     soundOn = sfx::Init();
     if (soundOn) {
         sfx::SetVolume(getenv("BS_VOLUME") ? (float)atof(getenv("BS_VOLUME")) : 0.8f);
@@ -700,6 +723,7 @@ void Game::StartSession(bool host, int bots, bool open) {
 }
 
 void Game::Disconnect(const std::string& why) {
+    for (LiveryGpu& l : shipLivery) l.Clear();
     net.Disconnect();
     server.Stop();
     if (portOpened) { upnp::Stop(); portOpened = false; }
@@ -728,6 +752,10 @@ void Game::PollNet() {
             w.PutString(nameBuf.empty() ? "Captain" : nameBuf);
             w.Put((uint8_t)classSel);
             w.Put((uint8_t)roleSel);
+            std::vector<uint8_t> liv;
+            if (!myLivery.IsDefault()) liv = myLivery.Encode();
+            if (liv.size() > (size_t)kLiveryMaxBytes) liv.clear();
+            PutBlob(w.buf, liv);
             net.Send(w.buf.data(), w.buf.size(), true);
             helloSent = true;
         } else if (e.type == NetEvent::Disconnect) {
@@ -823,7 +851,14 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             bool bot = r.Get<uint8_t>() != 0;
             std::string name = r.GetString();
             int8_t leader = r.Get<int8_t>();
+            std::vector<uint8_t> liv = r.GetBlob();
             if (id < MAX_SHIPS) {
+                Livery l;
+                if (!liv.empty() && l.Decode(liv.data(), liv.size())) {
+                    shipLivery[id].Set(l);
+                    TraceLog(LOG_WARNING, "Livery: ship %d (%s) sails in her own paint (%d bytes)", id, name.c_str(), (int)liv.size());
+                }
+                else shipLivery[id].Clear();
                 bool wasPresent = info[id].present;
                 info[id] = {name, bot, true, leader};
                 view[id].s.leader = leader;
@@ -837,6 +872,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             if (id < MAX_SHIPS) {
                 if (info[id].leader < 0) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
                 info[id].present = false;
+                shipLivery[id].Clear();
             }
             break;
         }
@@ -2769,6 +2805,9 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
         }
     renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
     ShipModel& model = ModelOf(cls);
+    // the captain's paint; in teams (and for the pirate) the sails still show whose side she's on
+    const LiveryGpu* liv = id == -2 ? &yard.gpu : LiveryFor(id);
+    bool teamSails = id >= 0 && (curMode == MODE_TEAMS || (curMode == MODE_PIRATE && ns && IsCarrier(ns->leader >= 0 ? ns->leader : id)));
     if (shadowPass) {
         model.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase);
         renderer.SetDamage(0.0f, nullptr, 0);
@@ -2797,7 +2836,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
         }
     }
     renderer.SetLights(lights, nl);
-    model.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD / scale, phase);
+    model.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD / scale, phase, liv, teamSails);
     if (camD < 260.0f) model.DrawLanterns(renderer, m, spots, 4, alive ? lanternBoost : 0.0f);
     renderer.SetDamage(0.0f, nullptr, 0);
     renderer.SetLights(nullptr, 0);
@@ -2915,7 +2954,7 @@ void Game::UpdateWake(int id, Vector3 pos, Quaternion rot, Vector3 vel, bool wat
 
 void Game::DrawWakeMap(bool menu) {
     double now = GetTime();
-    if (menu)  // the menu's backdrop battle gets wakes too
+    if (menu && mode != Mode::Shipyard)  // the menu's backdrop battle gets wakes too
         for (const Ship& s : menuWorld.ships)
             if (s.active && s.id < MAX_SHIPS) UpdateWake(s.id, s.pos, s.rot, s.vel, s.airTime <= 0.0f);
     renderer.BeginWake();
@@ -3049,7 +3088,9 @@ void Game::DrawWakeMap(bool menu) {
 // All ships (and cannonballs). shadow = the shadow pass: only what's within `radius` of `centre`.
 void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
     auto inShadowBox = [&](Vector3 p) { return Vector2Distance({p.x, p.z}, {centre.x, centre.z}) < radius; };
-    if (menu) {
+    if (menu && mode == Mode::Shipyard) {
+        DrawYardShip();
+    } else if (menu) {
         for (const Ship& s : menuWorld.ships)
             if (s.active && (!shadow || inShadowBox(s.pos)))
                 DrawShip(s.cls, -1, ShipModelMatrix(s.pos, s.rot, ClassOf(s.cls).scale), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp,
@@ -3413,7 +3454,7 @@ void Game::DrawLanternHalos(bool menu) {
     };
     if (menu) {
         for (const Ship& s : menuWorld.ships)
-            if (s.active && s.alive) one(s.pos, s.rot, kPalette[s.id % 8]);
+            if (s.active && s.alive && mode != Mode::Shipyard) one(s.pos, s.rot, kPalette[s.id % 8]);
     } else {
         for (int id = 0; id < MAX_SHIPS; ++id)
             if (view[id].present && (view[id].s.flags & SF_ALIVE)) one(view[id].s.pos, view[id].s.rot, ColorOf(id));
@@ -4151,6 +4192,7 @@ void Game::DrawMenu() {
         Segmented({x + mw + 8, y + 18, 128, 40}, kViews, 2, viewSel);
     }
     y += row;
+    if (Button({x, y, mw, 40}, "Shipwright  \xC2\xB7  paint your ship")) OpenShipyard();
     if (Button({x + mw + 8, y, 128, 40}, "Quit")) quit = true;
 
     {
@@ -4971,7 +5013,7 @@ void Game::Frame() {
         }
     }
     BeginDrawing();
-    if (mode == Mode::Menu || mode == Mode::Connecting) {
+    if (mode == Mode::Menu || mode == Mode::Connecting || mode == Mode::Shipyard) {
         if (mode == Mode::Connecting) {
             PollNet();
             if (mode == Mode::Connecting && GetTime() - connectStart > 6.0) Disconnect("Connection timed out");
@@ -4984,6 +5026,11 @@ void Game::Frame() {
             for (int i = 0; i < 3; ++i) menuWorld.AddShip("bot", true);
             for (int i = 0; i < 600; ++i) menuWorld.Step();
             menuWorld.events.clear();
+        }
+        static bool yardAuto = getenv("BS_SHIPYARD") != nullptr;  // (testing: straight into the Shipwright)
+        if (yardAuto && mode == Mode::Menu) {
+            yardAuto = false;
+            OpenShipyard();
         }
         menuAcc += dt;
         while (menuAcc >= SIM_DT) {
@@ -5002,13 +5049,27 @@ void Game::Frame() {
             rv.target = Vector3Add({0.0f, -45.0f, 0.0f}, Vector3Scale(right, -150.0f));
         }
         rv.fovy = 55;
-        if (mode != Mode::Menu && mode != Mode::Connecting) { EndDrawing(); return; }
+        if (mode == Mode::Shipyard) YardCamera();
+        if (mode != Mode::Menu && mode != Mode::Connecting && mode != Mode::Shipyard) { EndDrawing(); return; }
         SetOcean(7, weatherSel, arenaSel);
         UpdateAtmosphere(dt, true);
         UpdateSound(dt, true);
         RenderWorld(dt, true);
         DrawLanternHalos(true);
-        DrawMenu();
+        if (mode == Mode::Shipyard) {
+            int r = yard.Draw((float)GetScreenWidth(), (float)GetScreenHeight());
+            if (r == 1) {
+                myLivery = yard.work;
+                if (!myLivery.Save(LiveryPath())) status = "Couldn't save the paint (livery.dat)";
+                myLiveryGpu.Set(myLivery);
+            }
+            if (r != 0) {
+                yard.Close();
+                mode = Mode::Menu;
+            }
+        } else {
+            DrawMenu();
+        }
     } else {
         // (BS_PERFLOG: where a slow frame went)
         static double mark[8];
@@ -5115,6 +5176,63 @@ void Game::Frame() {
                    (swapFrom - frameStart) * 1000.0);
         frameStart = now;
     }
+}
+
+// ============================================================================
+// The Shipwright: the ship floats on the menu's sea, alone, the camera turning round her
+// ============================================================================
+void Game::OpenShipyard() {
+    yard.Open(myLivery, classSel >= 0 && classSel < SC_PLAYABLE ? classSel : SC_FRIGATE);
+    yardPos = menuWorld.ships[0].pos;  // (open water: a ship was just there)
+    if (arenaSel == ARENA_MAELSTROM) yardPos = {0.0f, 0.0f, -520.0f};
+    yardPos.y = 0.0f;
+    mode = Mode::Shipyard;
+    if (getenv("BS_SHIPYARD") && atoi(getenv("BS_SHIPYARD")) >= 2) yard.painting = true;  // (testing)
+    if (getenv("BS_YARDCAM")) sscanf(getenv("BS_YARDCAM"), "%f %f %f", &yard.yaw, &yard.pitch, &yard.dist);
+    if (getenv("BS_YARDTEST")) yard.SelfTest(getenv("BS_YARDTEST"));
+    if (getenv("BS_YARDWHERE")) { yard.work.logoWhere = (uint8_t)atoi(getenv("BS_YARDWHERE")); yard.gpu.Set(yard.work); }
+    if (getenv("BS_YARDCLS")) yard.cls = std::clamp(atoi(getenv("BS_YARDCLS")), 0, SC_PLAYABLE - 1);
+}
+
+static void YardPose(OceanCPU& oc, Vector3 at, float s, Vector3& comPos, Quaternion& rot) {
+    const float L = 14.0f * s, B = 4.5f * s;
+    float hb = oc.Height(at.x, at.z + L), hs = oc.Height(at.x, at.z - L);
+    float hp = oc.Height(at.x + B, at.z), hst = oc.Height(at.x - B, at.z), hc = oc.Height(at.x, at.z);
+    float pitch = -atanf((hb - hs) / (2.0f * L)) * 0.7f, roll = atanf((hp - hst) / (2.0f * B)) * 0.6f;
+    rot = QuaternionMultiply(QuaternionFromAxisAngle({1, 0, 0}, pitch), QuaternionFromAxisAngle({0, 0, 1}, roll));
+    Vector3 origin = {at.x, (hb + hs + hp + hst + 2.0f * hc) / 6.0f - 0.35f * s, at.z};
+    comPos = Vector3Add(origin, Vector3RotateByQuaternion(Vector3Scale(hull::comOffset, s), rot));
+}
+
+void Game::DrawYardShip() {
+    float s = ClassOf(yard.cls).scale;
+    Vector3 com;
+    Quaternion rot;
+    YardPose(menuWorld.ocean, yardPos, s, com, rot);
+    DrawShip(yard.cls, -2, ShipModelMatrix(com, rot, s), nullptr, 0.85f, kPalette[0], 0.0f, 1.0f, true, com, rot, 0.0f, s);
+}
+
+void Game::YardCamera() {
+    yard.Orbit();
+    float s = ClassOf(yard.cls).scale;
+    Vector3 com;
+    Quaternion rot;
+    YardPose(menuWorld.ocean, yardPos, s, com, rot);
+    Vector3 c = {yardPos.x, com.y + 9.0f * s, yardPos.z};
+    float d = yard.dist * (0.55f + 0.45f * s);
+    Vector3 off = {sinf(yard.yaw) * cosf(yard.pitch) * d, sinf(yard.pitch) * d, cosf(yard.yaw) * cosf(yard.pitch) * d};
+    rv.target = c;
+    rv.pos = Vector3Add(c, off);
+    rv.pos.y = fmaxf(rv.pos.y, menuWorld.ocean.Height(rv.pos.x, rv.pos.z) + 2.0f);
+    rv.up = {0, 1, 0};
+    rv.fovy = 50.0f;
+    // slide the view sideways so she sits clear of the panels
+    float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
+    float k = -(2.0f * yard.ShipScreenX() - 1.0f) * tanf(rv.fovy * 0.5f * DEG2RAD) * (W / H) * Vector3Distance(rv.pos, rv.target);
+    rv.pos = Vector3Add(rv.pos, Vector3Scale(right, k));
+    rv.target = Vector3Add(rv.target, Vector3Scale(right, k));
 }
 
 // ============================================================================

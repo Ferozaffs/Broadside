@@ -6,6 +6,7 @@
 #include <string>
 
 class Renderer;
+struct LiveryGpu;
 
 // Decrypt a model pack (.pak, tools/pack_ship.py) into the .glb bytes; false if it isn't one this build can read
 bool DecodeModelPak(const unsigned char* data, int size, std::vector<unsigned char>& out);
@@ -20,8 +21,10 @@ public:
     // model = hull-space -> world (ShipModelMatrix)
     // camDist: distance from the camera (ropes are skipped far away, they'd only shimmer)
     // phase: per-ship sail flutter offset
+    // liv: the captain's paint (nullptr: the model as it comes); teamSails: tint the sails with `team` even so (teams,
+    // the pirate)
     void Draw(Renderer& r, const Matrix& model, float sail, Color team, float flash, float hpFrac, bool lanterns,
-              float camDist = 0.0f, float phase = 0.0f);
+              float camDist = 0.0f, float phase = 0.0f, const LiveryGpu* liv = nullptr, bool teamSails = true);
     void DrawBall(Renderer& r, Vector3 pos);
     float alpha = 1.0f;  // see-through (our own ship while aiming)
     int forceLod = -1;   // 0 high, 1 standard, 2 low (-1: by distance); the shadow pass uses low
@@ -67,4 +70,16 @@ private:
     std::vector<float> deckH, wallLo, wallHi;
     float deckLevel = 2.65f, deckAft = -15.0f, deckFore = 15.0f;
     void BuildDeckMap(const Model& m, const Matrix& fix, const std::vector<bool>& skip);
+    // Livery: what each mesh is to the paint (0 nothing, 1 hull, 2 trim, 3 hull and trim told apart by colour in a
+    // shared texture, 4 sail cloth) and how bright it usually is; the colour keyed parts' usual brightness; which sail
+    // meshes carry canvas coordinates (texcoords2: where on the painted sail, and what kind of sail)
+    std::vector<uint8_t> extPaint, hiPaint, loPaint;
+    std::vector<float> extRef, hiRef, loRef;
+    std::vector<bool> extCanvas, hiCanvas, loCanvas;
+    float keyBlue = 0.3f, keyGold = 0.6f;
+    std::vector<std::string> lodNames;  // (the material names of the detail level LoadLod just read)
+    std::vector<std::string> paintHull = {"coloredwood"}, paintTrim = {"redwood"}, paintKey = {"hull"};
+    void ClassifyPaint(const Model& m, const std::vector<std::string>& names, const std::vector<bool>& sail, std::vector<uint8_t>& paint,
+                       std::vector<float>& ref);
+    void BuildSailCanvas(Model& m, const std::vector<bool>& sail, std::vector<bool>& canvas);
 };

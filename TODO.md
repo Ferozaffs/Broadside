@@ -367,6 +367,27 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [ ] Bots never hook rocks in the strait (humans can swing round stacks/headlands; bots only hook ships ahead).
 - [x] Escorts: no tags, markers or feed lines at all (filler); your own keep the green ring on the water.
 
+## Shipwright (2026-11-16, user: "add ship editor so users can paint their boats and sails, sails should have a
+## windows paint like editor so you can paint your logo. Would also be nice if it was possible to edit meshes")
+- [x] Livery (src/livery.h): hull, trim and sail colours ("original" = the model's own) and a 240x160 picture for the
+  sails. On the wire: palette (<= 255 colours) + runs, 1-40 KB; refused over 60 KB. Imported pictures are merged
+  down to fit (fewer colours, then 2x2 / 4x4 blocks). `--simtest` with BS_LIVERYTEST=1 checks the round trip,
+  the limit and damaged data.
+- [x] Network: protocol 18. HELLO carries the livery; the server keeps it per peer and sends it with every
+  PLAYER_INFO for that captain's ship. Escorts wear their leader's. Tested host + client on one PC (each sees both).
+- [x] Drawing (ShipModel::ClassifyPaint / BuildSailCanvas, ship.frag uPaint*): the new colour keeps the texture's
+  grain (scaled by its brightness against the material's average). Frigate/cutter: coloredWood* = hull,
+  redWood = trim. Ship of the line (one atlas): its blues are the hull, its golds the trim (KeyWeights, the same
+  test on the CPU and in the shader). ship.cfg paint_hull / paint_trim / paint_key override. Each piece of sail
+  cloth gets canvas coordinates (texcoords2, attribute 5): square sails seen from astern, fore-and-aft from
+  starboard; the biggest square sail is "the main sail".
+- [x] Shipwright screen (src/shipyard.cpp): the ship floats alone on the menu's sea, drag to turn, wheel to zoom.
+  Painter: tools, size, filled, mirror, grid, undo/redo, 28 colours + hue/sat/value, drop a PNG. Esc with unsaved
+  paint asks to Save or Cancel.
+- Test switches: BS_SHIPYARD=1 (2: the painter), BS_YARDCLS, BS_YARDCAM "yaw pitch dist", BS_YARDTEST=tools|png,
+  BS_YARDWHERE, BS_LIVERY=file (load instead of livery.dat), BS_LIVERYALL=1 (every ship in our paint).
+- Next: editing the meshes / splicing the models (not started: see the notes in the reply of 2026-11-16).
+
 ## Known issues / next
 - Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;
   it now stands on the model's quarterdeck (ShipModel::DeckAt) behind the rail. Figures closer than 2.2 m to the

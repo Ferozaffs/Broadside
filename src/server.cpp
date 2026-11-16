@@ -1,5 +1,6 @@
 #include "server.h"
 #include "protocol.h"
+#include "livery.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +17,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     }
     for (int& p : peerShip) p = -1;
     for (int& p : peerCrew) p = -1;
+    for (auto& l : peerLivery) l.clear();
     if (const char* e = getenv("BS_ROUNDLEN")) world.roundLength = (float)atof(e);  // testing: short rounds
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets, (uint8_t)arena);
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
@@ -46,6 +48,11 @@ void GameServer::SendPlayerInfo(int id, int toPeer) {
     w.Put((uint8_t)(s.isBot ? 1 : 0));
     w.PutString(s.name);
     w.Put(s.leader);
+    std::vector<uint8_t> none;
+    const std::vector<uint8_t>* liv = &none;
+    for (int p = 0; p < 64; ++p)
+        if (peerShip[p] == id) liv = &peerLivery[p];
+    PutBlob(w.buf, *liv);
     if (toPeer < 0) net.Broadcast(w.buf.data(), w.buf.size(), true);
     else net.Send((uint32_t)toPeer, w.buf.data(), w.buf.size(), true);
 }
@@ -84,6 +91,8 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         if (!r.ok || cls >= SC_PLAYABLE) cls = SC_FRIGATE;
         uint8_t role = r.Get<uint8_t>();
         if (!r.ok) role = ROLE_CAPTAIN;
+        std::vector<uint8_t> livery = r.GetBlob();
+        if (!r.ok || livery.size() > (size_t)kLiveryMaxBytes) livery.clear();
         if (name.empty()) name = "Sailor";
         auto reject = [&](const char* why) {
             ByteWriter w;
@@ -94,6 +103,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         };
         if (ver != PROTOCOL_VERSION) return reject("version mismatch");
         if (peerShip[peer] >= 0 || peerCrew[peer] >= 0) return;
+        peerLivery[peer] = livery;
         int id = -1, crewId = -1;
         if (role == ROLE_CREW) {  // sign on aboard someone's ship (a bot takes the helm if nobody's sailing)
             crewId = world.AddCrew(name);
@@ -241,6 +251,7 @@ void GameServer::Run() {
                 peerShip[e.peer] = -1;
                 AnnounceShips();
             }
+            if (e.type == NetEvent::Disconnect && e.peer < 64) peerLivery[e.peer].clear();
         }
 
         auto now = clock::now();

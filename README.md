@@ -42,6 +42,14 @@ Everyone must run the same version.
 
 Sail through the floating crates for 15-30 s power-ups: **Rapid Reload**, **Triple Shot** and **Fair Wind**.
 
+### Shipwright: paint your ship
+**Shipwright** in the menu: pick colours for the hull, the trim and the sails, and paint a picture for the sails
+in a little Paint-style editor (pencil, brush, eraser, fill, line, box, oval, text, colour picker, mirror, undo; right
+mouse erases). Drop a PNG on the window to put a logo on the canvas. The picture goes on the main sail, every
+square sail or every sail. Your ship floats beside the editor with the paint on as you work. Everyone you sail
+with sees your paint (your escorts wear it too); in Teams the sails still take your side's colour. It's saved in
+`livery.dat` next to the game.
+
 ### Ships
 
 Pick your ship in the menu; while you wait to respawn (or between rounds) press **1 / 2 / 3** to sail something
