@@ -3,6 +3,7 @@
 #include "pak_key.h"
 #include "render.h"
 #include "rlgl.h"
+#include "shipparts.h"
 #include "sim.h"
 #include <algorithm>
 #include <cmath>
@@ -149,6 +150,8 @@ void ShipModel::Init(Shader lit) {
     sphere = GenMeshSphere(0.5f, 10, 10);
     mat = LoadMaterialDefault();
     mat.shader = lit;
+    parts::Build();
+    for (float& b : rigBase) b = 4.3f;
 }
 
 // Minimal scan of a .gltf/.glb JSON chunk for the "materials" array names, in order.
@@ -560,6 +563,7 @@ bool ShipModel::LoadExternal(const char* dir, Shader lit) {
         std::vector<bool> skip(ext.meshCount);
         for (int i = 0; i < ext.meshCount; ++i) skip[i] = extIsSail[i] || extIsRope[i];
         BuildDeckMap(ext, extFix, skip);
+        BuildAnchors(ext, extFix, skip);
     }
     hasHi = LoadLod(dir, "ship_hi", lit, sailKeys, extHi, hiSail, hiRope);
     if (hasHi) ClassifyPaint(extHi, lodNames, hiSail, hiPaint, hiRef);
@@ -980,6 +984,8 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
         if (lod == 2 && hasLo) { M = &extLo; isSail = &loSail; isRope = &loRope; paint = &loPaint; ref = &loRef; canvas = &loCanvas; }
         const bool painted = liv && liv->on && (int)paint->size() == M->meshCount;
         if (painted) r.SetLivery(liv);
+        const bool rigged = liv && liv->on && liv->Rigged();
+        if (rigged) r.SetRig(true, {liv->mastH, liv->rake, liv->spread}, extFix, rigBase, kRigN, kRigZ0, kRigDZ);
         Matrix m = MatrixMultiply(extFix, model);
         rlDisableBackfaceCulling();  // sails and thin rigging are single-sided in most models
         float flutter = (0.18f + 0.22f * Clamp(sail, 0.0f, 1.0f)) / fmaxf(0.01f, extFit);  // (metres, in the model's units)
@@ -997,8 +1003,9 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
             em.maps[MATERIAL_MAP_DIFFUSE].color = keep;
         }
         rlEnableBackfaceCulling();
+        if (rigged) r.SetRig(false);
         if (painted) r.SetLivery(nullptr);
-        Part(cube, TRS({0, extTop + 0.6f, 0.0f}, I, {0.15f, 1.2f, 3.2f}), model, team);  // team pennant
+        DrawParts(r, model, liv, team, phase, teamSails, tint);
         (void)sail;
         (void)lanterns;
         return;
@@ -1053,12 +1060,12 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
     r.SetLitParams(0.0f, 0.0f);
 }
 
-void ShipModel::DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow) {
+void ShipModel::DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow, float big) {
     const Matrix I = MatrixIdentity();
     const Color iron = {30, 27, 25, 255}, brass = {150, 112, 58, 255};
     for (int i = 0; i < n; ++i) {
         Vector3 p = spots[i];
-        float s = i == 3 ? 1.25f : 1.0f;
+        float s = big > 0.0f ? big : i == 3 ? 1.25f : 1.0f;
         Part(cube, TRS({p.x, p.y + 0.42f * s, p.z}, I, {0.58f * s, 0.09f * s, 0.58f * s}), model, iron);  // roof
         Part(cube, TRS({p.x, p.y + 0.52f * s, p.z}, I, {0.34f * s, 0.12f * s, 0.34f * s}), model, iron);
         Part(cube, TRS({p.x, p.y + 0.65f * s, p.z}, I, {0.07f, 0.18f * s, 0.07f}), model, brass);          // ring
@@ -1078,4 +1085,150 @@ void ShipModel::DrawBall(Renderer& r, Vector3 pos) {
     (void)r;
     mat.maps[MATERIAL_MAP_DIFFUSE].color = {40, 40, 44, 255};
     DrawMesh(sphere, mat, MatrixTranslate(pos.x, pos.y, pos.z));
+}
+
+// ---- the Shipwright's parts ------------------------------------------------------------------------------------------
+// Where they go, found from the model (hull space; the sails and the rigging left out): the stem's head is the bow's
+// foremost point about the deck's height, the stern's top the highest point of the stern's last metre and a half, and
+// the transom its aftmost point a little above the deck. And the hull's top along the ship, for the masts' shape.
+void ShipModel::BuildAnchors(const Model& m, const Matrix& fix, const std::vector<bool>& skip) {
+    const float dl = deckLevel;
+    std::vector<float> fore(16, -99.0f);
+    float aft = 99.0f;
+    std::vector<Vector3> pts;
+    for (int mi = 0; mi < m.meshCount; ++mi) {
+        if (mi < (int)skip.size() && skip[mi]) continue;
+        const Mesh& me = m.meshes[mi];
+        if (!me.vertices) continue;
+        for (int v = 0; v < me.vertexCount; ++v) {
+            Vector3 p = Vector3Transform({me.vertices[v * 3], me.vertices[v * 3 + 1], me.vertices[v * 3 + 2]}, fix);
+            if (fabsf(p.x) > 1.2f) continue;
+            pts.push_back(p);
+            if (fabsf(p.x) < 0.6f && p.y > dl - 1.0f && p.y < dl + 1.0f) {
+                int k = std::clamp((int)((p.y - (dl - 1.0f)) / 0.125f), 0, 15);
+                fore[k] = fmaxf(fore[k], p.z);
+            }
+            if (p.y > dl + 0.5f && p.y < dl + 4.0f && p.z < 0.0f) aft = fminf(aft, p.z);
+        }
+    }
+    // (the median of the foremost points: one rod or chain sticking out doesn't move it)
+    std::vector<float> f;
+    for (float z : fore)
+        if (z > -50.0f) f.push_back(z);
+    if (!f.empty()) {
+        std::sort(f.begin(), f.end());
+        anchor[0] = {0.0f, dl - 0.1f, f[f.size() / 2] - 0.15f};
+    }
+    if (aft < 50.0f) {
+        float top = dl + 2.0f, tz = aft;
+        for (const Vector3& p : pts)
+            if (p.z < aft + 1.5f && p.y < dl + 7.0f && p.y > top && fabsf(p.x) < 0.8f) top = p.y, tz = fminf(p.z + 0.4f, aft + 1.0f);
+        anchor[1] = {0.0f, top, tz};
+        float tr = 99.0f, ty = dl + 1.6f;
+        for (const Vector3& p : pts)
+            if (fabsf(p.y - ty) < 0.35f && fabsf(p.x) < 1.0f) tr = fminf(tr, p.z);
+        anchor[2] = {0.0f, ty, (tr < 50.0f ? tr : aft) - 0.05f};
+    }
+    // the hull's top: the highest floor across each step along the ship (the deck map), gaps filled, smoothed
+    float top[kRigN];
+    for (int k = 0; k < kRigN; ++k) {
+        top[k] = -99.0f;
+        float z0 = kRigZ0 + (k - 0.5f) * kRigDZ, z1 = z0 + kRigDZ;
+        for (int j = 0; j < kNZ; ++j) {
+            float z = kZ0 + (j + 0.5f) * kDX;
+            if (z < z0 || z >= z1) continue;
+            for (int i = 0; i < kNX; ++i) top[k] = fmaxf(top[k], deckH[j * kNX + i]);
+        }
+    }
+    for (int k = 1; k < kRigN; ++k)
+        if (top[k] < -50.0f) top[k] = top[k - 1];
+    for (int k = kRigN - 2; k >= 0; --k)
+        if (top[k] < -50.0f) top[k] = top[k + 1];
+    for (int pass = 0; pass < 2; ++pass) {
+        float t[kRigN];
+        for (int k = 0; k < kRigN; ++k) t[k] = (top[std::max(k - 1, 0)] + 2.0f * top[k] + top[std::min(k + 1, kRigN - 1)]) * 0.25f;
+        for (int k = 0; k < kRigN; ++k) top[k] = t[k];
+    }
+    for (int k = 0; k < kRigN; ++k) rigBase[k] = fmaxf(top[k], dl) + 1.3f;
+    TraceLog(LOG_WARNING, "Ship model: parts at the stem (%.2f %.2f), the stern (%.2f %.2f), the transom (%.2f %.2f)", anchor[0].y,
+             anchor[0].z, anchor[1].y, anchor[1].z, anchor[2].y, anchor[2].z);
+}
+
+Vector3 ShipModel::RigPoint(Vector3 h, const LiveryGpu* liv) const {
+    if (!liv || !liv->on || !liv->Rigged() || !hasExt) return h;
+    float f = Clamp((h.z - kRigZ0) / kRigDZ, 0.0f, kRigN - 1.001f);
+    int i = (int)f;
+    float base = Lerp(rigBase[i], rigBase[i + 1], f - i);
+    float t = h.y - base;
+    if (t <= 0.0f) return h;
+    float y = base + t * liv->mastH;
+    h.z -= (y - base) * liv->rake;
+    h.x *= 1.0f + (liv->spread - 1.0f) * Smooth(0.0f, 4.0f, t);
+    h.y = y;
+    return h;
+}
+
+void ShipModel::DrawParts(Renderer& r, const Matrix& model, const LiveryGpu* liv, Color team, float phase, bool teamSails, Color tint) {
+    using namespace parts;
+    const Color gold = {176, 126, 42, 255}, bone = {228, 218, 192, 255}, ivory = {240, 232, 210, 255}, dark = {16, 14, 14, 255},
+                red = {210, 34, 26, 255}, wood = {70, 48, 30, 255};
+    auto T = [&](Color c) { return ColorTint(c, tint); };
+    rlDisableBackfaceCulling();
+    // the pennant at the main masthead, in the side's colour, streaming aft
+    Vector3 top = RigPoint({0.0f, extTop + 0.3f, 0.0f}, liv);
+    r.SetSail(0.22f, phase);
+    Part(Get(PM_PENNANT), TRS(top, MatrixRotateY(PI * 0.5f), {1, 1, 1}), model, team);
+    r.SetSail(0.0f, 0.0f);
+    if (liv && liv->on) {
+        const Vector3 bow = anchor[0], st = anchor[1], tr = anchor[2];
+        r.SetRough(0.28f);  // (gilt shines)
+        switch (liv->figure) {
+        case FIG_SERPENT:
+            Part(Get(PM_SERPENT), MatrixTranslate(bow.x, bow.y, bow.z), model, T(gold));
+            Part(Get(PM_SERPENT_EYES), MatrixTranslate(bow.x, bow.y, bow.z), model, red);
+            break;
+        case FIG_SCROLL: Part(Get(PM_SCROLL), MatrixTranslate(bow.x, bow.y, bow.z), model, T(gold)); break;
+        case FIG_HORN:
+            Part(Get(PM_HORN), MatrixTranslate(bow.x, bow.y, bow.z), model, T(ivory));
+            Part(Get(PM_HORN_COLLAR), MatrixTranslate(bow.x, bow.y, bow.z), model, T(gold));
+            break;
+        case FIG_SKULL: {
+            Matrix L = TRS({bow.x, bow.y + 0.35f, bow.z + 0.55f}, MatrixRotateX(-12.0f * DEG2RAD), {1.35f, 1.35f, 1.35f});
+            Part(Get(PM_SKULL), L, model, T(bone));
+            Part(Get(PM_SKULL_DARK), L, model, dark);
+            break;
+        }
+        default: break;
+        }
+        const Matrix aftward = MatrixRotateY(PI);
+        if (liv->stern == STERN_SUN) Part(Get(PM_SUN), TRS({tr.x, tr.y + 0.25f, tr.z - 0.1f}, aftward, {0.95f, 0.95f, 0.95f}), model, T(gold));
+        if (liv->stern == STERN_BONES) {
+            Part(Get(PM_BONES), TRS({tr.x, tr.y + 0.2f, tr.z - 0.12f}, aftward, {1, 1, 1}), model, T(bone));
+            Matrix L = TRS({tr.x, tr.y + 0.25f, tr.z - 0.32f}, aftward, {1.15f, 1.15f, 1.15f});
+            Part(Get(PM_SKULL), L, model, T(bone));
+            Part(Get(PM_SKULL_DARK), L, model, dark);
+        }
+        if (liv->stern == STERN_LANTERN)  // (the lantern itself: DrawLanterns, from the game, so it glows at night)
+            Part(Get(PM_STAFF), TRS({st.x, st.y - 0.1f, st.z}, MatrixIdentity(), {0.09f, 0.75f, 0.09f}), model, T(gold));
+        r.SetRough(0.0f);
+        if (liv->flag) {
+            // the flagstaff, raked aft over the stern, and the flag from its head
+            const float L = 5.6f;
+            Matrix lean = MatrixRotateX(-18.0f * DEG2RAD);
+            Vector3 foot = {st.x, st.y - 0.2f, st.z - 0.35f};
+            Vector3 head = Vector3Add(foot, Vector3Transform({0.0f, L, 0.0f}, lean));
+            Part(Get(PM_STAFF), TRS(foot, lean, {0.075f, L, 0.075f}), model, T(wood));
+            Color cloth = {232, 226, 208, 255};
+            if (teamSails || !liv->flagLogo) cloth = ColorTint(cloth, ColorLerp(WHITE, team, teamSails ? 0.55f : 0.0f));
+            r.SetLivery(liv);
+            r.SetPaintMesh(4, 0.86f, keyBlue, keyGold, true);
+            r.SetSail(0.3f, phase + 1.3f);
+            Part(Get(PM_FLAG), TRS(Vector3Add(head, {0.0f, -0.12f, -0.05f}), MatrixRotateY(PI * 0.5f), {1, 1, 1}), model, cloth);
+            r.SetSail(0.0f, 0.0f);
+            r.SetLivery(nullptr);
+        }
+        if (getenv("BS_ANCHORLOG"))  // (testing: where the parts go)
+            for (const Vector3& a : anchor) Part(sphere, TRS(a, MatrixIdentity(), {0.35f, 0.35f, 0.35f}), model, {255, 0, 255, 255});
+    }
+    rlEnableBackfaceCulling();
 }

@@ -12,8 +12,14 @@ public:
     LiveryGpu gpu;   // ...ready to draw on the display ship
     int cls = 1;     // which ship is on display (SC_FRIGATE)
     bool painting = false;
+    int page = 0;  // the main screen: 0 the paint, 1 the parts (figurehead, stern, flag, masts)
     float yaw = 2.6f, pitch = 0.14f, dist = 80.0f;  // the camera round the display ship
     bool overUI = false;  // the mouse is over a panel (last frame): leave the camera alone
+    // where the camera looks: the whole ship, or close on the bow / the stern (picking a figurehead, a stern piece)
+    int focus = 0;                 // 0 the ship, 1 the bow, 2 the stern
+    Vector3 look = {0, 9, 0};      // (hull space) the point the camera turns round
+    float lookK = 0.0f;            // 0 the whole ship .. 1 the focus point (eased)
+    void Focus(int f);
 
     void Open(const Livery& l, int shipCls);
     void Close();
@@ -43,6 +49,7 @@ private:
     double noteUntil = 0.0;
 
     int DrawMain(float W, float H);
+    void DrawPartsPage(float x, float y, float iw, bool compact);
     void DrawPainter(float W, float H);
     void SetColor(Color c);
     void Plot(int x, int y, Color c);

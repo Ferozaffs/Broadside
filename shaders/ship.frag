@@ -159,9 +159,10 @@ void main() {
         base = pow(min(c, vec3(1.0)), vec3(2.2));
         // the picture on the sails
         if (uLogoMode > 0.5 && uPaint.x > 7.5 && vSail.y >= 0.0) {
-            float k = floor(vSail.x / 2.0);  // 0 square, 1 fore-and-aft, 2 the main course
+            float k = floor(vSail.x / 2.0);  // 0 square, 1 fore-and-aft, 2 the main course, 3 the flag
             float u = vSail.x - 2.0 * k;
-            bool show = uLogoMode > 2.5 || (uLogoMode > 1.5 && k != 1.0) || k == 2.0;
+            float lm = mod(uLogoMode, 4.0);  // (+4: on the flag too)
+            bool show = k > 2.5 ? uLogoMode > 3.5 : (lm > 2.5 || (lm > 1.5 && k != 1.0) || (lm > 0.5 && k == 2.0));
             if (show) {
                 vec4 L = texture(uLogo, vec2(u, vSail.y));
                 if (L.a > 0.01) {

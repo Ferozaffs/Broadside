@@ -20,7 +20,7 @@ static int LiveryTest() {
         fails += ok ? 0 : 1;
     };
     Livery a;
-    check(a.IsDefault() && a.Encode().size() < 20, "an unpainted ship is a handful of bytes");
+    check(a.IsDefault() && a.Encode().size() < 24, "an unpainted ship is a handful of bytes");
     a.hull = {150, 30, 30, 255};
     a.sail = {40, 40, 44, 255};
     a.logoWhere = LOGO_MAIN;
@@ -71,6 +71,23 @@ static int LiveryTest() {
     bad = e;
     bad[13] = 7;  // where the picture goes: out of range
     check(!t.Decode(bad.data(), bad.size()), "a bad placement is refused");
+    // the Shipwright's parts come back too, and nonsense in them is refused
+    Livery p;
+    p.figure = FIG_SERPENT; p.stern = STERN_BONES; p.flag = 1; p.mastH = kMastHMax; p.rake = kRakeMin; p.spread = -7;
+    std::vector<uint8_t> pe2 = p.Encode();
+    Livery q;
+    check(q.Decode(pe2.data(), pe2.size()) && q.figure == FIG_SERPENT && q.stern == STERN_BONES && q.flag == 1 && q.mastH == kMastHMax &&
+              q.rake == kRakeMin && q.spread == -7 && !q.IsDefault(),
+          "the parts (figurehead, stern, flag, masts) come back");
+    bad = pe2;
+    bad[14] = 99;  // the figurehead: none such
+    check(!t.Decode(bad.data(), bad.size()), "a figurehead that doesn't exist is refused");
+    bad = pe2;
+    bad[17] = 100;  // the masts' height: far too tall
+    check(!t.Decode(bad.data(), bad.size()), "masts out of range are refused");
+    // a livery saved before there were parts (version 1) still reads
+    std::vector<uint8_t> v1 = {1, 150, 30, 30, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0};
+    check(t.Decode(v1.data(), v1.size()) && t.hull.r == 150 && t.figure == FIG_NONE && !t.HasParts(), "an older livery (no parts) reads");
     printf("livery test: %d failure(s)\n", fails);
     return fails ? 1 : 0;
 }

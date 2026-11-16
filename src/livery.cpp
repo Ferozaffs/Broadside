@@ -1,5 +1,6 @@
 #include "livery.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 
@@ -13,11 +14,13 @@ static uint32_t Key(Color c) { return c.a ? (uint32_t)c.r | ((uint32_t)c.g << 8)
 
 std::vector<uint8_t> Livery::Encode() const {
     std::vector<uint8_t> out;
-    out.push_back(1);  // version
+    out.push_back(2);  // version (1: no parts)
     for (const Color& c : {hull, trim, sail}) {
         out.push_back(c.r); out.push_back(c.g); out.push_back(c.b); out.push_back(c.a ? 1 : 0);
     }
     out.push_back(logoWhere);
+    out.push_back(figure); out.push_back(stern); out.push_back(flag);
+    out.push_back((uint8_t)mastH); out.push_back((uint8_t)rake); out.push_back((uint8_t)spread);
     if (!AnyPaint()) {  // nothing painted: no picture at all
         out.push_back(0);
         return out;
@@ -54,7 +57,7 @@ bool Livery::Decode(const uint8_t* d, size_t n) {
     size_t p = 0;
     auto get = [&](uint8_t& v) { if (p >= n) return false; v = d[p++]; return true; };
     uint8_t ver = 0;
-    if (!get(ver) || ver != 1) return false;
+    if (!get(ver) || (ver != 1 && ver != 2)) return false;
     Livery l;
     for (Color* c : {&l.hull, &l.trim, &l.sail}) {
         uint8_t on = 0;
@@ -62,6 +65,15 @@ bool Livery::Decode(const uint8_t* d, size_t n) {
         c->a = on ? 255 : 0;
     }
     if (!get(l.logoWhere) || l.logoWhere >= LOGO_COUNT) return false;
+    if (ver >= 2) {
+        uint8_t m = 0, r = 0, s = 0;
+        if (!get(l.figure) || !get(l.stern) || !get(l.flag) || !get(m) || !get(r) || !get(s)) return false;
+        l.mastH = (int8_t)m; l.rake = (int8_t)r; l.spread = (int8_t)s;
+        if (l.figure >= FIG_COUNT || l.stern >= STERN_COUNT || l.flag > 1) return false;
+        if (l.mastH < kMastHMin || l.mastH > kMastHMax || l.rake < kRakeMin || l.rake > kRakeMax || l.spread < kSpreadMin ||
+            l.spread > kSpreadMax)
+            return false;
+    }
     uint8_t np = 0;
     if (!get(np)) return false;
     if (np > 0) {
@@ -172,8 +184,15 @@ void LiveryGpu::Set(const Livery& l) {
     hull = l.hull;
     trim = l.trim;
     sail = l.sail;
+    figure = l.figure;
+    stern = l.stern;
+    flag = l.flag != 0;
+    flagLogo = flag && l.AnyPaint();
+    mastH = 1.0f + l.mastH / 100.0f;
+    rake = tanf(l.rake * 0.5f * DEG2RAD);
+    spread = 1.0f + l.spread / 100.0f;
     logoWhere = l.HasLogo() ? l.logoWhere : LOGO_OFF;
-    if (logoWhere == LOGO_OFF) return;
+    if (logoWhere == LOGO_OFF && !flagLogo) return;
     if (logo.id == 0) {
         Image img = GenImageColor(kSailW, kSailH, BLANK);
         logo = LoadTextureFromImage(img);

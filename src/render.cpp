@@ -92,6 +92,13 @@ void Renderer::Init() {
     locPaint = GetShaderLocation(litShader, "uPaint");
     locLogoMode = GetShaderLocation(litShader, "uLogoMode");
     locLogo = GetShaderLocation(litShader, "uLogo");
+    locRigOn = GetShaderLocation(litShader, "uRigOn");
+    locRig = GetShaderLocation(litShader, "uRig");
+    locRigZ = GetShaderLocation(litShader, "uRigZ");
+    locRigBase = GetShaderLocation(litShader, "uRigBase");
+    locToHull = GetShaderLocation(litShader, "uToHull");
+    locFromHull = GetShaderLocation(litShader, "uFromHull");
+    locRough = GetShaderLocation(litShader, "uRough");
 
     // four independent tiling fractal noises, one per channel
     {
@@ -614,7 +621,8 @@ void Renderer::SetLivery(const LiveryGpu* liv) {
     col(locPaintHull, liv ? liv->hull : none);
     col(locPaintTrim, liv ? liv->trim : none);
     col(locPaintSail, liv ? liv->sail : none);
-    logoMode = liv && liv->logo.id && liv->logoWhere ? (float)liv->logoWhere : 0.0f;
+    // (+4: the flag flies the picture too)
+    logoMode = liv && liv->logo.id ? (float)liv->logoWhere + (liv->flagLogo ? 4.0f : 0.0f) : 0.0f;
     SetShaderValue(litShader, locLogoMode, &logoMode, SHADER_UNIFORM_FLOAT);
     if (logoMode > 0.0f) {
         int unit = 13;
@@ -625,6 +633,20 @@ void Renderer::SetLivery(const LiveryGpu* liv) {
     }
     if (!liv) SetPaintMesh(0, 0.5f, 0.3f, 0.6f, false);
 }
+
+void Renderer::SetRig(bool on, Vector3 rig, const Matrix& toHull, const float* base, int n, float z0, float dz) {
+    float o = on ? 1.0f : 0.0f;
+    SetShaderValue(litShader, locRigOn, &o, SHADER_UNIFORM_FLOAT);
+    if (!on) return;
+    float r[4] = {rig.x, rig.y, rig.z, 0.0f}, z[4] = {z0, dz, (float)n, 0.0f};
+    SetShaderValue(litShader, locRig, r, SHADER_UNIFORM_VEC4);
+    SetShaderValue(litShader, locRigZ, z, SHADER_UNIFORM_VEC4);
+    SetShaderValueV(litShader, locRigBase, base, SHADER_UNIFORM_FLOAT, n);
+    SetShaderValueMatrix(litShader, locToHull, toHull);
+    SetShaderValueMatrix(litShader, locFromHull, MatrixInvert(toHull));
+}
+
+void Renderer::SetRough(float rough) { SetShaderValue(litShader, locRough, &rough, SHADER_UNIFORM_FLOAT); }
 
 void Renderer::SetPaintMesh(int kind, float ref, float keyBlue, float keyGold, bool canvas) {
     float p[4] = {(float)kind + (canvas ? 8.0f : 0.0f), ref, keyBlue, keyGold};

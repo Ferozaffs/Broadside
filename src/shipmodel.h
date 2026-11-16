@@ -43,11 +43,25 @@ public:
     // (testing the deck view) what each of these world-space rays hits first within maxDist: 0 nothing, 1 sail, 2 anything
     // else solid, 3 rigging (ropes, ratlines: the ratlines are partly holes, so it's counted apart). model = ShipModelMatrix.
     void RayHits(const Ray* rays, int n, const Matrix& model, float maxDist, int* out) const;
-    // iron-framed lanterns at hull-space spots; glow 0..1 drives the glass emissive
-    void DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow);
+    // iron-framed lanterns at hull-space spots; glow 0..1 drives the glass emissive; big > 0: that size (the stern's great
+    // lantern)
+    void DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow, float big = 0.0f);
+    // The Shipwright's parts go at (hull space): 0 the stem head (a figurehead), 1 the top of the stern at the middle
+    // (the great lantern, the flagstaff), 2 the middle of the transom (the sun, the skull and bones)
+    Vector3 PartAnchor(int which) const { return anchor[which]; }
+    // where a hull-space point up in the rig goes with this captain's masts (taller, raked, the yards spread)
+    Vector3 RigPoint(Vector3 h, const LiveryGpu* liv) const;
 
 private:
     void Part(const Mesh& mesh, Matrix local, const Matrix& model, Color c);
+    // the figurehead, the stern piece, the flag and the pennant
+    void DrawParts(Renderer& r, const Matrix& model, const LiveryGpu* liv, Color team, float phase, bool teamSails, Color tint);
+    Vector3 anchor[3] = {{0.0f, 3.0f, 16.5f}, {0.0f, 6.2f, -16.5f}, {0.0f, 4.6f, -16.8f}};
+    // the hull's top along the ship (floors, castles) + a little: where the masts' shape starts
+    static constexpr int kRigN = 32;
+    static constexpr float kRigZ0 = -24.0f, kRigDZ = 1.75f;
+    float rigBase[kRigN];
+    void BuildAnchors(const Model& m, const Matrix& fix, const std::vector<bool>& skip);
     Mesh hull{}, deck{}, cube{}, cyl{}, sailMesh{}, sphere{};
     Material mat{};
     bool hasExt = false;

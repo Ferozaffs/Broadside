@@ -386,7 +386,20 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   paint asks to Save or Cancel.
 - Test switches: BS_SHIPYARD=1 (2: the painter), BS_YARDCLS, BS_YARDCAM "yaw pitch dist", BS_YARDTEST=tools|png,
   BS_YARDWHERE, BS_LIVERY=file (load instead of livery.dat), BS_LIVERYALL=1 (every ship in our paint).
-- Next: editing the meshes / splicing the models (not started: see the notes in the reply of 2026-11-16).
+- [x] Parts page (user: "What you suggested with figureheads etc"): figureheads, stern pieces, a flag with the picture,
+  mast sliders. Livery wire version 2 (version 1 still reads): figure, stern, flag, mastH (-20..25 %), rake (-8..20 half
+  degrees), spread (-15..20 %), each checked on decode. The parts are built from tubes and squashed spheres in
+  src/shipparts.cpp (no model to license); where they go is found from each model (ShipModel::BuildAnchors: stem head,
+  stern top, transom). The masts' shape is a bend in ship.vert (RigShape: above the hull's top along the ship, from
+  the deck map, + 1.3 m) mirrored on the CPU by ShipModel::RigPoint for the masthead lantern and the pennant. The
+  pennant is now a streamer for every ship. Cosmetic only: hits, the deck map and the crew are the model's own.
+- Test switches: BS_YARDPARTS="figure stern flag height rake yards" (opens the Parts page), BS_YARDFOCUS=1|2 (bow,
+  stern), BS_YARDLOOK="x y z" (camera on a hull-space point), BS_ANCHORLOG=1 (magenta balls where the parts go).
+- Found on the way: the ship of the line sailed backwards (assets/ship_line/ship.cfg had flip=1; her bowsprit and
+  spritsail pointed aft, her stern lanterns hung off the bow). Now flip=0. The cfg is gitignored: it reaches players
+  through the release staging, which copies it.
+- Not done: editing the meshes freely / splicing hull and rig between the models (the line ship is one atlas without
+  separate hull and rig parts; see the reply of 2026-11-16).
 
 ## Known issues / next
 - Deck view (fixed 2026-11-14): the captain's eye stood in front of the quarterdeck, at a height from the physics deck;

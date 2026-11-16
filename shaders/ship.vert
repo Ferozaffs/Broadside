@@ -13,12 +13,31 @@ uniform mat4 matNormal;
 uniform float uTime;
 uniform float uSailWave;   // flutter amplitude in metres; 0 for rigid parts
 uniform float uSailPhase;  // per-ship offset so the fleet doesn't flap in sync
+// a captain's masts (the Shipwright): above the hull's top the rig is taller, raked aft and its yards spread
+uniform float uRigOn;
+uniform vec4 uRig;             // height scale, aft lean per metre up, the yards' width scale
+uniform vec4 uRigZ;            // the hull's top along the ship: first z, step, count
+uniform float uRigBase[32];
+uniform mat4 uToHull, uFromHull;  // the model's units <-> hull space
 out vec3 vWorld;
 out vec3 vNormal;
 out vec4 vColor;
 out vec2 vUV;
 out vec3 vObj;  // model-space position: stable noise coordinates for damage
 out vec2 vSail;
+
+vec3 RigShape(vec3 h) {
+    float f = clamp((h.z - uRigZ.x) / uRigZ.y, 0.0, uRigZ.z - 1.001);
+    int i = int(f);
+    float base = mix(uRigBase[i], uRigBase[i + 1], f - float(i));
+    float t = h.y - base;
+    if (t <= 0.0) return h;
+    float y = base + t * uRig.x;
+    h.z -= (y - base) * uRig.y;
+    h.x *= 1.0 + (uRig.z - 1.0) * smoothstep(0.0, 4.0, t);
+    h.y = y;
+    return h;
+}
 
 void main() {
     vec3 p = vertexPosition;
@@ -47,6 +66,7 @@ void main() {
         n = normalize(n - (g - dot(g, n) * n));
         col = vec4(1.0);
     }
+    if (uRigOn > 0.5) p = (uFromHull * vec4(RigShape((uToHull * vec4(p, 1.0)).xyz), 1.0)).xyz;
     vWorld = (matModel * vec4(p, 1.0)).xyz;
     vNormal = normalize((matNormal * vec4(n, 0.0)).xyz);
     vColor = col;

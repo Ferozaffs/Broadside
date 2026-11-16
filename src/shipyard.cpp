@@ -40,15 +40,43 @@ void Shipyard::Close() {
     canvasTex = {};
 }
 
+// the camera swings round to the bow or the stern (and comes closer), or back out to the whole ship
+static float gGoalYaw = 0.0f, gGoalPitch = 0.0f, gGoalDist = 0.0f;
+static bool gGlide = false;
+void Shipyard::Focus(int f) {
+    if (f == focus) return;
+    focus = f;
+    gGlide = true;
+    if (f == 1) { gGoalYaw = 0.8f; gGoalPitch = 0.08f; gGoalDist = 17.0f; }
+    else if (f == 2) { gGoalYaw = 2.5f; gGoalPitch = 0.14f; gGoalDist = 20.0f; }
+    else { gGoalYaw = yaw; gGoalPitch = 0.14f; gGoalDist = 80.0f; }
+    // (the short way round)
+    while (gGoalYaw - yaw > PI) gGoalYaw -= 2.0f * PI;
+    while (yaw - gGoalYaw > PI) gGoalYaw += 2.0f * PI;
+}
+
 void Shipyard::Orbit() {
+    float dt = fminf(GetFrameTime(), 0.05f);
+    lookK += ((focus ? 1.0f : 0.0f) - lookK) * (1.0f - expf(-dt * 4.0f));
+    if (gGlide) {
+        float k = 1.0f - expf(-dt * 3.5f);
+        yaw += (gGoalYaw - yaw) * k;
+        pitch += (gGoalPitch - pitch) * k;
+        dist += (gGoalDist - dist) * k;
+        if (fabsf(gGoalYaw - yaw) < 0.002f && fabsf(gGoalDist - dist) < 0.05f) gGlide = false;
+    }
     if (overUI) return;
     Vector2 d = GetMouseDelta();
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
         yaw -= d.x * 0.006f;
         pitch = Clamp(pitch + d.y * 0.004f, 0.02f, 0.9f);
+        if (d.x != 0.0f || d.y != 0.0f) gGlide = false;
     }
     float w = GetMouseWheelMove();
-    if (w != 0.0f) dist = Clamp(dist * (1.0f - w * 0.1f), 28.0f, 170.0f);
+    if (w != 0.0f) {
+        dist = Clamp(dist * (1.0f - w * 0.1f), focus ? 11.0f : 28.0f, 170.0f);
+        gGlide = false;
+    }
 }
 
 void Shipyard::SetColor(Color c) {
@@ -298,13 +326,17 @@ int Shipyard::DrawMain(float W, float H) {
     DrawTextEx(F().bold, "SHIPWRIGHT", {x, y}, compact ? 38.0f : 44.0f, 4.0f, {244, 232, 206, 255});
     y += compact ? 42 : 50;
     DrawRectangle((int)x + 2, (int)y, 56, 3, kGold);
-    Text("Paint your ship. Everyone you sail with sees it.", x, y + 10, 16, kDim);
-    y += compact ? 40 : 48;
+    y += 14;
+    static const char* const kPages[] = {"Paint", "Parts"};
+    if (Segmented({x, y, iw, 40}, kPages, 2, page)) Focus(0);
+    y += compact ? 54 : 62;
 
     Label("SHIP ON DISPLAY", x + 2, y, 11, kDim);
     static const char* const kCls[] = {"Cutter", "Frigate", "Line"};
     Segmented({x, y + 18, iw, 38}, kCls, 3, cls);
     y += compact ? 66 : 74;
+    if (page == 1) DrawPartsPage(x, y, iw, compact);
+    else {
 
     const float sh = compact ? 46.0f : 56.0f, rowH = sh + 26.0f;
     struct Row { const char* name; Color* c; } rows[3] = {{"HULL", &work.hull}, {"TRIM", &work.trim}, {"SAILS", &work.sail}};
@@ -332,6 +364,7 @@ int Shipyard::DrawMain(float W, float H) {
     int where = work.logoWhere;
     if (Segmented({x, y, iw, 36}, kWhere, LOGO_COUNT, where)) { work.logoWhere = (uint8_t)where; dirty = true; }
     y += 50;
+    }
 
     float by = P.y + P.height - 24 - 50;
     int result = 0;
@@ -341,8 +374,75 @@ int Shipyard::DrawMain(float W, float H) {
         if (work.Encode() == openedAs) result = 2;
         else Note("Save your paint, or Cancel to leave it");
     }
-    Text("Drag to turn the ship  \xC2\xB7  wheel to come closer", 40, H - 46, 16, A(kDim, 0.9f), false);
+    Text("Everyone you sail with sees her as you made her  \xC2\xB7  drag to turn her  \xC2\xB7  wheel to come closer", 40, H - 46, 16,
+         A(kDim, 0.9f), false);
     return result;
+}
+
+// a slider: drag along the track; returns true when the value changed
+static int gSliderDrag = -1;
+static bool Slider(Rectangle r, int id, const char* label, const char* value, int& v, int lo, int hi, int zero) {
+    using namespace ui;
+    Text(label, r.x, r.y + r.height * 0.5f - 10, 18, kText);
+    const float tx = r.x + 96, tw = r.width - 96 - 92;
+    Text(value, r.x + r.width, r.y + r.height * 0.5f - 10, 18, kGold, true, Right);
+    const float cy = r.y + r.height * 0.5f;
+    auto at = [&](int k) { return tx + tw * (float)(k - lo) / (float)(hi - lo); };
+    DrawRectangleRounded({tx, cy - 3, tw, 6}, 1.0f, 6, kTrack);
+    float a = at(zero), b = at(v);
+    DrawRectangleRec({fminf(a, b), cy - 3, fabsf(b - a), 6}, A(kGold, 0.85f));
+    DrawRectangle((int)a - 1, (int)cy - 8, 2, 16, A(kText, 0.5f));  // (the model's own)
+    Vector2 m = GetMousePosition();
+    Rectangle hit = {tx - 12, r.y, tw + 24, r.height};
+    bool hover = CheckCollisionPointRec(m, hit);
+    DrawCircleV({b, cy}, hover || gSliderDrag == id ? 10.0f : 8.5f, {244, 232, 206, 255});
+    DrawCircleV({b, cy}, 4.0f, kGold);
+    if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) gSliderDrag = id;
+    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT) && gSliderDrag == id) gSliderDrag = -1;
+    if (gSliderDrag != id) return false;
+    int nv = lo + (int)lroundf(Clamp((m.x - tx) / tw, 0.0f, 1.0f) * (hi - lo));
+    if (nv == v) return false;
+    v = nv;
+    return true;
+}
+
+void Shipyard::DrawPartsPage(float x, float y, float iw, bool compact) {
+    using namespace ui;
+    const float gap = compact ? 64.0f : 74.0f;
+    Label("FIGUREHEAD", x + 2, y, 11, kDim);
+    static const char* const kFig[FIG_COUNT] = {"None", "Serpent", "Scroll", "Horn", "Skull"};
+    int f = work.figure;
+    if (Segmented({x, y + 18, iw, 38}, kFig, FIG_COUNT, f)) { work.figure = (uint8_t)f; dirty = true; Focus(1); }
+    y += gap;
+    Label("ON THE STERN", x + 2, y, 11, kDim);
+    static const char* const kStern[STERN_COUNT] = {"None", "Great lantern", "Sun", "Skull & bones"};
+    int s = work.stern;
+    if (Segmented({x, y + 18, iw, 38}, kStern, STERN_COUNT, s)) { work.stern = (uint8_t)s; dirty = true; Focus(2); }
+    y += gap;
+    Label("A FLAG AT THE STERN", x + 2, y, 11, kDim);
+    static const char* const kFlag[] = {"No flag", "Fly a flag"};
+    int fl = work.flag;
+    if (Segmented({x, y + 18, iw * 0.55f, 38}, kFlag, 2, fl)) { work.flag = (uint8_t)fl; dirty = true; Focus(2); }
+    Text(work.AnyPaint() ? "with your picture" : "(paint a picture\nfor it to fly)", x + iw * 0.55f + 12, y + 18 + (work.AnyPaint() ? 9 : 0), 15,
+         kDim);
+    y += gap + 4;
+    Label("MASTS", x + 2, y, 11, kDim);
+    if (Button({x + iw - 110, y - 8, 110, 30}, "Reset", false, work.mastH || work.rake || work.spread)) {
+        work.mastH = work.rake = work.spread = 0;
+        dirty = true;
+        Focus(0);
+    }
+    y += 22;
+    const float sh = compact ? 40.0f : 46.0f;
+    int v = work.mastH;
+    if (Slider({x, y, iw, sh}, 1, "Height", TextFormat("%d%%", 100 + v), v, kMastHMin, kMastHMax, 0)) { work.mastH = (int8_t)v; dirty = true; Focus(0); }
+    y += sh;
+    v = work.rake;
+    const char* rk = v == 0 ? "upright" : v > 0 ? TextFormat("%.1f\xC2\xB0 aft", v * 0.5f) : TextFormat("%.1f\xC2\xB0 fwd", -v * 0.5f);
+    if (Slider({x, y, iw, sh}, 2, "Rake", rk, v, kRakeMin, kRakeMax, 0)) { work.rake = (int8_t)v; dirty = true; Focus(0); }
+    y += sh;
+    v = work.spread;
+    if (Slider({x, y, iw, sh}, 3, "Yards", TextFormat("%d%%", 100 + v), v, kSpreadMin, kSpreadMax, 0)) { work.spread = (int8_t)v; dirty = true; Focus(0); }
 }
 
 void Shipyard::DrawPainter(float W, float H) {

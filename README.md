@@ -50,6 +50,11 @@ square sail or every sail. Your ship floats beside the editor with the paint on 
 with sees your paint (your escorts wear it too); in Teams the sails still take your side's colour. It's saved in
 `livery.dat` next to the game.
 
+The **Parts** page dresses her up: a figurehead (sea serpent, gilded scroll, narwhal horn or skull), something on the
+stern (a great lantern that glows at night, a gilded sun, or a skull and crossbones), a flag at the stern that flies your
+picture, and sliders for the masts' height and rake and how wide the yards spread. The camera swings round to the bow or
+the stern as you pick. All of it is for show: the ship sails and takes hits the same.
+
 ### Ships
 
 Pick your ship in the menu; while you wait to respawn (or between rounds) press **1 / 2 / 3** to sail something

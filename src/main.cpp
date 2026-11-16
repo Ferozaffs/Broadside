@@ -856,7 +856,8 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 Livery l;
                 if (!liv.empty() && l.Decode(liv.data(), liv.size())) {
                     shipLivery[id].Set(l);
-                    TraceLog(LOG_WARNING, "Livery: ship %d (%s) sails in her own paint (%d bytes)", id, name.c_str(), (int)liv.size());
+                    TraceLog(LOG_WARNING, "Livery: ship %d (%s) sails in her own paint (%d bytes; figurehead %d, stern %d, flag %d, masts %d %d %d)", id,
+                             name.c_str(), (int)liv.size(), l.figure, l.stern, l.flag, l.mastH, l.rake, l.spread);
                 }
                 else shipLivery[id].Clear();
                 bool wasPresent = info[id].present;
@@ -2809,7 +2810,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     const LiveryGpu* liv = id == -2 ? &yard.gpu : LiveryFor(id);
     bool teamSails = id >= 0 && (curMode == MODE_TEAMS || (curMode == MODE_PIRATE && ns && IsCarrier(ns->leader >= 0 ? ns->leader : id)));
     if (shadowPass) {
-        model.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase);
+        model.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase, liv, teamSails);
         renderer.SetDamage(0.0f, nullptr, 0);
         return;
     }
@@ -2817,6 +2818,9 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     int nl = 0;
     Vector3 spots[4];
     LanternSpots(model.MastTop(), spots);
+    spots[3] = model.RigPoint(spots[3], liv);  // (the masthead lantern goes where her masthead is)
+    const bool greatLantern = liv && liv->on && liv->stern == STERN_LANTERN;
+    const Vector3 greatAt = Vector3Add(model.PartAnchor(1), {0.0f, 1.45f, 0.0f});
     float camD = Vector3Distance(rv.pos, pos);
     if (alive) {
         float k = lanternBoost;
@@ -2834,10 +2838,18 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
             fx.Lantern(w, size * 0.6f, Fade({255, 206, 140, 255}, a * 0.9f));
             if (k > 0.3f && d < 700.0f) lanternPts.push_back({w, Fade({255, 170, 84, 255}, a * Clamp((k - 0.3f) * 2.0f, 0.0f, 1.0f))});
         }
+        if (greatLantern && !lanternFxOff) {  // the Shipwright's great lantern on the stern
+            Vector3 w = HullToWorld(pos, rot, greatAt, scale);
+            float d = Vector3Distance(rv.pos, w), k = lanternBoost;
+            float size = (1.3f + d * 0.0035f) * (0.75f + 0.5f * k) * 1.6f, a = Clamp(0.2f + 0.8f * k, 0.0f, 1.0f);
+            fx.Lantern(w, size * 2.4f, Fade({255, 140, 52, 255}, a * 0.85f));
+            fx.Lantern(w, size * 0.6f, Fade({255, 206, 140, 255}, a * 0.9f));
+        }
     }
     renderer.SetLights(lights, nl);
     model.Draw(renderer, m, sail, team, flash, hpFrac, alive, camD / scale, phase, liv, teamSails);
     if (camD < 260.0f) model.DrawLanterns(renderer, m, spots, 4, alive ? lanternBoost : 0.0f);
+    if (greatLantern && camD < 420.0f) model.DrawLanterns(renderer, m, &greatAt, 1, alive ? lanternBoost : 0.0f, 2.1f);
     renderer.SetDamage(0.0f, nullptr, 0);
     renderer.SetLights(nullptr, 0);
 }
@@ -5192,6 +5204,20 @@ void Game::OpenShipyard() {
     if (getenv("BS_YARDTEST")) yard.SelfTest(getenv("BS_YARDTEST"));
     if (getenv("BS_YARDWHERE")) { yard.work.logoWhere = (uint8_t)atoi(getenv("BS_YARDWHERE")); yard.gpu.Set(yard.work); }
     if (getenv("BS_YARDCLS")) yard.cls = std::clamp(atoi(getenv("BS_YARDCLS")), 0, SC_PLAYABLE - 1);
+    if (getenv("BS_YARDPARTS")) {  // (testing: "figure stern flag height rake yards")
+        int v[6] = {0, 0, 0, 0, 0, 0};
+        sscanf(getenv("BS_YARDPARTS"), "%d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+        yard.work.figure = (uint8_t)v[0]; yard.work.stern = (uint8_t)v[1]; yard.work.flag = (uint8_t)v[2];
+        yard.work.mastH = (int8_t)v[3]; yard.work.rake = (int8_t)v[4]; yard.work.spread = (int8_t)v[5];
+        yard.gpu.Set(yard.work);
+        yard.page = 1;
+    }
+    if (getenv("BS_YARDFOCUS")) yard.Focus(atoi(getenv("BS_YARDFOCUS")));
+    if (getenv("BS_YARDLOOK")) {  // (testing: close on a hull-space point)
+        sscanf(getenv("BS_YARDLOOK"), "%f %f %f", &yard.look.x, &yard.look.y, &yard.look.z);
+        yard.focus = 3;
+        yard.lookK = 1.0f;
+    }
 }
 
 static void YardPose(OceanCPU& oc, Vector3 at, float s, Vector3& comPos, Quaternion& rot) {
@@ -5219,6 +5245,8 @@ void Game::YardCamera() {
     Quaternion rot;
     YardPose(menuWorld.ocean, yardPos, s, com, rot);
     Vector3 c = {yardPos.x, com.y + 9.0f * s, yardPos.z};
+    if (yard.focus == 1 || yard.focus == 2) yard.look = ModelOf(yard.cls).PartAnchor(yard.focus == 1 ? 0 : 1);
+    if (yard.lookK > 0.001f) c = Vector3Lerp(c, Vector3Transform(yard.look, ShipModelMatrix(com, rot, s)), yard.lookK);
     float d = yard.dist * (0.55f + 0.45f * s);
     Vector3 off = {sinf(yard.yaw) * cosf(yard.pitch) * d, sinf(yard.pitch) * d, cosf(yard.yaw) * cosf(yard.pitch) * d};
     rv.target = c;
