@@ -3,8 +3,6 @@
 // server inside the game) and "--server" (dedicated, headless).
 #pragma once
 #include "net.h"
-#include "rooms.h"
-#include <string>
 #include "sim.h"
 #include <atomic>
 #include <deque>
@@ -16,9 +14,6 @@ public:
                uint8_t allowedCls = SC_ALL, bool deckOnly = false, bool skills = false, int arena = ARENA_ISLES, bool realistic = false);
     void Stop();
     bool Running() const { return running; }
-    // put the game up as a room (src/rooms.h) so friends join by its name
-    void OpenRoom(const std::string& name);
-    const rooms::Host& Room() const { return room; }
     ~GameServer() { Stop(); }
 
 private:
@@ -30,8 +25,6 @@ private:
     std::thread thread;
     std::atomic<bool> running{false};
     NetServer net;
-    rooms::Host room;
-    uint16_t port = 0;
     World world;
     static constexpr int kMaxPeers = 4095;  // players (captains and crew) at once: ENet's own ceiling (12-bit peer ids)
     int peerShip[kMaxPeers];

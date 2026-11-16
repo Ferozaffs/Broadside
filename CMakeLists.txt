@@ -44,9 +44,6 @@ endif()
 file(GLOB BROADSIDE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 add_executable(broadside ${BROADSIDE_SOURCES})
 target_link_libraries(broadside PRIVATE raylib enet_lib)
-if(WIN32)
-    target_link_libraries(broadside PRIVATE winhttp)  # rooms: the signalling server's WebSocket (src/rooms.cpp)
-endif()
 # The key the model packs are encrypted with (tools/pack_ship.py): assets/pak.key, never committed. Without it the
 # build gets an empty key and can only read the old scrambled packs.
 set(PAK_KEY_FILE ${CMAKE_SOURCE_DIR}/assets/pak.key)

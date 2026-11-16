@@ -423,6 +423,10 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   40 bots in practice: 46-61 fps on the GTX 1060. A snapshot is ~115 bytes a ship at 30 Hz, to every client.
 - [x] Realistic handling in every mode and arena, with or without skills (user: "We should not limit the users").
 
+## Wider Shipwright sliders (2026-11-17, user: "increase the shipwright slider so we can have more rake etc. increase by at least 50%")
+- [x] livery.h ranges: height -30..+40 % (was -20..+25), rake -6..+15 deg (was -4..+10), yards -23..+30 % (was -15..+20).
+  Protocol 20 (an older game refuses the new values, so the versions don't mix). All three classes checked at both ends.
+
 ## Far-ship model artifacts (2026-11-16, user: "the current ones seems to have some rendering artifacts ... at the front of the frigate")
 - [x] ship_lo.glb (every ship beyond 320 m, and every ship's shadow) had its ropes squeezed to a few triangles each; the
   strands fused into flat sheets: a plank-like slab beside the bow (the anchor cables) and a grey wedge by the jib, and
@@ -432,7 +436,11 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   (per-part triangles and bounds) - neither the hull budget nor small parts were it.
 - The frigate's anchors are near-black iron in the model (base colour ~2% grey): crude up close, by design.
 
-## Rooms (2026-11-16, user: "online play just like i did in qwop-row with room names")
+## Rooms (2026-11-16, user: "online play just like i did in qwop-row with room names") - REVERTED
+- Taken out again until our own signalling server exists (user: "revert that fix for now until we fix proper
+  cloudflare"): the PeerJS cloud only took our cards disguised as a WebRTC candidate, and the two-home path was
+  never tested. The code is in git (commit e04c7a2, src/rooms.cpp): STUN on the ENet socket, the punch and the
+  ENet intercept carry over; only the signalling transport changes. Notes from the PeerJS version:
 - [x] src/rooms.cpp: the host's server lists its room on PeerJS's cloud signalling server (wss://0.peerjs.com, as qwop-row's
   PeerJS does) as "broadside-<name>"; a joiner sends the room its card (protocol version, public address from STUN
   asked on the game's own ENet socket, LAN address), the room answers with its own, both punch UDP at each other
