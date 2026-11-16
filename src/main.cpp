@@ -2133,6 +2133,22 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
             // (jitter: how far the centre of mass moved this frame against how far its velocity says, in cm; and the frame time in ms)
             if (dt > 0.0f && Vector3Length(c1) > 0.0f) { float j = 100.0f * Vector3Length(Vector3Subtract(Vector3Subtract(me.pos, c1), Vector3Scale(Vector3Add(me.vel, c2), 0.5f * dt))); mCom = fmaxf(mCom, j); sumCom += 1000.0f * dt; }
             c1 = me.pos; c2 = me.vel;
+            // (and the same for the nearest other ship, drawn from the snapshots)
+            static int oId = -1;
+            static Vector3 o1{}, o2{};
+            static float mOther;
+            int near = -1;
+            float nd = 1e9f;
+            for (int k = 0; k < MAX_SHIPS; ++k)
+                if (k != myId && view[k].present && (view[k].s.flags & SF_ALIVE)) {
+                    float d = Vector3Distance(view[k].s.pos, me.pos);
+                    if (d < nd) { nd = d; near = k; }
+                }
+            if (near >= 0) {
+                const NetShip& o = view[near].s;
+                if (near == oId && dt > 0.0f) mOther = fmaxf(mOther, 100.0f * Vector3Length(Vector3Subtract(Vector3Subtract(o.pos, o1), Vector3Scale(Vector3Add(o.vel, o2), 0.5f * dt))));
+                oId = near; o1 = o.pos; o2 = o.vel;
+            }
             static Vector3 lastUp{0, 1, 0};
             Vector3 r = Vector3RotateByQuaternion({1, 0, 0}, me.rot), f = Vector3RotateByQuaternion({0, 0, 1}, me.rot);
             float roll = fabsf(asinf(Clamp(r.y, -1.0f, 1.0f))) * RAD2DEG, pitch = fabsf(asinf(Clamp(f.y, -1.0f, 1.0f))) * RAD2DEG;
@@ -2143,10 +2159,10 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
             yLo = fminf(yLo, eye.y - me.pos.y); yHi = fmaxf(yHi, eye.y - me.pos.y); sumRoll += roll; n += 1;
             if (GetTime() - t0 > 1.0) {
                 t0 = GetTime();
-                printf("[deck] heel max %.0f avg %.0f, pitch max %.0f, horizon tilt max %.1f (%.0f deg/s), eye over CoM %.1f..%.1f m, air %.1f, jitter max %.0f cm, frame %.0f ms\n",
-                       mRoll, sumRoll / fmaxf(n, 1.0f), mPitch, mTilt, mRate, yLo, yHi, me.airTime, mCom, sumCom / fmaxf(n, 1.0f));
+                printf("[deck] heel max %.0f avg %.0f, pitch max %.0f, horizon tilt max %.1f (%.0f deg/s), eye over CoM %.1f..%.1f m, air %.1f, jitter max %.0f cm (nearest other ship %.0f cm), frame %.0f ms\n",
+                       mRoll, sumRoll / fmaxf(n, 1.0f), mPitch, mTilt, mRate, yLo, yHi, me.airTime, mCom, mOther, sumCom / fmaxf(n, 1.0f));
                 fflush(stdout);
-                mRoll = mPitch = mTilt = mRate = sumRoll = n = mCom = sumCom = 0; yLo = 1e9f; yHi = -1e9f;
+                mRoll = mPitch = mTilt = mRate = sumRoll = n = mCom = sumCom = mOther = 0; yLo = 1e9f; yHi = -1e9f;
             }
         }
         if (getenv("BS_EYELOG")) {
@@ -2185,7 +2201,7 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         shake = fmaxf(0.0f, shake - dt * 3.0f);
     }
     rv.fovy = 62.0f + 8.0f * fp - (22.0f + 8.0f * fp) * aimZoom;  // a bit wider on deck; RMB still zooms
-    if (getenv("BS_DECKLOG") && fp > 0.99f && myId >= 0 && view[myId].present) {
+    if (getenv("BS_DECKBLOCK") && fp > 0.99f && myId >= 0 && view[myId].present) {  // (heavy: it hitches)
         // (testing the deck view: how much of the far sea and sky in the middle of the screen our own ship hides, from
         // where we stand and from other spots on the quarterdeck, looking the same way; every half second)
         static double t0 = 0;
@@ -2195,9 +2211,9 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         if (figInView) framesFig++;
         figInView = false;
         enum { kCands = 7 };
-        static const char* const kName[kCands] = {"now", "old (1.5 m to starboard)", "rail we look over", "far rail", "centreline",
+        static const char* const kName[kCands] = {"now", "old (1.5 m to starboard)", "rail we look over", "0.8 m from the rail", "1.4 m from the rail",
                                                    "half a metre from the rail", "rail, 1 m higher"};
-        static long nBlocked[kCands], nSail[kCands], nRays[kCands];
+        static long nBlocked[kCands], nSail[kCands], nRig[kCands], nRays[kCands];
         if (GetTime() - t0 > 0.5) {
             t0 = GetTime();
             const int GX = 16, GY = 9;
@@ -2227,8 +2243,8 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
                 float qd = M.DeckAt(x, z);
                 return HullToWorld(me.pos, me.rot, {x, (M.Walkable(qd) ? qd : hull::DeckHeight(-11.0f)) + (1.7f + up) / es, z}, es);
             };
-            Vector3 org[kCands] = {rv.pos, spot(deckEye.x, z0, 0.0f), spot(rail(look, z0), z0, 0.0f), spot(rail(-look, z0), z0, 0.0f),
-                                   spot(0.0f, z0, 0.0f), spot(rail(look, z0) + look * 0.55f / es, z0, 0.0f), spot(rail(look, z0), z0, 1.0f)};
+            Vector3 org[kCands] = {rv.pos, spot(deckEye.x, z0, 0.0f), spot(rail(look, z0), z0, 0.0f), spot(rail(look, z0) + look * 0.3f / es, z0, 0.0f),
+                                   spot(rail(look, z0) - look * 0.3f / es, z0, 0.0f), spot(rail(look, z0) + look * 0.55f / es, z0, 0.0f), spot(rail(look, z0), z0, 1.0f)};
             const float sea = Ocean().Height(rv.pos.x, rv.pos.z);
             for (int c = 0; c < kCands; ++c) {
                 Ray rays[GX * GY];
@@ -2237,7 +2253,7 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
                     if (dirs[k].y > -(org[c].y - sea) / 60.0f) rays[n++] = {org[c], dirs[k]};
                 int hit[GX * GY];
                 M.RayHits(rays, n, ShipModelMatrix(me.pos, me.rot, es), 60.0f, hit);
-                for (int k = 0; k < n; ++k) { nBlocked[c] += hit[k] != 0; nSail[c] += hit[k] == 1; }
+                for (int k = 0; k < n; ++k) { nBlocked[c] += hit[k] == 1 || hit[k] == 2; nSail[c] += hit[k] == 1; nRig[c] += hit[k] == 3; }
                 nRays[c] += n;
             }
             static int prints = 0;
@@ -2245,7 +2261,9 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
                 printf("[deckblock] eye in the sea %.1f%% of frames, a sailor within 7 m in the middle of the view %.1f%%\n",
                        100.0 * framesUnder / fmax(1.0, (double)framesAll), 100.0 * framesFig / fmax(1.0, (double)framesAll));
                 for (int c = 0; c < kCands; ++c)
-                    printf("[deckblock] %-26s hides %4.1f%% of the far view (sails %4.1f%%)\n", kName[c], 100.0 * nBlocked[c] / fmax(1.0, (double)nRays[c]), 100.0 * nSail[c] / fmax(1.0, (double)nRays[c]));
+                    printf("[deckblock] %-26s hides %4.1f%% of the far view (sails %4.1f%%), rigging in front of %4.1f%%\n", kName[c],
+                           100.0 * nBlocked[c] / fmax(1.0, (double)nRays[c]), 100.0 * nSail[c] / fmax(1.0, (double)nRays[c]),
+                           100.0 * nRig[c] / fmax(1.0, (double)nRays[c]));
                 fflush(stdout);
             }
         }

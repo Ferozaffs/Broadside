@@ -655,7 +655,6 @@ void ShipModel::RayHits(const Ray* rays, int n, const Matrix& model, float maxDi
     Matrix m = MatrixMultiply(extFix, model), inv = MatrixInvert(m);
     std::vector<float> best(n, 1e9f);
     for (int i = 0; i < M.meshCount; ++i) {
-        if (isRope[i]) continue;
         BoundingBox bb = GetMeshBoundingBox(M.meshes[i]);
         for (int k = 0; k < n; ++k) {
             // into the model's own space (the hit distance comes back in its units: compare in world units after)
@@ -667,7 +666,7 @@ void ShipModel::RayHits(const Ray* rays, int n, const Matrix& model, float maxDi
             RayCollision h = GetRayCollisionMesh(r, M.meshes[i], MatrixIdentity());
             if (!h.hit) continue;
             float d = h.distance / fmaxf(unit, 1e-6f);
-            if (d < maxDist && d < best[k]) { best[k] = d; out[k] = isSail[i] ? 1 : 2; }
+            if (d < maxDist && d < best[k]) { best[k] = d; out[k] = isSail[i] ? 1 : isRope[i] ? 3 : 2; }
         }
     }
 }

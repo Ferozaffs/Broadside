@@ -318,11 +318,19 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
       rail, goes 80% see-through (two passes: solid parts with depth, then the faint ones without; a 4x4 dither
       decides solid or faint, so the faint ones are all equally faint and their order doesn't matter), and a soft
       vignette darkens the edges. BS_NOGLASS.
-- BS_DECKLOG=1 (testing): heel / tilt / jitter every second, and every 5 s how much of the far view our own ship
-  hides from where we stand and from other spots on the quarterdeck (ShipModel::RayHits), and how often the eye
-  is in the sea. Eye in the sea: no worse than before (0-2% in storms).
-- Next: gun crews kneeling at the rail can stand right in front of the captain (figures are only culled within
-  2.2 m); the cutter's sails still hide ~25% (it shares the frigate's rig at 0.7 scale).
+- BS_DECKLOG=1 (testing): heel / tilt / jitter (ours and the nearest other ship's) every second. BS_DECKBLOCK=1 adds,
+  every 5 s, how much of the far view our own ship hides (sails / anything solid) and how much has rigging in front
+  (ShipModel::RayHits) from where we stand and from other spots on the quarterdeck, how often the eye is in the sea
+  and how often a sailor within 7 m stands in the middle of the view. It casts ~1000 rays twice a second and hitches
+  the frame, so leave it off when measuring jitter.
+- Findings: other ships (snapshot interpolation) are smooth, 3-6 cm a frame. The eye is in the sea no more than
+  before (0-2% in storms). Rigging counted too, the rail still wins (hull/masts/sails + rigging, cutter 50% -> 38%,
+  frigate 44% -> 33%). Closer to the rail is better on every count (0.8 m: about 5 points less again, 0.55 m: 10),
+  but from closer than ~1.1 m the rail itself drops out of the bottom of the screen and she feels like she's not
+  there; kept 1.1 m. Further forward on the cutter puts the eye in the mizzen shrouds (rigging in front of 63%);
+  further aft is behind the spanker. A sailor within 7 m in the middle of the view: 8-21% of frames.
+- Next: gun crews kneeling at the rail can still stand right in front of the captain when not zooming (figures are
+  only culled within 2.2 m); the cutter's sails hide more (it shares the frigate's rig at 0.7 scale).
 
 ## More race courses, menu, maelstrom treasure (2026-11-15)
 - [x] Four courses (ARENA_STRAIT .. ARENA_ZIGZAG, protocol v17): the strait's plan now sits on a spine (s along it, n
