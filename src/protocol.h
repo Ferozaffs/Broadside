@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 18;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries
+constexpr uint16_t PROTOCOL_VERSION = 19;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, 64 ships
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 

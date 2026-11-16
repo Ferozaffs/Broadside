@@ -401,6 +401,23 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - Not done: editing the meshes freely / splicing hull and rig between the models (the line ship is one atlas without
   separate hull and rig parts; see the reply of 2026-11-16).
 
+## Roll, realistic mode, no bot limit (2026-11-16, user: "Roll is still too much especially when hit by cannon balls tune roll and also spin back a little. We also want to introduce a realistic mode where ship behaves closer to reality except wind direction. Also remove the bot/player limit")
+- [x] Roll: a ball hit keeps its whole shove but only 15% of its rolling effect (yaw 70%, pitch 50%); extra roll damping
+  and righting about the keel afloat, and the same levelling in the air (a point-blank broadside threw a cutter clear
+  and it kept rolling); less lean in turns (heel 0.03 -> 0.012). `BS_ROLLTEST=1 broadside --simtest` (4-gun broadside into
+  the beam, then hard over): cutter 89 -> 18 deg, frigate 76 -> 9, ship of the line 18 -> 5; turn heel 31-35 -> 14-21 deg.
+  Full simtest vs v0.13: jumps and duels alike, the worst roll in the jump run up.y 0.34 -> 0.94. Tuning switches:
+  BS_HEEL, BS_ROLLDAMP, BS_ROLLRIGHT.
+- [x] Realistic handling (host option, `--realistic`, protocol 19): World::Real() (the Isles only). Top speed x0.21,
+  1.5 m/s astern, drive 0.6 m/s^2 / scale^2, turn rate x0.07 needing way on, slow yaw response, no planing throw, no
+  breach kick, no slide carry, ball shove x0.02, recoil x0.1. Bots pace escorts / lead the treasure carrier by the real
+  speeds. `BS_HANDLINGTEST=1`: cutter 14 kn, frigate 12.5, line 10; 60/95/160 m turning circles. Realistic duels
+  (`BS_ONLYDUELS=1 BS_NOMODES=1 BS_REAL=1`) end in 1.5-2.5 min, no groundings. Host + autopilot client: prediction
+  error avg 1 cm.
+- [x] Up to 64 ships (MAX_SHIPS 32 -> 64, crew 24 -> 32, 64 peers), bot stepper to 63, 24 bot names then numbered;
+  TAB scores squeeze/cut to fit; a big race field lines up six abreast. `BS_CROWDTEST=1`: 63 bots, server tick ~3 ms.
+  40 bots in practice: 46-61 fps on the GTX 1060. A snapshot of 64 ships is ~7 KB (30 Hz): ~1.8 Mbit/s per client.
+
 ## Rooms (2026-11-16, user: "online play just like i did in qwop-row with room names")
 - [x] src/rooms.cpp: the host's server lists its room on PeerJS's cloud signalling server (wss://0.peerjs.com, as qwop-row's
   PeerJS does) as "broadside-<name>"; a joiner sends the room its card (protocol version, public address from STUN

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
 
 static float Heading(const Ship& s) {
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
@@ -92,8 +93,183 @@ static int LiveryTest() {
     return fails ? 1 : 0;
 }
 
+static double GetTimeNow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+// how far a hull heels and swings: sailing straight, then a 4-gun broadside into the beam, then a hard turn
+static float RollDeg(const Ship& s) { return asinf(Clamp(Vector3RotateByQuaternion({1, 0, 0}, s.rot).y, -1.0f, 1.0f)) * RAD2DEG; }
+static int RollTest() {
+    bool real = getenv("BS_REAL") != nullptr;
+    for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+        World g;
+        g.rounds = false;
+        g.Init(7, (uint8_t)(getenv("BS_WEATHER") ? atoi(getenv("BS_WEATHER")) : 0));
+        g.realistic = real;
+        int a = g.AddShip("target", false, cls), b = g.AddShip("gunner", false, SC_FRIGATE);
+        Ship& A = g.ships[a];
+        g.ships[b].pos = {600, g.ocean.Height(600, 0), 0};
+        g.ships[b].input.sail = 0;
+        A.pos = {0, g.ocean.Height(0, 0), 0};
+        A.rot = QuaternionIdentity();
+        A.vel = {0, 0, real ? 4.0f : 12.0f};
+        A.input.sail = real ? 0.6f : 0.45f;
+        float calmMax = 0, hitMax = 0, lastBig = 0, yaw0 = 0, yawMax = 0, rateMax = 0, turnMax = 0;
+        for (int i = 0; i < 60 * 22; ++i) {
+            float t = i / 60.0f;
+            if (i == 60 * 6) yaw0 = Heading(A);
+            if (i >= 60 * 6 && i < 60 * 6 + 4) {  // a broadside from port, amidships, a little above the waterline
+                float S = ClassOf(cls).scale;
+                Vector3 r = Vector3RotateByQuaternion({1, 0, 0}, A.rot);
+                Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, A.rot);
+                float z = (-7.5f + 5.0f * (i - 60 * 6)) * S;
+                Ball bl;
+                bl.owner = (uint8_t)b;
+                bl.age = 1.0f;
+                bl.pos = Vector3Add(A.pos, Vector3Add(Vector3Scale(r, 14.0f * S), Vector3Add(Vector3Scale(f, z), {0, 1.2f * S, 0})));
+                bl.vel = Vector3Add(A.vel, Vector3Scale(r, -95.0f));
+                g.balls.push_back(bl);
+            }
+            if (i == 60 * 14) A.input.rudder = 1.0f;
+            g.Step();
+            g.events.clear();
+            g.ships[b].hp = g.ships[b].maxHp;
+            A.hp = A.maxHp;
+            float roll = fabsf(RollDeg(A));
+            if (t >= 3 && t < 6) calmMax = fmaxf(calmMax, roll);
+            if (t >= 6 && t < 14) {
+                hitMax = fmaxf(hitMax, roll);
+                if (roll > calmMax + 3.0f) lastBig = t - 6;
+                float dy = Heading(A) - yaw0;
+                while (dy > PI) dy -= 2 * PI;
+                while (dy < -PI) dy += 2 * PI;
+                yawMax = fmaxf(yawMax, fabsf(dy) * RAD2DEG);
+                rateMax = fmaxf(rateMax, fabsf(Vector3DotProduct(A.angVel, Vector3RotateByQuaternion({0, 1, 0}, A.rot))) * RAD2DEG);
+            }
+            if (t >= 15) turnMax = fmaxf(turnMax, roll);
+            if (getenv("BS_ROLLDBG") && atoi(getenv("BS_ROLLDBG")) == cls && i % 6 == 0 && t > 5.8f && t < 20.0f)
+                printf("    t=%5.2f roll %6.1f yaw %6.1f vf %5.1f vside %6.1f y-wl %5.2f sub %.2f angV %5.2f %5.2f %5.2f\n", t, RollDeg(A), Heading(A) * RAD2DEG, Fwd(A),
+                       Vector3DotProduct(A.vel, Vector3RotateByQuaternion({1, 0, 0}, A.rot)), A.pos.y - g.ocean.Height(A.pos.x, A.pos.z), A.submerged, A.angVel.x, A.angVel.y, A.angVel.z);
+        }
+        printf("%-16s calm roll %4.1f deg | hit: roll %5.1f deg, settled after %4.1f s, swung %5.1f deg (peak %5.1f deg/s) | hard turn: heel %4.1f deg, speed %4.1f\n",
+               ClassOf(cls).name, calmMax, hitMax, lastBig, yawMax, rateMax, turnMax, Fwd(A));
+    }
+    return 0;
+}
+
+// arcade vs realistic handling: from rest to full sail, then hard over, then sails furled
+static int HandlingTest() {
+    for (int real = 0; real < 2; ++real) {
+        printf("%s\n", real ? "REALISTIC" : "ARCADE");
+        for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+            World g;
+            g.rounds = false;
+            g.Init(7);
+            g.realistic = real != 0;
+            int a = g.AddShip("s", false, cls);
+            Ship& A = g.ships[a];
+            A.pos = {-300, g.ocean.Height(-300, 0), 0};  // (along the bay, clear of the stacks)
+            A.rot = QuaternionFromAxisAngle({0, 1, 0}, PI * 0.5f);
+            A.vel = {0, 0, 0};
+            A.input.sail = 1.0f;
+            float top = 0, t90 = -1, maxAir = 0, maxPitch = 0, vSum = 0;
+            int vN = 0;
+            const int run = real ? 60 : 15;
+            for (int i = 0; i < 60 * run; ++i) {
+                g.Step();
+                g.events.clear();
+                top = fmaxf(top, Fwd(A));
+                maxAir = fmaxf(maxAir, A.airTime);
+                if (i > 60 * (run - 15)) { vSum += Fwd(A); ++vN; }
+            }
+            {  // when it got to 90% of the speed it ended at: the same run again
+                World h;
+                h.rounds = false;
+                h.Init(7);
+                h.realistic = real != 0;
+                int b = h.AddShip("s", false, cls);
+                Ship& B = h.ships[b];
+                B.pos = {-300, h.ocean.Height(-300, 0), 0};
+                B.rot = QuaternionFromAxisAngle({0, 1, 0}, PI * 0.5f);
+                B.vel = {0, 0, 0};
+                B.input.sail = 1.0f;
+                for (int i = 0; i < 60 * run && t90 < 0; ++i) {
+                    h.Step();
+                    h.events.clear();
+                    if (Fwd(B) > 0.9f * vSum / vN) t90 = i / 60.0f;
+                }
+            }
+            float v0 = vSum / vN, h0 = Heading(A), turned = 0, prevH = h0;
+            Vector2 p0 = {A.pos.x, A.pos.z};
+            float far = 0, vTurnSum = 0;
+            A.input.rudder = 1.0f;
+            const int turnT = real ? 40 : 6;
+            for (int i = 0; i < 60 * turnT; ++i) {
+                g.Step();
+                g.events.clear();
+                float hh = Heading(A), dh = hh - prevH;
+                while (dh > PI) dh -= 2 * PI;
+                while (dh < -PI) dh += 2 * PI;
+                turned += dh;
+                prevH = hh;
+                far = fmaxf(far, Vector2Distance(p0, {A.pos.x, A.pos.z}));
+                vTurnSum += Fwd(A);
+                maxPitch = fmaxf(maxPitch, fabsf(asinf(Clamp(Vector3RotateByQuaternion({0, 0, 1}, A.rot).y, -1.0f, 1.0f))) * RAD2DEG);
+                if (getenv("BS_HANDDBG") && atoi(getenv("BS_HANDDBG")) == cls && real && i % 30 == 0)
+                    printf("    t=%4.1f vf %5.2f yaw %6.1f roll %5.1f pitch %5.1f sub %.2f y-wl %5.2f\n", i / 60.0f, Fwd(A), hh * RAD2DEG, RollDeg(A),
+                           asinf(Clamp(Vector3RotateByQuaternion({0, 0, 1}, A.rot).y, -1.0f, 1.0f)) * RAD2DEG, A.submerged, A.pos.y - g.ocean.Height(A.pos.x, A.pos.z));
+            }
+            float rate = fabsf(turned) / turnT * RAD2DEG, vTurn = vTurnSum / (60 * turnT);
+            A.input.rudder = 0.0f;
+            A.input.sail = 0.0f;
+            Vector2 p1 = {A.pos.x, A.pos.z};
+            float tStop = -1;
+            for (int i = 0; i < 60 * 120 && tStop < 0; ++i) {
+                g.Step();
+                g.events.clear();
+                if (Fwd(A) < 0.5f) tStop = i / 60.0f;
+            }
+            printf("  %-16s top %5.1f m/s (%4.1f kn), 90%% after %5.1f s, longest air %.2f s | hard over: %5.1f deg/s averaging %4.1f m/s (circle ~%4.0f m across) | "
+                   "furled: drifts to a stop in %5.1f s, %4.0f m\n",
+                   ClassOf(cls).name, v0, v0 * 1.944f, t90, maxAir, rate, vTurn, far, tStop, Vector2Distance(p1, {A.pos.x, A.pos.z}));
+        }
+    }
+    return 0;
+}
+
 int RunSimTest() {
     if (getenv("BS_LIVERYTEST")) return LiveryTest();
+    if (getenv("BS_HANDLINGTEST")) return HandlingTest();
+    if (getenv("BS_CROWDTEST")) {  // a full house: as many bots as there are berths, with and without fleets; how long a tick takes
+        for (int fleets = 0; fleets < 2; ++fleets) {
+            World g;
+            g.rounds = false;
+            g.Init(11, 0, 0, MODE_FFA, fleets != 0);
+            g.realistic = getenv("BS_REAL") != nullptr;
+            int added = 0;
+            for (int i = 0; i < MAX_SHIPS - 1; ++i)
+                if (g.AddShip(TextFormat("bot%d", i), true) >= 0) ++added; else break;
+            int ships = 0;
+            for (const Ship& s : g.ships) ships += s.active ? 1 : 0;
+            int kills = 0, hits = 0;
+            double worst = 0, sum = 0;
+            const int T = 60 * 120;
+            for (int i = 0; i < T; ++i) {
+                double t0 = GetTimeNow();
+                g.Step();
+                double dt = GetTimeNow() - t0;
+                worst = std::max(worst, dt);
+                sum += dt;
+                for (const GameEvent& e : g.events) {
+                    kills += e.type == EventType::Kill;
+                    hits += e.type == EventType::Hit;
+                }
+                g.events.clear();
+            }
+            printf("crowd%s: %d captains, %d ships, 2 min: %d hits, %d sinkings, tick avg %.2f ms worst %.2f ms, %zu balls in the air at the end\n",
+                   fleets ? " with fleets" : "", added, ships, hits, kills, sum / T * 1000.0, worst * 1000.0, g.balls.size());
+        }
+        return 0;
+    }
+    if (getenv("BS_ROLLTEST")) return RollTest();
     if (getenv("BS_ONLYDUELS")) goto duels;
     if (getenv("BS_HOOKTEST")) {  // a frigate hooks a ship of the line (and a cutter) 120 m off; both sit still
         for (int tc : {SC_LINE, SC_CUTTER}) {
@@ -767,6 +943,7 @@ duels:
                     World g;
                     g.rounds = false;
                     g.Init(1000 + k * 7919 + a * 31 + b * 131);
+                    g.realistic = getenv("BS_REAL") != nullptr;  // (BS_REAL=1: the duels with realistic handling)
                     // alternate who joins first so neither always spawns in the same place
                     int ia = k % 2 ? g.AddShip("A", true, a) : -1;
                     int ib = g.AddShip("B", true, b);

@@ -728,12 +728,13 @@ const ShipPhys& Phys(int cls = SC_FRIGATE) {
 Vector3 ToBody(Quaternion q, Vector3 v) { return Vector3RotateByQuaternion(v, QuaternionInvert(q)); }
 Vector3 ToWorld(Quaternion q, Vector3 v) { return Vector3RotateByQuaternion(v, q); }
 
-void ApplyImpulse(Ship& s, Vector3 J, Vector3 at) {
+// spin: how much of the turning effect to keep about each body axis (x pitch, y yaw, z roll)
+void ApplyImpulse(Ship& s, Vector3 J, Vector3 at, Vector3 spin = {1, 1, 1}) {
     const ShipPhys& P = Phys(s.cls);
     s.vel = Vector3Add(s.vel, Vector3Scale(J, 1.0f / P.mass));
     Vector3 r = Vector3Subtract(at, s.pos);
     Vector3 tb = ToBody(s.rot, Vector3CrossProduct(r, J));
-    Vector3 dw = {tb.x / P.inertia.x, tb.y / P.inertia.y, tb.z / P.inertia.z};
+    Vector3 dw = {tb.x / P.inertia.x * spin.x, tb.y / P.inertia.y * spin.y, tb.z / P.inertia.z * spin.z};
     s.angVel = Vector3Add(s.angVel, ToWorld(s.rot, dw));
 }
 
@@ -1225,7 +1226,7 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     CannonShot(s.cls, s.pos, s.rot, s.vel, s.angVel, shot.ownAim ? shot.aim : s.input.aim, side, shot.index, muzzle, v, shot.yaw, shot.elev);
     // recoil (yes, you can broadside yourself sideways in mid-air)
     Vector3 dir = Vector3Normalize(Vector3Subtract(v, s.vel));
-    if (shot.recoil) ApplyImpulse(s, Vector3Scale(dir, -tune::recoilImpulse * (side == 2 ? 0.5f : ClassOf(s.cls).scale)), muzzle);
+    if (shot.recoil) ApplyImpulse(s, Vector3Scale(dir, -tune::recoilImpulse * (Real() ? tune::realRecoil : 1.0f) * (side == 2 ? 0.5f : ClassOf(s.cls).scale)), muzzle);
     if (!authoritative) return;  // prediction only wants the recoil
     Ball b;
     b.id = nextBallId++;
@@ -1250,11 +1251,13 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
 static float EnvF(const char* n, float def) { const char* e = getenv(n); return e ? (float)atof(e) : def; }
 static const float kSlide = EnvF("BS_SLIDE", tune::slideCarry), kAirLevel = EnvF("BS_AIRLEVEL", tune::airPitchLevel);
 static const bool kOldDrag = getenv("BS_OLDDRAG") != nullptr;
+static const float kHeel = EnvF("BS_HEEL", tune::heel), kRollDamp = EnvF("BS_ROLLDAMP", tune::rollDamp), kRollRight = EnvF("BS_ROLLRIGHT", tune::rollRight);
 
 void World::StepShip(Ship& s, float dt) {
     const ShipPhys& P = Phys(s.cls);
     const ShipClass& C = ClassOf(s.cls);
     const float g = tune::gravity * tune::shipGravityScale;
+    const bool real = Real();  // realistic handling: no planing, no breach kick, real speeds and turning
 
     float targetBuoy = s.alive ? 1.0f : 0.55f;  // wrecks sink slowly
     if (ocean.Vortex()) {  // the maelstrom's eye: the water there won't hold a hull up
@@ -1308,7 +1311,7 @@ void World::StepShip(Ship& s, float dt) {
             Vector2 dir = Vector2Scale(vh, 1.0f / sp);
             const float e = 2.0f;
             float slope = (ocean.Height(mid.x + dir.x * e, mid.z + dir.y * e) - ocean.Height(mid.x - dir.x * e, mid.z - dir.y * e)) / (2 * e);
-            float plan = (s.leader >= 0 ? 0.5f : 1.0f) * C.planing;  // escorts skim, captains fly; small hulls fly more
+            float plan = (s.leader >= 0 ? 0.5f : 1.0f) * C.planing * (real ? 0.0f : 1.0f);  // escorts skim, captains fly; small hulls fly more
             wv.y += fminf(fmaxf(0.0f, slope * sp) * tune::planing * plan, tune::planingMax);
         }
         Vector3 rv = Vector3Subtract(pv, wv);
@@ -1336,7 +1339,7 @@ void World::StepShip(Ship& s, float dt) {
     s.submerged = subVol / P.totalVolume;
     // Breach: the hull just cleared the water on the way up. Kick it on up (gravity is full strength,
     // so this is what keeps the jumps big without the floaty hang time). Escorts don't get it.
-    if (s.alive && s.leader < 0 && prevSub > 0.0f && s.submerged <= 0.0f && s.vel.y > tune::breachMinVy) {
+    if (!real && s.alive && s.leader < 0 && prevSub > 0.0f && s.submerged <= 0.0f && s.vel.y > tune::breachMinVy) {
         s.vel.y += fminf(s.vel.y * tune::breachGain, tune::breachMax);
         Vector3 f = ToWorld(s.rot, {0, 0, 1});
         Vector2 fh = Vector2Normalize({f.x, f.z});
@@ -1366,7 +1369,7 @@ void World::StepShip(Ship& s, float dt) {
     // drive along the horizontal heading, so a nose-down landing doesn't motor the ship to the bottom
     Vector3 fwdH = Vector3Normalize({fwd.x, 0.0f, fwd.z});
     // came down tail-first while still spinning, with the sails drawing: the hull keeps swinging round
-    bool swinging = s.alive && vf < -4.0f && s.sail > 0.2f && fabsf(yawRate) > 0.6f && inWater > 0.3f;
+    bool swinging = !real && s.alive && vf < -4.0f && s.sail > 0.2f && fabsf(yawRate) > 0.6f && inWater > 0.3f;
     if (s.alive) {
         // speed controller along the keel; still pushes a little in the air (it's that kind of game)
         Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
@@ -1376,12 +1379,13 @@ void World::StepShip(Ship& s, float dt) {
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.slowTimer > 0.0f) top *= tune::raceSlow;  // crippled in a race
+        if (real) top *= tune::realSpeed;
         float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
-        float vmax = (s.sail >= 0.0f ? top * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : C.reverseSpeed) * boost;
+        float vmax = (s.sail >= 0.0f ? top * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : real ? tune::realReverse : C.reverseSpeed) * boost;
         if (fabsf(s.sail) > 0.02f) {
-            float acc = tune::driveAccel * boost;
+            float acc = (real ? tune::realAccel / (C.scale * C.scale) : tune::driveAccel) * boost;
             if (swinging) acc *= 0.25f;  // let the swing carry the way round instead of braking it dead
-            float a = Clamp((s.sail * vmax - vf) * tune::driveGain, -acc, acc);
+            float a = Clamp((s.sail * vmax - vf) * (real ? tune::realGain : tune::driveGain), -acc, acc);
             F = Vector3Add(F, Vector3Scale(fwdH, a * P.mass * inWater * sailsUp));
         }
         // a hull driven right under sheds its way fast (otherwise the momentum of a nose-down hull
@@ -1397,7 +1401,7 @@ void World::StepShip(Ship& s, float dt) {
             float vlG = Vector3DotProduct(s.vel, right);
             carry = vl * vlG > 0.0f ? fminf(fabsf(vl), fabsf(vlG)) * tune::keelGrip * P.mass * inWater : 0.0f;
         }
-        F = Vector3Add(F, Vector3Scale(fwdH, carry * kSlide * (vf >= 0.0f ? 1.0f : -1.0f)));
+        F = Vector3Add(F, Vector3Scale(fwdH, carry * (real ? 0.0f : kSlide) * (vf >= 0.0f ? 1.0f : -1.0f)));
         // Rudder: a torque at the stern, fighting yaw resistance from however much hull is wet.
         // Floating level the two balance at tune::turnRate. When the bow lifts off a crest mid-carve
         // the rudder still bites but the resistance is gone, so the yaw rate whips up right at
@@ -1405,16 +1409,18 @@ void World::StepShip(Ship& s, float dt) {
         float steerSign = vf < -1.0f ? -1.0f : 1.0f;  // reversed going astern, like a real rudder
         float spdF = Clamp(fabsf(vf) / 10.0f, 0.0f, 1.0f);
         float authority = (C.turnRateSlow + (C.turnRate - C.turnRateSlow) * spdF) * (s.helmed ? tune::helmTurn : 1.0f);
+        if (real)  // a real rudder needs water running past it: no way on, no turning; its full bite from ~60% of top speed
+            authority = C.turnRate * tune::realTurn * Clamp(fabsf(vf) / fmaxf(top * 0.6f, 1.0f), 0.0f, 1.0f) * (s.helmed ? tune::helmTurn : 1.0f);
         float wet = Clamp(subVol / P.restVol, 0.0f, 1.0f);
         float bowWet = Clamp(bowVol / P.bowRestVol, 0.0f, 1.0f);
         float sternWet = Clamp(sternVol / P.sternRestVol, 0.0f, 1.0f);
         float resist = 0.2f * wet + 0.8f * bowWet;
-        alpha = Vector3Add(alpha, Vector3Scale(up, tune::yawGrip * (-s.rudder * steerSign * authority * sternWet * (1.0f + tune::sternKick * Clamp((0.3f - bowWet) / 0.3f, 0.0f, 1.0f)) - yawRate * resist)));
+        alpha = Vector3Add(alpha, Vector3Scale(up, (real ? tune::realYawGrip : tune::yawGrip) * (-s.rudder * steerSign * authority * sternWet * (1.0f + (real ? 0.0f : tune::sternKick) * Clamp((0.3f - bowWet) / 0.3f, 0.0f, 1.0f)) - yawRate * resist)));
         // a hard turn bleeds way (the rudder and the hull broadside-on to the water)
         if (vf > 0.0f) F = Vector3Add(F, Vector3Scale(fwdH, -vf * tune::turnDrag * fminf(fabsf(yawRate), authority) * fabsf(s.rudder) * inWater * P.mass));  // (a landing's leftover spin doesn't count)
         if (swinging) alpha = Vector3Add(alpha, Vector3Scale(up, (yawRate > 0.0f ? 1.0f : -1.0f) * 4.0f));
         // lean out of the turn
-        alpha = Vector3Add(alpha, Vector3Scale(fwd, tune::heel * yawRate * vf * inWater));
+        alpha = Vector3Add(alpha, Vector3Scale(fwd, kHeel * yawRate * vf * inWater));
         // a little air control: the rudder still nudges the yaw once the hull is clear of the water,
         // and very fast spins bleed off so a jump gives a 360 or two rather than a blender
         float airborne = 1.0f - Clamp(s.submerged * 25.0f, 0.0f, 1.0f);
@@ -1438,6 +1444,15 @@ void World::StepShip(Ship& s, float dt) {
     // roll/pitch damping and a gentle self-righting assist
     Vector3 nonYaw = Vector3Subtract(s.angVel, Vector3Scale(up, yawRate));
     alpha = Vector3Add(alpha, Vector3Scale(nonYaw, -(0.9f * inWater + 0.05f)));
+    // and more about the keel: she heels and comes back rather than rolling on her beam ends
+    // (only while she's the right way up: a capsized hull is the assist below's job)
+    if (up.y > 0.3f) {
+        float rollRate = Vector3DotProduct(s.angVel, fwd);
+        float heelNow = Vector3CrossProduct(up, {0, 1, 0}).x * fwd.x + Vector3CrossProduct(up, {0, 1, 0}).z * fwd.z;
+        float air = 1.0f - inWater;  // thrown clear (a broadside into a cutter): she levels out in the air like she does in pitch
+        alpha = Vector3Add(alpha, Vector3Scale(fwd, inWater * (heelNow * kRollRight - rollRate * kRollDamp) +
+                                                        air * (heelNow * tune::airRollLevel - rollRate * tune::airRollDamp)));
+    }
     Vector3 rightAxis = Vector3CrossProduct(up, {0, 1, 0});
     if (up.y < -0.2f && Vector3Length(rightAxis) < 0.5f) rightAxis = fwd;  // fully capsized
     float dunked = Clamp(s.depthBelow / 2.0f, 0.0f, 1.0f);  // level out under water so she pops straight up
@@ -1733,7 +1748,7 @@ void World::UpdateBalls(float dt) {
             bool rake = horiz > 0.5f && fabsf(bd.z) / horiz > tune::rakeCos && S > 0.85f;  // a cutter's deck is too short to rake
             float mult = speedF * plunge * (b.airShot ? 1.5f : 1.0f) * (b.inWater ? 0.6f : 1.0f) * (rake ? 1.0f + tune::rakeBonus * Clamp((S - 0.7f) / 0.6f, 0.0f, 1.0f) : 1.0f);
             float dmg = tune::ballDamage * mult * b.dmgMul;
-            ApplyImpulse(sh, Vector3Scale(Vector3Normalize(b.vel), tune::ballKnockback * speedF), hitPos);
+            ApplyImpulse(sh, Vector3Scale(Vector3Normalize(b.vel), tune::ballKnockback * speedF * (Real() ? tune::realKnock : 1.0f)), hitPos, {tune::hitPitch, tune::hitYaw, tune::hitRoll});
             GameEvent e{EventType::Hit};
             e.a = b.owner;
             e.b = sh.id;
@@ -1895,7 +1910,7 @@ void World::BotThink(Ship& s, float dt) {
             float vCap = Vector3DotProduct(cap->vel, cf);
             // full sail while behind and well off station; otherwise match the captain, easing off when ahead
             in.sail = (ds > 50.0f && along > 0.0f) ? 1.0f
-                                                   : Clamp((vCap + along * 0.35f) / (tune::topSpeed * tune::escortSpeed), 0.25f, 1.0f);  // never astern: that flips the rudder and they flounder
+                                                   : Clamp((vCap + along * 0.35f) / (tune::topSpeed * tune::escortSpeed * (Real() ? tune::realSpeed : 1.0f)), 0.25f, 1.0f);  // never astern: that flips the rudder and they flounder
             // Steer for a point on the captain's track ahead of the slot. It always stays ahead of us
             // along his heading, so an escort that overshoots eases off instead of turning round.
             float look = fmaxf(40.0f, -along + 50.0f);
@@ -1935,7 +1950,8 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
             if (flat(goal, s.pos) < 60.0f) in.sail = 0.3f;
         } else if (dTo > 230.0f && target == car) {
-            float lead = Clamp(dTo / fmaxf(ClassOf(s.cls).topSpeed - 15.0f, 5.0f), 0.0f, 10.0f);  // closing speed ~ our speed minus its
+            float sk = Real() ? tune::realSpeed : 1.0f;
+            float lead = Clamp(dTo / fmaxf((ClassOf(s.cls).topSpeed - 15.0f) * sk, 5.0f * sk), 0.0f, 10.0f / sk);  // closing speed ~ our speed minus its
             goal = Vector3Add(car->pos, Vector3Scale({car->vel.x, 0, car->vel.z}, lead));
             haveGoal = true;
             fight = false;
@@ -2830,13 +2846,17 @@ void World::Step() {
 // ---- race -------------------------------------------------------------------------
 // The start: four abreast in the start harbour's mouth, rows behind, all facing the way to the first gate.
 void World::PlaceOnGrid(Ship& s) {
-    int k = 0;
-    for (const Ship& o : ships)
+    int k = 0, all = 0;
+    for (const Ship& o : ships) {
         if (o.active && o.leader < 0 && o.id < s.id) ++k;
+        if (o.active && o.leader < 0) ++all;
+    }
     const Vector2 d = raceStartDir, n = {-d.y, d.x};
-    const int row = k / 4, col = k % 4;
-    float x = raceStart.x - d.x * row * 62.0f + n.x * (col - 1.5f) * 38.0f;  // (room for a ship of the line in every slot)
-    float z = raceStart.y - d.y * row * 62.0f + n.y * (col - 1.5f) * 38.0f;
+    const int cols = all > 16 ? 6 : 4;  // a big field lines up six abreast, a little tighter
+    const float wide = cols == 6 ? 31.0f : 38.0f;
+    const int row = k / cols, col = k % cols;
+    float x = raceStart.x - d.x * row * 62.0f + n.x * (col - (cols - 1) * 0.5f) * wide;  // (room for a ship of the line in every slot)
+    float z = raceStart.y - d.y * row * 62.0f + n.y * (col - (cols - 1) * 0.5f) * wide;
     s.pos = {x, ocean.Height(x, z) + 1.0f, z};
     s.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(d.x, d.y));
     s.vel = {0, 0, 0};

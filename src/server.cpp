@@ -5,13 +5,16 @@
 #include <cstdio>
 #include <cstdlib>
 
-static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue"};
+static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy", "Barnacle Bess", "Old Salt", "Kraken Kate", "Dread Ned", "Salty Sue",
+                                  "Peg-leg Pete", "Rusty Anne", "Cpt. Scurvy", "One-eyed Jack", "Bosun Bart", "Stormy Stella", "Gunner Gus", "Long Tom",
+                                  "Smoky Joe", "Mistress Marlin", "Cpt. Cutlass", "Nell the Knot", "Squid Vicious", "Lady Leeward", "Fishface Finn", "Black Molly"};
+static constexpr int kBotNameCount = sizeof(kBotNames) / sizeof(kBotNames[0]);
 
 bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets, uint8_t allowedCls,
-                       bool deckOnly, bool skills, int arena) {
+                       bool deckOnly, bool skills, int arena, bool realistic) {
     Stop();
     if (!NetInit()) return false;
-    if (!net.Start(port, 32)) {
+    if (!net.Start(port, kMaxPeers)) {
         printf("[server] could not bind UDP port %u\n", port);
         return false;
     }
@@ -24,8 +27,12 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
     world.deckOnly = deckOnly;
     world.skills = skills || mode == MODE_RACE;  // (dash and hook are what a race is about)
-    for (int i = 0; i < bots; ++i)
-        if (world.AddShip(kBotNames[i % 8], true) < 0) break;
+    world.realistic = realistic;
+    for (int i = 0; i < bots; ++i) {  // (as many as there are berths: past the list the names come round again, numbered)
+        std::string nm = kBotNames[i % kBotNameCount];
+        if (i >= kBotNameCount) nm += " " + std::to_string(i / kBotNameCount + 1);
+        if (world.AddShip(nm, true) < 0) break;
+    }
     world.events.clear();
     for (int i = 0; i < MAX_SHIPS; ++i) announced[i] = world.ships[i].active;
     running = true;
@@ -56,7 +63,7 @@ void GameServer::SendPlayerInfo(int id, int toPeer) {
     w.Put(s.leader);
     std::vector<uint8_t> none;
     const std::vector<uint8_t>* liv = &none;
-    for (int p = 0; p < 64; ++p)
+    for (int p = 0; p < kMaxPeers; ++p)
         if (peerShip[p] == id) liv = &peerLivery[p];
     PutBlob(w.buf, *liv);
     if (toPeer < 0) net.Broadcast(w.buf.data(), w.buf.size(), true);
@@ -87,7 +94,7 @@ void GameServer::AnnounceShips() {
 }
 
 void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
-    if (data.empty() || peer >= 64) return;
+    if (data.empty() || peer >= (uint32_t)kMaxPeers) return;
     ByteReader r(data);
     uint8_t type = r.Get<uint8_t>();
     if (type == MSG_HELLO) {
@@ -136,6 +143,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put((uint8_t)(world.skills ? 1 : 0));
         w.Put(world.arena);
         w.Put((uint8_t)(crewId >= 0 ? crewId : 255));
+        w.Put((uint8_t)(world.realistic ? 1 : 0));
         net.Send(peer, w.buf.data(), w.buf.size(), true);
         for (int i = 0; i < MAX_SHIPS; ++i)
             if (world.ships[i].active && announced[i] && (i != id || crewId >= 0)) SendPlayerInfo(i, (int)peer);
@@ -241,7 +249,7 @@ void GameServer::Run() {
         net.Poll(events);
         for (auto& e : events) {
             if (e.type == NetEvent::Receive) HandlePacket(e.peer, e.data);
-            else if (e.type == NetEvent::Disconnect && e.peer < 64 && peerCrew[e.peer] >= 0) {
+            else if (e.type == NetEvent::Disconnect && e.peer < (uint32_t)kMaxPeers && peerCrew[e.peer] >= 0) {
                 int id = peerCrew[e.peer];
                 printf("[server] %s (crew) left\n", world.crew[id].name.c_str());
                 world.RemoveCrew(id);
@@ -250,14 +258,14 @@ void GameServer::Run() {
                 w.Put(MSG_CREW_LEFT);
                 w.Put((uint8_t)id);
                 net.Broadcast(w.buf.data(), w.buf.size(), true);
-            } else if (e.type == NetEvent::Disconnect && e.peer < 64 && peerShip[e.peer] >= 0) {
+            } else if (e.type == NetEvent::Disconnect && e.peer < (uint32_t)kMaxPeers && peerShip[e.peer] >= 0) {
                 int id = peerShip[e.peer];
                 printf("[server] %s left\n", world.ships[id].name.c_str());
                 world.RemoveShip(id);
                 peerShip[e.peer] = -1;
                 AnnounceShips();
             }
-            if (e.type == NetEvent::Disconnect && e.peer < 64) peerLivery[e.peer].clear();
+            if (e.type == NetEvent::Disconnect && e.peer < (uint32_t)kMaxPeers) peerLivery[e.peer].clear();
         }
 
         auto now = clock::now();

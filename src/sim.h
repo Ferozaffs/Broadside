@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-constexpr int MAX_SHIPS = 32;  // captains plus their fleets
+constexpr int MAX_SHIPS = 64;  // captains plus their fleets
 constexpr float SIM_DT = 1.0f / 60.0f;
 constexpr int CANNONS_PER_SIDE = 4;  // the frigate (and the low-poly stand-in model)
 constexpr int MAX_GUNS = 6;          // per side, any class
-constexpr int MAX_CREW = 24;         // crew mode: human crewmen across all ships
+constexpr int MAX_CREW = 32;         // crew mode: human crewmen across all ships
 constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 
 // ---- ship classes ---------------------------------------------------------------
@@ -58,7 +58,11 @@ constexpr float driveGain = 3.0f;           // 1/s, how hard it chases the targe
 constexpr float turnRate = 1.7f;           // rad/s yaw at speed
 constexpr float turnRateSlow = 0.55f;       // rad/s yaw when stopped (spin on the spot)
 constexpr float keelGrip = 2.2f;            // 1/s lateral slip damping, so turns carve rather than skid
-constexpr float heel = 0.03f;              // lean out of turns (cosmetic, but physical)
+constexpr float heel = 0.012f;             // lean out of turns (cosmetic, but physical)
+constexpr float rollDamp = 2.2f;           // 1/s extra damping of the roll rate while afloat (hits and swells don't roll her over)
+constexpr float rollRight = 2.5f;          // rad/s^2 per unit of heel: extra self-righting about the keel
+constexpr float airRollLevel = 4.0f;       // the same in the air
+constexpr float airRollDamp = 2.5f;        // 1/s
 constexpr float sternKick = 1.1f;          // extra rudder bite while the bow is out and the stern still digs in
 constexpr float yawGrip = 3.5f;            // 1/s, how quickly the wetted hull settles the yaw rate
 constexpr float airYawControl = 1.4f;      // rad/s^2 of yaw the rudder still gives in the air (a little)
@@ -94,6 +98,9 @@ constexpr float raceHookCooldown = 6.0f;
 constexpr float raceGunsHeld = 5.0f;       // s after the start before the guns run out (no broadsides on the start line)
 constexpr float ballDamage = 8.0f;
 constexpr float ballKnockback = 1.6e6f;     // N*s impulse per ball hit (silly big)
+constexpr float hitRoll = 0.15f;           // share of a hit's turning effect that rolls the hull (the shove itself is all kept)
+constexpr float hitYaw = 0.7f;             // ...that swings her round
+constexpr float hitPitch = 0.5f;           // ...that pitches her
 constexpr float recoilImpulse = 2.2e5f;     // per cannon
 constexpr float arenaRadius = 1000.0f;     // soft push back (the island ring is the real wall)
 constexpr float rockDamage = 0.9f;         // per m/s of impact over 8 m/s
@@ -155,6 +162,16 @@ constexpr float coveMinDist = 950.0f;      // the treasure always surfaces at le
 constexpr float bankTime = 10.0f;          // s the carrier must hold position in the cove to unload
 constexpr float escortCatchUp = 0.8f;      // max extra speed (x top speed) for an escort far off station
 constexpr float vortexHold = 1.15f;        // maelstrom: pull in, as a share of what keeps a hull circling with the current
+// realistic handling (host option, the Isles only): an age-of-sail ship rather than a jet ski. The wind is still
+// the arcade one (no tacking, no beating into it); everything else is closer to the real thing.
+constexpr float realSpeed = 0.21f;         // top speeds x this: cutter ~15 kn, frigate ~12, ship of the line ~10
+constexpr float realReverse = 1.5f;        // m/s astern (sails laid aback)
+constexpr float realAccel = 0.6f;          // m/s^2 the most a frigate's sails can add (/ scale^2: a cutter twice that, a 74 a bit over half)
+constexpr float realGain = 0.4f;           // 1/s: she settles onto a new speed over several seconds
+constexpr float realTurn = 0.07f;          // turn rates x this: a frigate ~4 deg/s at speed, none without way on
+constexpr float realYawGrip = 0.6f;        // 1/s: a heavy hull takes a while to start and stop turning
+constexpr float realKnock = 0.02f;         // a ball hit shoves this share of the arcade shove (a 24 lb ball barely moves 1000 t)
+constexpr float realRecoil = 0.1f;         // and the guns' recoil (the breeching ropes take it)
 }  // namespace tune
 
 // ---- hull shape (hull space: +z bow, +y up, +x port, origin at waterline amidships) ----
@@ -494,6 +511,9 @@ public:
     uint8_t allowedCls = SC_ALL;     // host: which classes captains may sail (bit per class)
     bool deckOnly = false;           // host: everyone plays from the deck (the client enforces it)
     bool skills = false;             // host: dash and grappling hook
+    bool realistic = false;          // host: real ship handling (speeds, turning, no jumps); the wind still blows where it likes
+    // (only in the Isles: a race on a clock and the maelstrom's 28 m/s current need the arcade ship)
+    bool Real() const { return realistic && arena == ARENA_ISLES; }
     void UpdateHooks(float dt);
     bool predicting = false;
     int AllowedClass(int want) const;  // want if allowed, else the nearest allowed one

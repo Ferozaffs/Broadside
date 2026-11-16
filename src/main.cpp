@@ -61,6 +61,7 @@ struct Options {
     int allowedCls = SC_ALL;     // host: --classes cutter,frigate,line
     bool deckOnly = false;       // host: --deck-only
     bool skills = false;         // host: --skills (dash + grappling hook)
+    bool realistic = false;      // host: --realistic (real ship handling)
     int arena = ARENA_ISLES;     // host: --arena isles|maelstrom
     int role = ROLE_CAPTAIN;     // --crew: sign on as crew instead of sailing your own ship
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
@@ -103,6 +104,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--autopilot") o.autopilot = true;
         else if (a == "--deck-only") o.deckOnly = true;
         else if (a == "--skills") o.skills = true;
+        else if (a == "--realistic") o.realistic = true;
         else if (a == "--crew") o.role = ROLE_CREW;
         else if (a == "--arena") {  // isles | maelstrom, or for a race: any | strait | serpent | hairpin | zigzag
             std::string v = next("isles");
@@ -314,7 +316,9 @@ public:
     int curAllowed = SC_ALL;         // the match we're in
     bool curDeckOnly = false;
     int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
+    int handlingSel = 0;             // host's choice: 0 arcade, 1 realistic
     bool curSkills = false;
+    bool curRealistic = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
     int courseSel = 0;               // ...and of race course: 0 a different one every round, else ARENA_STRAIT + n - 1
     // crew mode
@@ -633,6 +637,7 @@ void Game::Init() {
     allowSel = opt.allowedCls;
     viewSel = opt.deckOnly ? 1 : 0;
     skillSel = opt.skills ? 1 : 0;
+    handlingSel = opt.realistic ? 1 : 0;
     arenaSel = RaceArena(opt.arena) || opt.arena == ARENA_RACE_ANY ? ARENA_ISLES : opt.arena;
     courseSel = RaceArena(opt.arena) ? opt.arena - ARENA_STRAIT + 1 : 0;
     roleSel = opt.role;
@@ -679,7 +684,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
         int arena = modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arena)) {
+                          arena, handlingSel != 0)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -822,7 +827,9 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                     if (curAllowed & (1 << c)) { classSel = c; break; }
             }
             if (curDeckOnly || crewId >= 0) camDist = 0.0f;
+            curRealistic = r.Get<uint8_t>() != 0 && r.ok;
             SetOcean(seed, curWeather, curArena, curMode);
+            pred.realistic = curRealistic;  // (our own ship is predicted with the same handling as the server's)
             predTime = t;
             predValid = false;
             history.clear();
@@ -4075,30 +4082,41 @@ void Game::DrawHUD() {
         for (int k = 0; k < MAX_CREW; ++k)
             if (crewView[k].present) ++crewRows;
         bool booty = curMode == MODE_PIRATE;
-        float pw = booty ? 640 : 560, ph = 92 + rows * 40.0f + crewRows * 26.0f;
+        float rh = 40.0f, ch = 26.0f;  // row heights, squeezed when a big game won't fit the screen
+        float fit = (H - 60.0f - 92.0f) / fmaxf(1.0f, rows * 40.0f + crewRows * 26.0f);
+        if (fit < 1.0f) { rh = fmaxf(21.0f, 40.0f * fit); ch = fmaxf(15.0f, 26.0f * fit); }
+        int maxRows = std::max(1, (int)((H - 60.0f - 92.0f - crewRows * ch) / rh));
+        if (rows > maxRows) {
+            auto mine = std::find(order.begin(), order.end(), myId);
+            if (mine != order.end() && mine - order.begin() >= maxRows) std::iter_swap(mine, order.begin() + (maxRows - 1));
+            order.resize(maxRows);
+            rows = maxRows;
+        }
+        const float fs = fminf(22.0f, rh * 0.55f);
+        float pw = booty ? 640 : 560, ph = 92 + rows * rh + crewRows * ch;
         Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
         Panel(r, {10, 16, 24, 220}, 14);
-        Label(TextFormat("CAPTAIN   \xC2\xB7   %s%s", TextToUpper(kModeNames[curMode]), curFleets ? " WITH FLEETS" : ""), r.x + 28, r.y + 26, 12, kDim);
+        Label(TextFormat("CAPTAIN   \xC2\xB7   %s%s%s", TextToUpper(kModeNames[curMode]), curFleets ? " WITH FLEETS" : "", curRealistic && curArena == ARENA_ISLES ? "   \xC2\xB7   REALISTIC" : ""), r.x + 28, r.y + 26, 12, kDim);
         if (booty) Label("BANKED", r.x + pw - 240, r.y + 26, 12, kDim, Center);
         Label("SUNK", r.x + pw - 150, r.y + 26, 12, kDim, Center);
         Label("LOST", r.x + pw - 60, r.y + 26, 12, kDim, Center);
         int row = 0, crewDrawn = 0;
         for (int id : order) {
             const NetShip& s = view[id].s;
-            if (booty) Text(TextFormat("%d", s.banked), r.x + pw - 240, r.y + 58 + row * 40.0f + crewDrawn * 26.0f, 22, kPirateText, true, Center, false);
-            float y = r.y + 58 + row * 40.0f + crewDrawn * 26.0f;
-            if (row % 2 == 0) DrawRectangleRec({r.x + 12, y - 6, pw - 24, 36}, {255, 255, 255, 8});
-            if (id == myId) DrawRectangleRec({r.x + 12, y - 6, 3, 36}, kGold);
-            DrawCircleV({r.x + 34, y + 12}, 6, TeamOf(id));
-            Text(NameOf(id).c_str(), r.x + 50, y, 22, id == myId ? kGold : kText, true, Left, false);
-            Label(TextFormat("%s%s", info[id].bot ? "BOT  \xC2\xB7  " : "", TextToUpper(ClassOf(s.cls).name)), r.x + 58 + Measure(NameOf(id).c_str(), 22, true).x, y + 6, 11, kDim);
-            Text(TextFormat("%d", s.kills), r.x + pw - 150, y, 22, kText, true, Center, false);
-            Text(TextFormat("%d", s.deaths), r.x + pw - 60, y, 22, kDim, false, Center, false);
+            if (booty) Text(TextFormat("%d", s.banked), r.x + pw - 240, r.y + 58 + row * rh + crewDrawn * ch, fs, kPirateText, true, Center, false);
+            float y = r.y + 58 + row * rh + crewDrawn * ch;
+            if (row % 2 == 0) DrawRectangleRec({r.x + 12, y - 6, pw - 24, rh - 4}, {255, 255, 255, 8});
+            if (id == myId) DrawRectangleRec({r.x + 12, y - 6, 3, rh - 4}, kGold);
+            DrawCircleV({r.x + 34, y + fs * 0.55f}, 6, TeamOf(id));
+            Text(NameOf(id).c_str(), r.x + 50, y, fs, id == myId ? kGold : kText, true, Left, false);
+            Label(TextFormat("%s%s", info[id].bot ? "BOT  \xC2\xB7  " : "", TextToUpper(ClassOf(s.cls).name)), r.x + 58 + Measure(NameOf(id).c_str(), fs, true).x, y + fs * 0.27f, fs < 18.0f ? 9.0f : 11.0f, kDim);
+            Text(TextFormat("%d", s.kills), r.x + pw - 150, y, fs, kText, true, Center, false);
+            Text(TextFormat("%d", s.deaths), r.x + pw - 60, y, fs, kDim, false, Center, false);
             ++row;
             for (int k = 0; k < MAX_CREW; ++k) {  // the hands aboard: their own sinkings, hits and patches
                 if (!crewView[k].present || crewView[k].c.ship != id) continue;
                 const NetCrew& c = crewView[k].c;
-                float cy = r.y + 58 + row * 40.0f + crewDrawn * 26.0f - 4.0f;
+                float cy = r.y + 58 + row * rh + crewDrawn * ch - 4.0f;
                 if (k == crewId) DrawRectangleRec({r.x + 12, cy - 3, 3, 24}, kGold);
                 Text(crewNames[k].c_str(), r.x + 66, cy, 17, k == crewId ? kGold : A(kText, 0.85f), false, Left, false);
                 Label(TextFormat("CREW   \xC2\xB7   %d HITS   \xC2\xB7   %d PATCHED%s", c.hits, c.patches, c.overboard ? "   \xC2\xB7   OVERBOARD" : ""),
@@ -4143,10 +4161,10 @@ void Game::DrawMenu() {
     using namespace ui;
     const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
     DrawRectangleGradientH(0, 0, (int)(W * 0.55f), (int)H, {6, 12, 20, 210}, {6, 12, 20, 0});
-    // layout is ~830 px tall from the title down; centre it in whatever height we have
+    // layout is ~900 px tall from the title down; centre it in whatever height we have
     // short windows (720p) get a compact layout: smaller title, name and address side by side
-    const bool compact = H < 960.0f;
-    const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 830.0f) * 0.45f);
+    const bool compact = H < 1040.0f;
+    const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 900.0f) * 0.45f);
     const float ts = compact ? 60.0f : 92.0f, head = compact ? 112.0f : 168.0f;
     float y = y0;
     DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, ts, ts * 0.12f, Fade(BLACK, 0.45f));
@@ -4181,14 +4199,15 @@ void Game::DrawMenu() {
         y += 192;
     }
     // two columns: the wide one on the left, a narrow one (128) on the right
-    const float mw = fw - 128 - 8, bh = compact ? 50.0f : 54.0f, row = compact ? 64.0f : 72.0f;
+    const float mw = fw - 128 - 8, bh = compact ? 50.0f : 54.0f, row = compact ? 58.0f : 72.0f;
     if (Button({x, y, fw, bh}, "Join battle", true)) StartSession(false, 0);
     if (Button({x, y + bh + 8, mw, bh}, "Host battle")) StartSession(true, botCount, true);
     // bot stepper
     Rectangle st = {x + mw + 8, y + bh + 8, 128, bh};
     DrawRectangleRounded(st, 0.4f, 8, {255, 255, 255, 14});
-    if (Button({st.x + 4, st.y + 7, 36, 40}, "-")) botCount = std::max(0, botCount - 1);
-    if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = std::min(7, botCount + 1);
+    // (no limit but the berths: one at a time up to 10, then fives; with fleets each captain brings three escorts)
+    if (Button({st.x + 4, st.y + 7, 36, 40}, "-")) botCount = std::max(0, botCount <= 10 ? botCount - 1 : botCount - 5);
+    if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = std::min(MAX_SHIPS - 1, botCount < 10 ? botCount + 1 : botCount + 5);
     Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 4, 24, kText, true, Center, false);
     Label("BOTS", st.x + st.width * 0.5f, st.y + bh - 20, 9, kDim, Center);
     // match settings for hosting (the backdrop previews them)
@@ -4219,6 +4238,16 @@ void Game::DrawMenu() {
         Segmented({x, y + 18, aw, 40}, kArenas, 2, arenaSel);
         Segmented({x + aw + 8, y + 18, sw, 40}, kSkills, 2, skillSel);
         Segmented({x + mw + 8, y + 18, 128, 40}, kFleets, 2, fleetSel);
+    }
+    y += row;
+    {  // how the ships handle
+        static const char* const kHandling[] = {"Arcade", "Realistic"};
+        bool applies = modeSel != MODE_RACE && arenaSel == ARENA_ISLES;
+        Label(!handlingSel ? "HANDLING   \xC2\xB7   OVER THE TOP"
+              : applies    ? "HANDLING   \xC2\xB7   REAL SPEEDS AND TURNING, NO JUMPS"
+                           : "HANDLING   \xC2\xB7   ARCADE ANYWAY IN RACES AND THE MAELSTROM",
+              x + 2, y, 11, kDim);
+        Segmented({x, y + 18, fw, 40}, kHandling, 2, handlingSel);
     }
     y += row;
     // which ships captains may sail, and whether everyone plays from the deck
@@ -4254,7 +4283,7 @@ void Game::DrawMenu() {
             DrawClassCards({cx, y0 + head + 24, cwid, 3 * 100.0f + 20}, false, false);
         }
     }
-    Text("Hosting opens a UDP port; friends join with your IP address.", x, H - (compact ? 56 : 66), compact ? 14 : 16, kDim, false);
+    if (!compact) Text("Hosting gives you a room name for your friends (or they join with your IP address).", x, H - 66, 16, kDim, false);
     if (shipModel.HasExternal())
         Text("Ships: \"Age of sail Blender ship\" by NelloF (Fab), frigate by CGTrader  \xC2\xB7  Pirate by Bugrimov Maksim (Fab), animations Mixamo  \xC2\xB7  Ocean after Garrett Gunnell's Water (MIT)  \xC2\xB7  Barlow (OFL)",
              x, H - (compact ? 34 : 42), compact ? 12 : 14, A(kDim, 0.8f), false);
@@ -5308,7 +5337,7 @@ void Game::YardCamera() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic)) return 1;
     if (!o.room.empty()) srv.OpenRoom(o.room);  // (--room NAME: friends join by the name)
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();

@@ -12,7 +12,7 @@
 class GameServer {
 public:
     bool Start(uint16_t port, int bots, uint32_t seed, int timeOfDay = 0, int weather = 0, int mode = 0, bool fleets = false,
-               uint8_t allowedCls = SC_ALL, bool deckOnly = false, bool skills = false, int arena = ARENA_ISLES);
+               uint8_t allowedCls = SC_ALL, bool deckOnly = false, bool skills = false, int arena = ARENA_ISLES, bool realistic = false);
     void Stop();
     bool Running() const { return running; }
     // put the game up as a room (src/rooms.h) so friends join by its name
@@ -32,9 +32,10 @@ private:
     rooms::Host room;
     uint16_t port = 0;
     World world;
-    int peerShip[64];
-    int peerCrew[64];
-    std::vector<uint8_t> peerLivery[64];  // each captain's paint (Livery::Encode), passed on with their ship's info
+    static constexpr int kMaxPeers = 64;  // players (captains and crew) at once
+    int peerShip[kMaxPeers];
+    int peerCrew[kMaxPeers];
+    std::vector<uint8_t> peerLivery[kMaxPeers];  // each captain's paint (Livery::Encode), passed on with their ship's info
     void SendCrewInfo(int crewId, int toPeer);
     bool announced[MAX_SHIPS] = {};
 };
