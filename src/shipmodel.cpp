@@ -646,6 +646,32 @@ void ShipModel::BuildDeckMap(const Model& m, const Matrix& fix, const std::vecto
         }
 }
 
+void ShipModel::RayHits(const Ray* rays, int n, const Matrix& model, float maxDist, int* out) const {
+    for (int k = 0; k < n; ++k) out[k] = 0;
+    if (!hasExt) return;
+    const Model& M = hasLo ? extLo : ext;
+    const std::vector<bool>& isSail = hasLo ? loSail : extIsSail;
+    const std::vector<bool>& isRope = hasLo ? loRope : extIsRope;
+    Matrix m = MatrixMultiply(extFix, model), inv = MatrixInvert(m);
+    std::vector<float> best(n, 1e9f);
+    for (int i = 0; i < M.meshCount; ++i) {
+        if (isRope[i]) continue;
+        BoundingBox bb = GetMeshBoundingBox(M.meshes[i]);
+        for (int k = 0; k < n; ++k) {
+            // into the model's own space (the hit distance comes back in its units: compare in world units after)
+            Vector3 o = Vector3Transform(rays[k].position, inv), e = Vector3Transform(Vector3Add(rays[k].position, rays[k].direction), inv);
+            Ray r = {o, Vector3Normalize(Vector3Subtract(e, o))};
+            float unit = Vector3Length(Vector3Subtract(e, o));  // model units per world metre
+            RayCollision c = GetRayCollisionBox(r, bb);
+            if (!c.hit && !(o.x > bb.min.x && o.x < bb.max.x && o.y > bb.min.y && o.y < bb.max.y && o.z > bb.min.z && o.z < bb.max.z)) continue;
+            RayCollision h = GetRayCollisionMesh(r, M.meshes[i], MatrixIdentity());
+            if (!h.hit) continue;
+            float d = h.distance / fmaxf(unit, 1e-6f);
+            if (d < maxDist && d < best[k]) { best[k] = d; out[k] = isSail[i] ? 1 : 2; }
+        }
+    }
+}
+
 float ShipModel::DeckAt(float x, float z) const {
     if (deckH.empty()) {  // procedural ship: the hull's own deck
         if (fabsf(z) > hull::halfLength - 0.5f || fabsf(x) > hull::HalfWidth(z) - 0.4f) return -99.0f;

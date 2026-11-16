@@ -30,8 +30,8 @@ Everyone must run the same version.
 | A / D | Rudder |
 | Mouse | Aim (cannons follow the camera) |
 | Left mouse | Fire broadside |
-| Right mouse | Zoom (your own ship turns see-through) |
-| Mouse wheel | Camera distance; roll all the way in to stand on the quarterdeck |
+| Right mouse | Zoom (your own ship turns see-through; on deck it's a spyglass that looks past your own sails) |
+| Mouse wheel | Camera distance; roll all the way in to stand on the quarterdeck (you cross to the rail you look over) |
 | V | Deck view on / off |
 | M | Sound on / off |
 | 1 / 2 / 3 | Next ship: cutter / frigate / ship of the line |

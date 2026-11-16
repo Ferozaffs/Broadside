@@ -301,6 +301,29 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   - The crew tag ("CREW · CPT. X'S SHIP OF THE LINE") overflowed its panel: tracked labels measured as plain text
     (ui::MeasureLabel).
 
+## Deck view: steadier, smoother, clearer (2026-11-16, "improve visibility on deck without taking away from immersion")
+- [x] Own ship drawn between prediction ticks (ApplyPrediction carries her on by inputAcc; Reconcile keeps that part
+      in visOffset). Frames and 60 Hz ticks don't line up, so some frames got 0 steps and some 2: at 30 kn she jumped
+      ~30 cm a frame, and on deck the whole sea juddered (the chase camera eases, so it showed less). Measured jitter
+      (position against velocity, per-second max): median 29 cm -> 11 cm. BS_NOEXTRAP: the old way.
+- [x] Roll: the captain stands upright on a heeling deck (feet on the planks, body taking 75% of the heel out), the
+      eye eases after its spot (~80 ms, at most 0.5 m off) and the horizon shows a third of the heel, soft-capped at
+      6 deg (tanh) and eased. Storm, frigate: tilt max 16 -> 6 deg, rate 45 -> 17 deg/s; cutter 31 -> 6 deg, 200 ->
+      40 deg/s. BS_OLDDECK: the old deck view.
+- [x] The captain crosses to the rail on the side they look over (after 0.3 s looking there; ~4.5 m/s), 1.1 m in
+      from it so the rail stays in sight. Out of the shrouds and off the centreline masts. Share of the far view (sea
+      60 m+ and sky, middle 60% of the screen) hidden by our own ship, paired over 6 runs (3 ships x clear/storm):
+      old spot 28%, rail 19% (half a metre from the rail 15%, but then the rail drops out of sight). BS_NORAIL.
+- [x] RMB on deck is a spyglass: our own ship within 60 m, in a 14 deg cone round the line of sight and above the
+      rail, goes 80% see-through (two passes: solid parts with depth, then the faint ones without; a 4x4 dither
+      decides solid or faint, so the faint ones are all equally faint and their order doesn't matter), and a soft
+      vignette darkens the edges. BS_NOGLASS.
+- BS_DECKLOG=1 (testing): heel / tilt / jitter every second, and every 5 s how much of the far view our own ship
+  hides from where we stand and from other spots on the quarterdeck (ShipModel::RayHits), and how often the eye
+  is in the sea. Eye in the sea: no worse than before (0-2% in storms).
+- Next: gun crews kneeling at the rail can stand right in front of the captain (figures are only culled within
+  2.2 m); the cutter's sails still hide ~25% (it shares the frigate's rig at 0.7 scale).
+
 ## More race courses, menu, maelstrom treasure (2026-11-15)
 - [x] Four courses (ARENA_STRAIT .. ARENA_ZIGZAG, protocol v17): the strait's plan now sits on a spine (s along it, n
       across) built from turns: serpent 2 x 130 deg R 430, hairpin 180 deg R 420, zigzag 3 x 120 deg R 170 (half

@@ -80,6 +80,9 @@ void Renderer::Init() {
     locLightCount = GetShaderLocation(litShader, "uLightCount");
     locSailPhase = GetShaderLocation(litShader, "uSailPhase");
     locShore = GetShaderLocation(litShader, "uShore");
+    locGhost = GetShaderLocation(litShader, "uGhost");
+    locGhostDir = GetShaderLocation(litShader, "uGhostDir");
+    locGhostPass = GetShaderLocation(litShader, "uGhostPass");
     locShadowPass = GetShaderLocation(litShader, "uShadowPass");
     locProp = GetShaderLocation(litShader, "uProp");
 
@@ -586,6 +589,13 @@ void Renderer::SetSail(float amplitude, float phase) {
 }
 
 void Renderer::SetShore(float amount) { SetShaderValue(litShader, locShore, &amount, SHADER_UNIFORM_FLOAT); }
+
+void Renderer::SetGhost(Vector3 eye, Vector3 dir, float cosCone, float amount, int pass) {
+    float g[4] = {eye.x, eye.y, eye.z, amount}, d[4] = {dir.x, dir.y, dir.z, cosCone}, p = (float)pass;
+    SetShaderValue(litShader, locGhostPass, &p, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litShader, locGhost, g, SHADER_UNIFORM_VEC4);
+    SetShaderValue(litShader, locGhostDir, d, SHADER_UNIFORM_VEC4);
+}
 void Renderer::SetProp(float amount) { SetShaderValue(litShader, locProp, &amount, SHADER_UNIFORM_FLOAT); }
 
 void Renderer::SetDamage(float damage, const Vector4* hits, int count) {

@@ -262,10 +262,20 @@ public:
     float lastChaseDist = 75.0f;  // where V takes you back to from the deck
     Vector3 deckEye{1.5f, 3.0f, 3.5f};  // on deck: at the quarterdeck rail, a step to starboard (BS_EYE "y z x" to try others)
     float OwnShipGhost() const { return DeckView() > 0.5f ? 1.0f : 1.0f - 0.72f * aimZoom; }  // RMB: see through your own ship
+    // on deck, RMB is the spyglass: it looks past our own masts and sails in the line of sight (BS_NOGLASS: not)
+    float DeckGlass() const { return DeckView() > 0.5f && !getenv("BS_NOGLASS") ? aimZoom : 0.0f; }
+    bool OwnShipLate() const { return OwnShipGhost() < 0.99f || DeckGlass() > 0.01f; }  // drawn after the water, see-through
+    bool lanternFxOff = false;  // (a ship drawn a second time: its lantern glows are already in)
     float DeckView() const { float u = Clamp(camDist / 22.0f, 0.0f, 1.0f); return 1.0f - u * u * (3.0f - 2.0f * u); }  // 1 = on deck
     Vector3 camTarget{};
     bool camInit = false;
     float camPull = 1.0f;  // chase camera pulled in in front of a rock (share of its distance)
+    // on deck: where the eye sits relative to the ship's centre of mass (eased: the knees take the jolts), and the
+    // horizon's tilt (eased too)
+    Vector3 deckRel{0, 0, 0}, deckUp{0, 1, 0};
+    bool deckRelInit = false;
+    // ...and which rail we stand at: the side we look out over (deckX: across the deck, hull units; deckSide -1 / +1)
+    float deckX = 1e9f, deckSide = 1.0f, deckSideFor = 0.0f;
     float sailTarget = 0.0f;
     uint8_t fireSeq = 0;
     double inputAcc = 0;
@@ -1979,7 +1989,10 @@ void Game::Reconcile() {
     if (history.empty()) pred.ocean.Update(t);
 
     if (predValid) {
-        Vector3 err = Vector3Subtract(Vector3Add(predShip.pos, visOffset), s.pos);
+        // (on screen she's carried on past the last tick by the time since it, ApplyPrediction: keep that part too)
+        float ahead = getenv("BS_NOEXTRAP") ? 0.0f : (float)Clamp((float)inputAcc, 0.0f, SIM_DT);
+        Vector3 err = Vector3Subtract(Vector3Add(Vector3Add(predShip.pos, Vector3Scale(predShip.vel, ahead)), visOffset),
+                                      Vector3Add(s.pos, Vector3Scale(s.vel, ahead)));
         float e = Vector3Length(Vector3Subtract(predShip.pos, s.pos));
         lastCorrection = e;
         predStatSum += e;
@@ -2004,8 +2017,15 @@ void Game::ApplyPrediction(float dt) {
     visRot = QuaternionNormalize(QuaternionSlerp(visRot, {0, 0, 0, 1}, k));
     if (!predValid || myId < 0 || !view[myId].present) return;
     NetShip& v = view[myId].s;
-    v.pos = Vector3Add(predShip.pos, visOffset);
-    v.rot = QuaternionNormalize(QuaternionMultiply(visRot, predShip.rot));
+    // The prediction steps at a fixed 60 Hz but frames don't land on its ticks: some frames get no step, some get
+    // two, and a ship at 30 knots jumped half a metre (on deck the whole sea juddered). Carry her on from the last
+    // tick by the time since it.
+    float ahead = getenv("BS_NOEXTRAP") ? 0.0f : (float)Clamp((float)inputAcc, 0.0f, SIM_DT);
+    Quaternion w = {predShip.angVel.x, predShip.angVel.y, predShip.angVel.z, 0.0f}, dq = QuaternionMultiply(w, predShip.rot);
+    Quaternion rot = QuaternionNormalize({predShip.rot.x + 0.5f * ahead * dq.x, predShip.rot.y + 0.5f * ahead * dq.y,
+                                          predShip.rot.z + 0.5f * ahead * dq.z, predShip.rot.w + 0.5f * ahead * dq.w});
+    v.pos = Vector3Add(Vector3Add(predShip.pos, Vector3Scale(predShip.vel, ahead)), visOffset);
+    v.rot = QuaternionNormalize(QuaternionMultiply(visRot, rot));
     v.vel = predShip.vel;
     v.angVel = predShip.angVel;
     v.sail = predShip.sail;
@@ -2047,17 +2067,87 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         eyeLocal.y = hull::DeckHeight(-11.0f) + deckEye.y / es;  // the eye stays a person's height above the deck
         const ShipModel& M = ModelOf(me.cls);  // standing on this model's own quarterdeck, a quarter of the deck in from the stern
         eyeLocal.z = M.DeckAft() + 0.22f * (M.DeckFore() - M.DeckAft()) + (deckEye.z - 3.5f);
+        if (!getenv("BS_OLDDECK") && !getenv("BS_NORAIL")) {
+            // the captain crosses to the rail on the side they look out over (a moment's look the other way doesn't send
+            // them across): over the rail rather than through the shrouds, and off the centreline with its masts
+            Vector3 lb = Vector3RotateByQuaternion(Vector3Negate(off), QuaternionInvert(me.rot));
+            float want = lb.x > 0.0f ? 1.0f : -1.0f;
+            if (fabsf(lb.x) > 0.45f && want != deckSide) {
+                deckSideFor += dt;
+                if (deckSideFor > 0.3f) { deckSide = want; deckSideFor = 0.0f; }
+            } else {
+                deckSideFor = 0.0f;
+            }
+            // the rail: the last bit of deck out from the middle (stepping past the wheel, the binnacle, a mast)
+            float railX = 0.0f;
+            for (float x = 0.25f; x < 7.0f; x += 0.25f) {
+                float h = M.DeckAt(deckSide * x, eyeLocal.z);
+                if (!M.Walkable(h)) break;
+                if (!M.WallAt(deckSide * x, eyeLocal.z, h)) railX = x;
+            }
+            float goal = deckSide * fmaxf(0.0f, railX - 1.1f / es);
+            if (deckX > 1e8f) deckX = goal;
+            float step = 4.5f / es * dt, d = goal - deckX;  // (a few quick steps, easing in at the end)
+            deckX += Clamp(d * fminf(1.0f, dt * 7.0f), -step, step);
+            eyeLocal.x = deckX;
+        }
         for (int k = 0; k < 12 && !M.Walkable(M.DeckAt(eyeLocal.x, eyeLocal.z)); ++k) eyeLocal.x *= 0.8f;
         float qd = M.DeckAt(eyeLocal.x, eyeLocal.z);
         if (M.Walkable(qd)) eyeLocal.y = qd + 1.7f / es;
+        Vector3 shipUp = Vector3RotateByQuaternion({0, 1, 0}, me.rot);
         Vector3 eye = HullToWorld(me.pos, me.rot, eyeLocal, es);
+        if (!getenv("BS_OLDDECK")) {
+            // a sailor on a heeling deck stands upright: feet on the planks, the body leaning back against most of the heel
+            Vector3 feet = HullToWorld(me.pos, me.rot, {eyeLocal.x, eyeLocal.y - 1.7f / es, eyeLocal.z}, es);
+            Vector3 bodyUp = Vector3Normalize(Vector3Lerp(shipUp, {0, 1, 0}, 0.75f));
+            Vector3 rel = Vector3Subtract(Vector3Add(feet, Vector3Scale(bodyUp, 1.7f)), me.pos);
+            // and the knees soak up the jolts: the eye follows its spot on deck a beat late, never more than half a metre off
+            if (!deckRelInit || Vector3Distance(rel, deckRel) > 3.0f) deckRel = rel;
+            deckRel = Vector3Lerp(deckRel, rel, fminf(1.0f, dt * 12.0f));
+            Vector3 lag = Vector3Subtract(deckRel, rel);
+            if (Vector3Length(lag) > 0.5f) deckRel = Vector3Add(rel, Vector3Scale(Vector3Normalize(lag), 0.5f));
+            deckRelInit = true;
+            eye = Vector3Add(me.pos, deckRel);
+        }
         Vector3 eyeTarget = Vector3Subtract(eye, Vector3Scale(off, 60.0f));
         chasePos = Vector3Lerp(chasePos, eye, fp);
         chaseTarget = Vector3Lerp(chaseTarget, eyeTarget, fp);
         // a share of the ship's heel and pitch in the horizon
-        Vector3 shipUp = Vector3RotateByQuaternion({0, 1, 0}, me.rot);
-        rv.up = Vector3Normalize(Vector3Lerp({0, 1, 0}, shipUp, 0.35f * fp));
+        if (getenv("BS_OLDDECK")) {
+            rv.up = Vector3Normalize(Vector3Lerp({0, 1, 0}, shipUp, 0.35f * fp));
+        } else {  // ...a third of it, easing off towards a few degrees however far she goes over
+            const float cap = 6.0f * DEG2RAD;
+            Vector3 axis = Vector3CrossProduct({0, 1, 0}, shipUp);
+            float heel = acosf(Clamp(shipUp.y, -1.0f, 1.0f)), tilt = cap * tanhf(0.35f * heel / cap);
+            Vector3 want = Vector3Length(axis) > 1e-4f ? Vector3RotateByAxisAngle({0, 1, 0}, Vector3Normalize(axis), tilt) : Vector3{0, 1, 0};
+            deckUp = Vector3Normalize(Vector3Lerp(deckUp, want, fminf(1.0f, dt * 6.0f)));
+            rv.up = Vector3Normalize(Vector3Lerp({0, 1, 0}, deckUp, fp));
+        }
         rv.nearZ = 0.5f + (0.12f - 0.5f) * fp;
+        if (getenv("BS_DECKLOG") && fp > 0.99f) {  // (testing the deck view: how hard she heels and how much of it we see)
+            static double t0 = 0;
+            static float mRoll, mPitch, mTilt, yLo = 1e9f, yHi = -1e9f, mRate, sumRoll, n;
+            static Vector3 c1{}, c2{};
+            static float mCom, sumCom;
+            // (jitter: how far the centre of mass moved this frame against how far its velocity says, in cm; and the frame time in ms)
+            if (dt > 0.0f && Vector3Length(c1) > 0.0f) { float j = 100.0f * Vector3Length(Vector3Subtract(Vector3Subtract(me.pos, c1), Vector3Scale(Vector3Add(me.vel, c2), 0.5f * dt))); mCom = fmaxf(mCom, j); sumCom += 1000.0f * dt; }
+            c1 = me.pos; c2 = me.vel;
+            static Vector3 lastUp{0, 1, 0};
+            Vector3 r = Vector3RotateByQuaternion({1, 0, 0}, me.rot), f = Vector3RotateByQuaternion({0, 0, 1}, me.rot);
+            float roll = fabsf(asinf(Clamp(r.y, -1.0f, 1.0f))) * RAD2DEG, pitch = fabsf(asinf(Clamp(f.y, -1.0f, 1.0f))) * RAD2DEG;
+            float tilt = acosf(Clamp(rv.up.y, -1.0f, 1.0f)) * RAD2DEG;
+            float rate = dt > 0.0f ? acosf(Clamp(Vector3DotProduct(lastUp, rv.up), -1.0f, 1.0f)) * RAD2DEG / dt : 0.0f;
+            lastUp = rv.up;
+            mRoll = fmaxf(mRoll, roll); mPitch = fmaxf(mPitch, pitch); mTilt = fmaxf(mTilt, tilt); mRate = fmaxf(mRate, rate);
+            yLo = fminf(yLo, eye.y - me.pos.y); yHi = fmaxf(yHi, eye.y - me.pos.y); sumRoll += roll; n += 1;
+            if (GetTime() - t0 > 1.0) {
+                t0 = GetTime();
+                printf("[deck] heel max %.0f avg %.0f, pitch max %.0f, horizon tilt max %.1f (%.0f deg/s), eye over CoM %.1f..%.1f m, air %.1f, jitter max %.0f cm, frame %.0f ms\n",
+                       mRoll, sumRoll / fmaxf(n, 1.0f), mPitch, mTilt, mRate, yLo, yHi, me.airTime, mCom, sumCom / fmaxf(n, 1.0f));
+                fflush(stdout);
+                mRoll = mPitch = mTilt = mRate = sumRoll = n = mCom = sumCom = 0; yLo = 1e9f; yHi = -1e9f;
+            }
+        }
         if (getenv("BS_EYELOG")) {
             static double lastLog = 0;
             if (GetTime() - lastLog > 1.0) {
@@ -2094,6 +2184,68 @@ void Game::UpdateCamera(float dt, Vector3 focus) {
         shake = fmaxf(0.0f, shake - dt * 3.0f);
     }
     rv.fovy = 62.0f + 8.0f * fp - (22.0f + 8.0f * fp) * aimZoom;  // a bit wider on deck; RMB still zooms
+    if (getenv("BS_DECKLOG") && fp > 0.99f && myId >= 0 && view[myId].present) {
+        // (testing the deck view: how much of the far sea and sky in the middle of the screen our own ship hides, from
+        // where we stand and from other spots on the quarterdeck, looking the same way; every half second)
+        static double t0 = 0;
+        static long framesUnder, framesAll;  // (and how often the eye is in the sea)
+        framesAll++;
+        if (rv.pos.y < Ocean().Height(rv.pos.x, rv.pos.z) + 0.2f) framesUnder++;
+        enum { kCands = 7 };
+        static const char* const kName[kCands] = {"now", "old (1.5 m to starboard)", "rail we look over", "far rail", "centreline",
+                                                   "half a metre from the rail", "rail, 1 m higher"};
+        static long nBlocked[kCands], nSail[kCands], nRays[kCands];
+        if (GetTime() - t0 > 0.5) {
+            t0 = GetTime();
+            const int GX = 16, GY = 9;
+            const NetShip& me = view[myId].s;
+            const ShipModel& M = ModelOf(me.cls);
+            const float es = ClassOf(me.cls).scale;
+            Camera3D cam = rv.AsCamera();
+            Vector3 dirs[GX * GY];
+            for (int j = 0; j < GY; ++j)
+                for (int i = 0; i < GX; ++i)  // (the middle 60% of the screen each way)
+                    dirs[j * GX + i] = GetScreenToWorldRay({GetScreenWidth() * (0.2f + 0.6f * (i + 0.5f) / GX), GetScreenHeight() * (0.2f + 0.6f * (j + 0.5f) / GY)}, cam).direction;
+            // the spots, in hull space
+            Vector3 lb = Vector3RotateByQuaternion(Vector3Negate(off), QuaternionInvert(me.rot));
+            float look = lb.x > 0.0f ? 1.0f : -1.0f;
+            float z0 = M.DeckAft() + 0.22f * (M.DeckFore() - M.DeckAft()) + (deckEye.z - 3.5f);
+            auto rail = [&](float side, float z) {
+                float railX = 0.0f;
+                for (float x = 0.25f; x < 7.0f; x += 0.25f) {
+                    float h = M.DeckAt(side * x, z);
+                    if (!M.Walkable(h)) break;
+                    if (!M.WallAt(side * x, z, h)) railX = x;
+                }
+                return side * fmaxf(0.0f, railX - 1.1f / es);
+            };
+            auto spot = [&](float x, float z, float up) {
+                for (int k = 0; k < 12 && !M.Walkable(M.DeckAt(x, z)); ++k) x *= 0.8f;
+                float qd = M.DeckAt(x, z);
+                return HullToWorld(me.pos, me.rot, {x, (M.Walkable(qd) ? qd : hull::DeckHeight(-11.0f)) + (1.7f + up) / es, z}, es);
+            };
+            Vector3 org[kCands] = {rv.pos, spot(deckEye.x, z0, 0.0f), spot(rail(look, z0), z0, 0.0f), spot(rail(-look, z0), z0, 0.0f),
+                                   spot(0.0f, z0, 0.0f), spot(rail(look, z0) + look * 0.55f / es, z0, 0.0f), spot(rail(look, z0), z0, 1.0f)};
+            const float sea = Ocean().Height(rv.pos.x, rv.pos.z);
+            for (int c = 0; c < kCands; ++c) {
+                Ray rays[GX * GY];
+                int n = 0;
+                for (int k = 0; k < GX * GY; ++k)  // only the rays that would reach the sea 60 m out or more, or the sky
+                    if (dirs[k].y > -(org[c].y - sea) / 60.0f) rays[n++] = {org[c], dirs[k]};
+                int hit[GX * GY];
+                M.RayHits(rays, n, ShipModelMatrix(me.pos, me.rot, es), 60.0f, hit);
+                for (int k = 0; k < n; ++k) { nBlocked[c] += hit[k] != 0; nSail[c] += hit[k] == 1; }
+                nRays[c] += n;
+            }
+            static int prints = 0;
+            if (++prints % 10 == 0 && nRays[0] > 0) {
+                printf("[deckblock] eye in the sea %.1f%% of frames\n", 100.0 * framesUnder / fmax(1.0, (double)framesAll));
+                for (int c = 0; c < kCands; ++c)
+                    printf("[deckblock] %-26s hides %4.1f%% of the far view (sails %4.1f%%)\n", kName[c], 100.0 * nBlocked[c] / fmax(1.0, (double)nRays[c]), 100.0 * nSail[c] / fmax(1.0, (double)nRays[c]));
+                fflush(stdout);
+            }
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -2616,6 +2768,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
             float d = Vector3Distance(rv.pos, w);
             float a = Clamp(0.2f + 0.8f * k, 0.0f, 1.0f) * flick;
             float size = (1.3f + d * 0.0035f) * (0.75f + 0.5f * k);
+            if (lanternFxOff) continue;
             fx.Lantern(w, size * 2.4f, Fade({255, 140, 52, 255}, a * 0.85f));
             fx.Lantern(w, size * 0.6f, Fade({255, 206, 140, 255}, a * 0.9f));
             if (k > 0.3f && d < 700.0f) lanternPts.push_back({w, Fade({255, 170, 84, 255}, a * Clamp((k - 0.3f) * 2.0f, 0.0f, 1.0f))});
@@ -2887,7 +3040,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (!view[id].present) continue;
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
-            if (!shadow && id == myId && OwnShipGhost() < 0.99f) continue;  // drawn see-through after the water
+            if (!shadow && id == myId && OwnShipLate()) continue;  // drawn see-through after the water
             DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
                      (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
@@ -2982,15 +3135,34 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu) DrawHookLines();
     if (!menu) DrawFleetRings();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
-    if (!menu && myId >= 0 && view[myId].present && OwnShipGhost() < 0.99f) {
+    if (!menu && myId >= 0 && view[myId].present && OwnShipLate()) {
         const NetShip& s = view[myId].s;
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
-        ModelOf(s.cls).alpha = OwnShipGhost();
-        DrawShip(s.cls, myId, ShipModelMatrix(s.pos, s.rot, ScaleOf(myId)), &s, fabsf(s.sail), ColorOf(myId), hitFlash[myId] * 0.6f, s.hp / s.maxHp,
-                 (s.flags & SF_ALIVE) != 0, s.pos, s.rot, myId * 1.7f, ScaleOf(myId));
-        rlDrawRenderBatchActive();
-        ModelOf(s.cls).alpha = 1.0f;
+        const float glass = DeckGlass();
+        auto draw = [&]() {
+            DrawShip(s.cls, myId, ShipModelMatrix(s.pos, s.rot, ScaleOf(myId)), &s, fabsf(s.sail), ColorOf(myId), hitFlash[myId] * 0.6f, s.hp / s.maxHp,
+                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, myId * 1.7f, ScaleOf(myId));
+            rlDrawRenderBatchActive();
+        };
+        if (glass > 0.01f) {
+            // the spyglass: first what stays solid (with its depth, so her far side can't draw over her near side), then
+            // the faint masts and sails in the line of sight over it, without depth (so they can't cut holes in each other)
+            Vector3 dir = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+            rlEnableDepthMask();
+            renderer.SetGhost(rv.pos, dir, cosf(14.0f * DEG2RAD), 0.8f * glass, 0);
+            draw();
+            rlDisableDepthMask();
+            renderer.SetGhost(rv.pos, dir, cosf(14.0f * DEG2RAD), 0.8f * glass, 1);
+            lanternFxOff = true;
+            draw();
+            lanternFxOff = false;
+            renderer.SetGhost({0, 0, 0}, {0, 0, 1}, 1.0f, 0.0f, 0);
+        } else {
+            ModelOf(s.cls).alpha = OwnShipGhost();
+            draw();
+            ModelOf(s.cls).alpha = 1.0f;
+        }
     }
     // light pillars over the crates so you can find them across the bay
     if (!crateBeams.empty()) {
@@ -3236,6 +3408,15 @@ static const char* SideName(int s) { return s == 0 ? "PORT" : (s == 1 ? "STARBOA
 void Game::DrawHUD() {
     using namespace ui;
     const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+    if (DeckGlass() > 0.01f) {  // the spyglass on deck: its rim darkens the edges of the view (the sights stay clear)
+        const float g = DeckGlass(), R = 0.5f * H * (1.6f - 0.6f * g), soft = 0.3f * H;
+        Vector2 c = {W * 0.5f, H * 0.5f};
+        for (int k = 0; k < 12; ++k) {
+            float u = (k + 1) / 12.0f;
+            DrawRing(c, R + soft * k / 12.0f, R + soft * (k + 1) / 12.0f, 0, 360, 96, Fade(BLACK, 0.55f * g * u * u));
+        }
+        DrawRing(c, R + soft, sqrtf(W * W + H * H), 0, 360, 96, Fade(BLACK, 0.55f * g));
+    }
     const double now = GetTime();
     const bool haveShip = myId >= 0 && view[myId].present;
     const NetShip* me = haveShip ? &view[myId].s : nullptr;

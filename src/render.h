@@ -58,9 +58,11 @@ public:
     // per-ship lantern lights: world-space xyz, w = intensity, max 4
     void SetLights(const Vector4* lights, int count);
     void SetShore(float amount);  // surf foam where the sea meets this surface (islands)
+    // our own ship through the spyglass on deck: what's near the eye in a cone round dir goes see-through (amount 0 = off)
+    void SetGhost(Vector3 eye, Vector3 dir, float cosCone, float amount, int pass = 0);
     void SetProp(float amount);   // weathered scenery props (grain, grime line at the sea)
     int locProp = -1;
-    int locShore = -1, locShadowPass = -1;
+    int locShore = -1, locShadowPass = -1, locGhost = -1, locGhostDir = -1, locGhostPass = -1;
     int locDamage = -1, locHits = -1, locHitCount = -1, locLights = -1, locLightCount = -1;
     int msaaSamples = 4;
 

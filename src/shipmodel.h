@@ -37,6 +37,9 @@ public:
     float DeckFore() const { return deckFore; }
     bool Walkable(float h) const { return h > deckLevel - 0.9f; }
     bool HighDeck(float h) const { return h > deckLevel + 0.85f; }
+    // (testing the deck view) which of these world-space rays hit the model within maxDist: 0 clear, 1 sail, 2 anything else
+    // solid (rigging is left out: it's thin, and the ratlines are mostly holes). model = ShipModelMatrix.
+    void RayHits(const Ray* rays, int n, const Matrix& model, float maxDist, int* out) const;
     // iron-framed lanterns at hull-space spots; glow 0..1 drives the glass emissive
     void DrawLanterns(Renderer& r, const Matrix& model, const Vector3* spots, int n, float glow);
 

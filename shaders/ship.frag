@@ -19,6 +19,9 @@ uniform float uShore;          // > 0 for islands: surf foam at the waterline
 uniform float uShadowPass;     // 1 while drawing into a shadow map
 uniform float uRough;         // surface roughness (0 = default wood)
 uniform float uProp;          // > 0: weathered scenery (harbours)
+uniform vec4 uGhost;          // w > 0: our own ship seen through the spyglass on deck: eye (xyz) and how see-through (w)...
+uniform vec4 uGhostDir;       // ...what's in a cone round the line of sight (xyz, w = cos of the cone's half angle) goes faint
+uniform float uGhostPass;     // 0: the solid parts only, 1: the faint parts only (drawn after, without depth)
 out vec4 fragColor;
 
 float H3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
@@ -238,5 +241,24 @@ void main() {
     }
     col += base * uEmissive;
     col += vec3(1.0, 0.45, 0.15) * uFlash;
-    fragColor = vec4(col, uShore > 0.0 ? 1.0 : colDiffuse.a);
+    float alpha = uShore > 0.0 ? 1.0 : colDiffuse.a;
+    if (uGhost.w > 0.0) {
+        // the spyglass looks past our own masts and sails: near, in the line of sight, and above the rail (the deck
+        // under our feet stays)
+        vec3 d = vWorld - uGhost.xyz;
+        float L = length(d);
+        float c = dot(d / max(L, 1e-3), uGhostDir.xyz);
+        float cone = smoothstep(uGhostDir.w - 0.006, uGhostDir.w + 0.004, c);  // (a dithered edge a couple of degrees wide)
+        float near = 1.0 - smoothstep(40.0, 60.0, L);
+        float aloft = smoothstep(-1.4, -0.9, d.y);
+        float g = cone * near * aloft;
+        // each fragment is either solid or faint (a fine dither across the edge): the faint ones are all equally faint,
+        // so it doesn't matter which of them draws first
+        ivec2 q = ivec2(gl_FragCoord.xy) & 3;
+        const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+        bool faint = g > (bayer[q.y * 4 + q.x] + 0.5) / 16.0;
+        if ((uGhostPass > 0.5) != faint) discard;  // (each pass draws its own share)
+        if (faint) alpha *= 1.0 - uGhost.w;
+    }
+    fragColor = vec4(col, alpha);
 }
