@@ -2,6 +2,8 @@
 #include "sim.h"
 #include "maelstrom.h"
 #include "livery.h"
+#include "protocol.h"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
@@ -542,6 +544,101 @@ static int SpawnTest() {
     return 0;
 }
 
+// QA: every mode (and every boss) for a few minutes with bots, fleets off and on, checking as it goes: nothing NaN or
+// flung off the map, hulls in range, a disabled ship never afloat (and only where there are revives), nothing stuck,
+// and the snapshot reading back exactly as written (count, flags, the new state byte). BS_QATEST=1 --simtest
+// (BS_QAMIN: minutes per run, 4).
+static int QaTest() {
+    const float minutes = getenv("BS_QAMIN") ? (float)atof(getenv("BS_QAMIN")) : 4.0f;
+    struct Run { uint8_t mode; int boss; bool fleets; uint8_t arena; bool real; };
+    std::vector<Run> runs;
+    for (uint8_t m : {(uint8_t)MODE_FFA, (uint8_t)MODE_TEAMS, (uint8_t)MODE_PIRATE, (uint8_t)MODE_RACE, (uint8_t)MODE_VOYAGE, (uint8_t)MODE_RAID})
+        for (bool f : {false, true}) runs.push_back({m, -1, f, (uint8_t)ARENA_ISLES, false});
+    runs.push_back({(uint8_t)MODE_TEAMS, -1, false, (uint8_t)ARENA_MAELSTROM, false});
+    runs.push_back({(uint8_t)MODE_FFA, -1, true, (uint8_t)ARENA_MAELSTROM, false});
+    runs.push_back({(uint8_t)MODE_RAID, -1, false, (uint8_t)ARENA_ISLES, true});
+    runs.push_back({(uint8_t)MODE_VOYAGE, -1, false, (uint8_t)ARENA_ISLES, true});
+    for (int b = 0; b < BOSS_KINDS; ++b) runs.push_back({(uint8_t)MODE_BOSS, b, false, (uint8_t)ARENA_ISLES, false});
+    static const char* kModes[] = {"ffa", "teams", "pirate", "race", "voyage", "raid", "boss"};
+    int problems = 0;
+    for (const Run& run : runs) {
+        World g;
+        g.rounds = true;
+        g.Init(7, 0, 0, run.mode, run.fleets, run.arena);
+        g.realistic = run.real;
+        g.bossChoice = run.boss >= 0 ? (uint8_t)run.boss : g.bossChoice;
+        const int N = run.mode == MODE_BOSS ? 4 : 8;
+        for (int i = 0; i < N; ++i) g.AddShip(TextFormat("bot%d", i), true);
+        int nan = 0, flung = 0, hpBad = 0, downBad = 0, snapBad = 0, kills = 0, downs = 0, revives = 0, ends = 0, repaired = 0;
+        std::vector<float> still(4096, 0.0f);
+        float worstStill = 0.0f;
+        const int T = (int)(minutes * 60 * 60);
+        std::string firstProblem;
+        auto note = [&](const std::string& s) { if (firstProblem.empty()) firstProblem = s; };
+        for (int i = 0; i < T; ++i) {
+            g.Step();
+            for (const GameEvent& e : g.events) {
+                kills += e.type == EventType::Kill && !(e.flags & EF_DOWNED);
+                downs += e.type == EventType::Kill && (e.flags & EF_DOWNED);
+                revives += e.type == EventType::Revive;
+                repaired += e.type == EventType::Repaired;
+                ends += e.type == EventType::MatchEnd;
+            }
+            g.events.clear();
+            for (const Ship& s : g.ships) {
+                if (!s.active || s.stowed) continue;
+                const bool bad = !std::isfinite(s.pos.x) || !std::isfinite(s.pos.y) || !std::isfinite(s.pos.z) || !std::isfinite(s.vel.x) ||
+                                 !std::isfinite(s.vel.y) || !std::isfinite(s.vel.z) || !std::isfinite(s.hp) || !std::isfinite(s.rot.w);
+                if (bad) { if (!nan) note(TextFormat("t=%.0f %s NaN", g.time, s.name.c_str())); nan++; continue; }
+                if (s.alive && (fabsf(s.pos.x) > 9000.0f || fabsf(s.pos.z) > 9000.0f || s.pos.y < -150.0f || s.pos.y > 400.0f)) {
+                    if (!flung) note(TextFormat("t=%.0f %s at %.0f %.0f %.0f", g.time, s.name.c_str(), s.pos.x, s.pos.y, s.pos.z));
+                    flung++;
+                }
+                if (s.alive && (s.hp > s.maxHp + 0.01f || s.hp <= 0.0f) && g.mode != MODE_RACE) {
+                    if (!hpBad) note(TextFormat("t=%.0f %s hp %.1f / %.1f alive", g.time, s.name.c_str(), s.hp, s.maxHp));
+                    hpBad++;
+                }
+                if (s.downed && (s.alive || (g.mode != MODE_BOSS && g.mode != MODE_VOYAGE))) {
+                    if (!downBad) note(TextFormat("t=%.0f %s downed but alive=%d mode %d", g.time, s.name.c_str(), (int)s.alive, (int)g.mode));
+                    downBad++;
+                }
+                // a bot captain afloat, sailing, and going nowhere for a long time
+                if (s.id < (int)still.size() && s.isBot && s.alive && s.leader < 0 && !s.boss && g.matchState == 0) {
+                    still[s.id] = Vector2Length({s.vel.x, s.vel.z}) < 0.6f ? still[s.id] + 1.0f / 60.0f : 0.0f;
+                    worstStill = fmaxf(worstStill, still[s.id]);
+                } else if (s.id < (int)still.size()) still[s.id] = 0.0f;
+            }
+            if (i % 120 == 0) {  // the snapshot, written and read back
+                ByteWriter w;
+                WriteSnapshot(w, g);
+                ByteReader r(w.buf);
+                Snapshot sn;
+                bool ok = r.Get<uint8_t>() == MSG_SNAPSHOT && ReadSnapshot(r, sn) && r.ok && r.pos == r.n;
+                int n = 0;
+                for (const Ship& s : g.ships) n += s.active && !s.stowed;
+                ok = ok && (int)sn.ships.size() == n;
+                if (ok)
+                    for (const NetShip& ns : sn.ships) {
+                        const Ship& s = g.ships[ns.id];
+                        if (((ns.flags & SF_ALIVE) != 0) != s.alive || ns.downed != s.downed || ns.harbourWork != s.harbourWork ||
+                            fabsf(ns.harbourCd - s.harbourCd) > 1.0f || fabsf(ns.revive - s.reviveT / tune::reviveTime) > 0.01f) { ok = false; break; }
+                    }
+                if (!ok) { if (!snapBad) note(TextFormat("t=%.0f snapshot mismatch (%zu bytes, read to %zu)", g.time, w.buf.size(), r.pos)); snapBad++; }
+            }
+        }
+        const bool fail = nan || flung || hpBad || downBad || snapBad;
+        problems += fail;
+        printf("%-4s %-7s%s%s%s: kills %d, disabled %d, revives %d, harbour repairs %d, rounds ended %d, longest a bot sat still %.0f s%s%s\n",
+               fail ? "FAIL" : "ok", kModes[run.mode], run.fleets ? " +fleets" : "", run.arena == ARENA_MAELSTROM ? " maelstrom" : "",
+               run.boss >= 0 ? TextFormat(" %s", kBossNames[run.boss]) : (run.real ? " realistic" : ""), kills, downs, revives, repaired, ends, worstStill,
+               fail ? TextFormat("  [nan %d flung %d hp %d downed %d snapshot %d]", nan, flung, hpBad, downBad, snapBad) : "",
+               firstProblem.empty() ? "" : ("  first: " + firstProblem).c_str());
+        fflush(stdout);
+    }
+    printf("QA: %d run(s) with problems\n", problems);
+    return problems ? 1 : 0;
+}
+
 static int BossTest() {
     World g;
     g.rounds = true;
@@ -652,6 +749,7 @@ static int BossTest() {
 
 int RunSimTest() {
     if (getenv("BS_BOSSTEST")) return BossTest();
+    if (getenv("BS_QATEST")) return QaTest();
     if (getenv("BS_SPAWNTEST")) return SpawnTest();
     if (getenv("BS_HARBOURTEST")) return HarbourTest();
     if (getenv("BS_RAIDTEST")) return RaidTest();

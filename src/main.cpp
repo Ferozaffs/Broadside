@@ -996,8 +996,8 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 Feed("Welcome aboard. Take the convoy to the far harbour: pirates hunt it all the way.", ui::kText);
                 Feed("Follow the dotted sea lane. A disabled ship comes back when a friend lies alongside her for 10 s.", ui::kDim);
             } else if (curMode == MODE_BOSS) {
-                Feed("Welcome aboard. Something huge is coming round the islands: sink the Leviathan together!", ui::kText);
-                Feed("Its shot comes in patterns. Watch for the red rings on the water: that's where its mortars fall.", ui::kDim);
+                Feed("Welcome aboard. Something huge is coming round the islands: sink it together!", ui::kText);
+                Feed("Red on the water marks where something is about to land. A disabled ship comes back when a friend lies alongside her for 10 s.", ui::kDim);
             } else if (curMode == MODE_RAID) {
                 Feed("Welcome aboard, pirate. A convoy sails for the far port: sink every ship of it. If one gets in, the raid has failed!", ui::kText);
                 Feed("It follows the dotted sea lane. Lie in wait along it. The haven is your cove: repairs.", ui::kDim);
@@ -1595,8 +1595,9 @@ void Game::DrawResults(float W, float H) {
     } else if (curMode == MODE_BOSS) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
         int el = (int)fmaxf(0.0f, tune::bossLength - matchClock);
-        if (winTeam == 0) { title = "THE LEVIATHAN IS SUNK"; sub = TextFormat("sunk in %d:%02d   \xC2\xB7   %s", el / 60, el % 60, lvl); }
-        else if (winTeam == 1) { title = "THE FLEET IS LOST"; tc = kRed; sub = TextFormat("the Leviathan sails on   \xC2\xB7   %s", lvl); }
+        const std::string boss = kBossNames[bossView.bossKind % BOSS_KINDS];  // (whichever it was, not always the Leviathan)
+        if (winTeam == 0) { title = TextFormat("%s IS BEATEN", TextToUpper(boss.c_str())); sub = TextFormat("in %d:%02d   \xC2\xB7   %s", el / 60, el % 60, lvl); }
+        else if (winTeam == 1) { title = "THE FLEET IS LOST"; tc = kRed; sub = TextFormat("%s wins   \xC2\xB7   %s", boss.c_str(), lvl); }
         else { title = "IT GOT AWAY"; tc = kText; sub = "the fight took too long"; }
     } else if (curMode == MODE_RAID) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);

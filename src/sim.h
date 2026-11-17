@@ -159,6 +159,7 @@ constexpr float pirateReload = 0.8f;
 constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
 constexpr float harbourCooldown = 120.0f;  // s after a ship's been patched up in a harbour before the shipwrights will see her again
+constexpr float harbourMinDamage = 0.1f;   // ...and they only start on her with at least this share of her hull gone (a scratch doesn't use them up)
 constexpr float reviveTime = 10.0f;        // boss mode: s a friend must lie alongside a disabled ship to get her going again
 constexpr float reviveRadius = 60.0f;      // ...this close (centre to centre)
 constexpr float reviveHull = 0.25f;        // ...and she's back with this share of her hull

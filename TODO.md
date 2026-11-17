@@ -683,3 +683,16 @@ Protocol 25.
 - Lantern light on the water surface; thunder/sound in general (no audio yet).
 
 If the session runs out of tokens, continue when they refresh.
+
+## QA after v0.19.0 (2026-11-17)
+- BS_QATEST=1 --simtest (BS_QAMIN minutes each, 4): every mode, fleets off/on, the maelstrom, realistic, every boss;
+  checks NaN, ships flung off the map, hulls out of range, disabled-but-afloat, bots stuck, and a snapshot written and
+  read back (the state byte, revive, harbour cooldown). All 24 runs clean.
+- Fixed: escorts counted as revivers (a fleet brought its own captain round in 10 s) - captains only now; escorts of a
+  disabled captain sailed off straight ahead - they keep station round her; a harbour started its 2 min cooldown for a
+  scratch - only with 10% of the hull gone (tune::harbourMinDamage); maelstrom spawns could fall inside spawnMin (400 m);
+  the boss results said "THE LEVIATHAN IS SUNK" whichever boss it was (and the welcome lines named it); voyage bots
+  crept ahead of stopped players at 15% sail - they heave to when 30 m+ ahead of station.
+- Open: without a reserve the Kraken Queen and the Sea Fortress beat 4 bot captains inside 4 minutes; the Voyage with
+  no humans is lost around halfway (the bots no longer turn to fight). Revisit the boss hulls / bot revive behaviour if
+  players find it too hard.

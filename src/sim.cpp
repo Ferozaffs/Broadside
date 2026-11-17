@@ -1461,6 +1461,7 @@ void World::Respawn(Ship& s) {
             float rr = (teams ? 380.0f : 470.0f) + RandF() * (teams ? 240.0f : 150.0f), lat = (RandF() - 0.5f) * (teams ? 560.0f : 300.0f);
             float cx = ax.x * rr + px.x * lat, cz = ax.y * rr + px.y * lat;
             if (RocksHeight(rocks, cx, cz) > -25.0f) continue;
+            if (arena == ARENA_MAELSTROM && cx * cx + cz * cz < maelstrom::spawnMin * maelstrom::spawnMin) continue;  // (out of the pull)
             float nearF = 1e9f, nearE = 1e9f;
             for (const Ship& o : ships) {
                 if (!o.active || !o.alive || o.stowed || o.id == s.id) continue;
@@ -2422,7 +2423,7 @@ void World::BotThink(Ship& s, float dt) {
             if (dd >= aidDist) continue;
             bool covered = false;
             for (const Ship& o : ships) {
-                if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
+                if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id || o.leader >= 0) continue;
                 const float od = Vector2Distance({o.pos.x, o.pos.z}, {d.pos.x, d.pos.z});
                 if (od < tune::reviveRadius || (o.isBot && o.leader < 0 && od < dd)) { covered = true; break; }
             }
@@ -2474,7 +2475,7 @@ void World::BotThink(Ship& s, float dt) {
                 if (Vector3DotProduct(fwd, Vector3Subtract(o.pos, s.pos)) < 0.0f) in.hookSeq++;
             }
         }
-    } else if (cap && cap->alive) {  // escort: keep station on the captain unless an enemy is close to us both
+    } else if (cap && (cap->alive || cap->downed)) {  // escort: keep station on the captain (disabled: round her) unless an enemy is close to us both
         goal = SlotPos(*cap, s.slot);
         float gr = sqrtf(goal.x * goal.x + goal.z * goal.z);
         // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
@@ -2582,7 +2583,7 @@ void World::BotThink(Ship& s, float dt) {
         // the pace: the convoy's, plus whatever closes on the station (the drive is a speed controller: sail =
         // wanted speed / top speed); never so slow she loses steerage
         const float err = stationS - sNow;
-        in.sail = Clamp((vRef + err * 0.12f) / fmaxf(topOf(s), 1.0f), raid ? 0.25f : 0.15f, 1.0f);
+        in.sail = Clamp((vRef + err * 0.12f) / fmaxf(topOf(s), 1.0f), raid ? 0.25f : err < -30.0f ? 0.0f : 0.15f, 1.0f);  // (voyage: ahead of station and the players stopped - heave to and wait)
         const Harbour& dest = harbours[voyage::endHarbour];
         const bool last = sNow > RouteLength() - 700.0f;  // the last stretch: straight in
         if (last) in.sail = 1.0f;
@@ -3510,7 +3511,7 @@ void World::UpdateHarbours(float dt) {
             inPort = true;
             // shipwrights at work (none for the treasure carrier, none in boss mode: there we bring each other round), then
             // not again for a couple of minutes
-            if (!s.pirate && mode != MODE_BOSS && s.harbourCd <= 0.0f && (s.hp < s.maxHp || s.harbourWork)) {
+            if (!s.pirate && mode != MODE_BOSS && s.harbourCd <= 0.0f && (s.hp < s.maxHp * (1.0f - tune::harbourMinDamage) || s.harbourWork)) {
                 s.harbourWork = true;
                 s.hp = fminf(s.maxHp, s.hp + tune::harbourRepair * dt);
                 if (s.hp >= s.maxHp) {
@@ -6542,7 +6543,7 @@ void World::UpdateRevives(float dt) {
         if (!s.active || s.alive || !s.downed) continue;
         int helpers = 0, who = -1;
         for (const Ship& o : ships) {
-            if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
+            if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id || o.leader >= 0) continue;  // (captains: escorts don't count)
             if (Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}) > tune::reviveRadius) continue;
             ++helpers;
             who = o.id;
