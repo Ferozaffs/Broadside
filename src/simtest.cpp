@@ -454,6 +454,7 @@ static int BossTest() {
     if (const char* e = getenv("BS_BOSSCHOICE")) g.bossChoice = (uint8_t)atoi(e);
     printf("boss seed %u, %s, %d captains\n", seed, voyage::kDifficultyNames[g.difficulty], N);
     int result = -1, sunk = 0, hitsOnUs = 0, hitsOnIt = 0, maxBalls = 0, bossBalls = 0;
+    float dmgOnUs = 0.0f;
     int ourVolleys = 0, misses = 0, nearMiss = 0;
     double missDist = 0;
     float endT = 0;
@@ -486,7 +487,10 @@ static int BossTest() {
             }
             if (e.type == EventType::Hit && e.b < g.ShipCount()) {
                 if (g.ships[e.b].boss) hitsOnIt++;
-                else if (g.ships[e.b].team == 0) hitsOnUs++;
+                else if (g.ships[e.b].team == 0) {
+                    hitsOnUs++;
+                    dmgOnUs += e.value;
+                }
             }
             if (e.type == EventType::Kill && e.b < g.ShipCount() && g.ships[e.b].team == 0 && g.ships[e.b].leader < 0) {
                 sunk++;
@@ -528,6 +532,8 @@ static int BossTest() {
     printf("boss %s after %.0f s: %d of ours sunk, %d hits on us, %d on it, it fired %d balls (%.1f/s), at most %d in the air, tick avg %.2f ms\n",
            result == 0 ? "SUNK" : result == 1 ? "WON" : "UNFINISHED", result >= 0 ? endT : (float)g.time, sunk, hitsOnUs, hitsOnIt, bossBalls,
            bossBalls / fmaxf((float)g.time, 1.0f), maxBalls, sum / ticks * 1000.0);
+    if (g.bossKind == BOSS_STORM)
+        printf("   damage to us: %.0f from hits; the storm: bolts %.0f, spouts %.0f, waves %.0f\n", dmgOnUs, g.stormDmg[0], g.stormDmg[1], g.stormDmg[2]);
     printf("   our side: %d guns fired, %d balls into the sea (avg %.0f m from it, %d within 60 m), %d hits on it\n", ourVolleys, misses,
            misses ? missDist / misses : 0.0, nearMiss, hitsOnIt);
     return 0;

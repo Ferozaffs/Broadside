@@ -139,14 +139,31 @@ The host picks the game in the menu:
   80% Deadly). Every merchant that makes port is one that got away; once too many have, the raid is lost. You start
   lying in wait a couple of kilometres up the lane and come back from a sinking within a kilometre of the convoy. The
   haven is your cove (repairs). The sea monsters come for the pirates here.
-- **Boss** (co-op): everyone (and the bots, your allies) against **the Leviathan**, a man-o'-war three times the size
-  of a ship of the line, circling the bay under black sails. It doesn't fire broadsides: it fills the sea with shot in
-  patterns, bullet-hell style, bright magenta so you can read them: rings all round it, turning spirals, walls of
-  broadsides marching out from both sides, fans aimed at where you're going to be, and mortar shells lobbed high that
-  land where **red rings** mark the water. Come in close and it sweeps you with grapeshot. Three phases as its hull
-  goes (the bar at the top of the screen): from two thirds down it fires faster and adds spirals and mortars, from a
-  third its gunboats come out. Sunk ships come back while the fleet has ships in reserve (as in the Voyage). The
-  difficulty sets its hull and how fast the patterns come (Deadly: no reserve).
+- **Boss** (co-op): everyone (and the bots, your allies) against one huge enemy, bullet-hell style. The host picks
+  which under the co-op cards (or Random: a new one every round). Each has three phases as its hull goes (the bar at
+  the top of the screen), and **red** on the water always marks where something is about to land. Sunk ships come
+  back while the fleet has ships in reserve (as in the Voyage). The difficulty sets its hull and how fast it attacks
+  (Deadly: no reserve).
+  - **The Leviathan**: a man-o'-war three times the size of a ship of the line, under black sails. It fills the sea
+    with magenta shot in patterns: rings, turning spirals, marching walls, aimed fans and marked mortars, with
+    grapeshot up close. Later it fires faster and its gunboats come out.
+  - **The Kraken Queen**: a colossal kraken in the middle of the bay with six arms that rear back and slam down along
+    marked lines, or grab a ship and drag her in until the arm is shot off. Her arms shield her. Later come a whirlpool,
+    ink clouds and ink bombs.
+  - **The Flying Dutchman**: a ghost ship that you can't hit while it's phased out. It turns up astern of one of you
+    ("IT'S BEHIND YOU"), fires spectral shot that passes through islands, and fades again. Later drowned cutters rise
+    with it and the water is cursed.
+  - **The Sea Serpent**: circles you spitting venom, dives, and breaches in a great arc onto a marked ring. Later it
+    coils round a ship; shoot the coil to free her.
+  - **The Sea Fortress**: a fortress on its own island in the middle of the bay. Six towers, each with its own fire,
+    shield the keep. A searchlight sweeps the water, and where it settles the mortars follow.
+  - **The Admiral's Armada**: a line of battle that fires marked volleys together, shielding the Admiral's gold-sailed
+    flagship. A fresh line sails in at each phase, and later fire ships come.
+  - **The Ironclad**: an armoured steamship that your shot glances off, except at her stern and paddle-boxes. She picks
+    one of you and rams down a marked lane; get out of it. Later a deck gun sweeps anyone close.
+  - **The Storm Caller**: brings a storm with it. Lightning strikes where a ring marks the water (turn or shorten sail),
+    and waterspouts wander the bay, pulling ships in, spinning them and lifting them. Later rogue waves roll right
+    across the bay, throwing everything they pass.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and

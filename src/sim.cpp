@@ -2641,6 +2641,20 @@ void World::BotThink(Ship& s, float dt) {
                 if (along > -20.0f && along < a.len + 20.0f && fabsf(side) < kq::slamHalf + 30.0f)
                     flee = Vector2Add(flee, Vector2Scale({a.dir.y, -a.dir.x}, side >= 0.0f ? 1.0f : -1.0f));
             }
+        bool brake = false;
+        if (bossKind == BOSS_STORM)
+            for (const BossPart& p : bossParts) {
+                Vector2 to = Vector2Subtract({p.pos.x, p.pos.z}, me);
+                float d = Vector2Length(to);
+                if (p.state == sc::STRIKE && d < sc::boltR + 45.0f) {  // (a ring: off to the side of it, and if it's ahead, shorten sail)
+                    Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+                    float ahead = Vector2DotProduct(to, {f.x, f.z});
+                    Vector2 side = {f.z, -f.x};
+                    flee = Vector2Add(flee, Vector2Scale(side, Vector2DotProduct(to, side) > 0.0f ? -1.0f : 1.0f));
+                    brake |= ahead > 0.0f;
+                } else if (p.state == sc::SPOUT && d < p.len + 60.0f)
+                    flee = Vector2Add(flee, Vector2Normalize(Vector2Negate(to)));
+            }
         if (bossKind == BOSS_IRONCLAD && (bossState == ic::WINDUP || bossState == ic::CHARGE)) {  // out of its lane
             Vector2 r0 = {bossA.x, bossA.z}, d = Vector2Normalize({bossB.x - bossA.x, bossB.z - bossA.z});
             float along = Vector2DotProduct(Vector2Subtract(me, r0), d), side = (me.x - r0.x) * d.y - (me.y - r0.y) * d.x;
@@ -2658,7 +2672,7 @@ void World::BotThink(Ship& s, float dt) {
             flee = Vector2Normalize(flee);
             goal = {s.pos.x + flee.x * 90.0f, 0.0f, s.pos.z + flee.y * 90.0f};
             haveGoal = true;
-            in.sail = 1.0f;
+            in.sail = brake ? 0.15f : 1.0f;
         }
     }
 
@@ -4371,17 +4385,18 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
-    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 7) % 7);  // (random: among the ones there are so far)
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * BOSS_KINDS) % BOSS_KINDS);  // (random: any of them)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
     bossParts.clear();
     FortressRockOn(false);
-    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS || bossKind == BOSS_ARMADA || bossKind == BOSS_IRONCLAD) {
+    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS || bossKind == BOSS_ARMADA || bossKind == BOSS_IRONCLAD || bossKind == BOSS_STORM) {
         if (bossKind == BOSS_KRAKEN) SpawnKrakenQueen();
         else if (bossKind == BOSS_DUTCHMAN) SpawnDutchman();
         else if (bossKind == BOSS_SERPENT) SpawnSerpent();
         else if (bossKind == BOSS_FORTRESS) SpawnFortress();
         else if (bossKind == BOSS_ARMADA) SpawnArmada();
-        else SpawnIronclad();
+        else if (bossKind == BOSS_IRONCLAD) SpawnIronclad();
+        else SpawnStormCaller();
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
@@ -4509,7 +4524,7 @@ void World::UpdateBoss(float dt) {
     }
     if (bossId >= ShipCount() || !ships[bossId].active) return;
     Ship& B = ships[bossId];
-    const bool ship = bossKind == BOSS_LEVIATHAN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_ARMADA || bossKind == BOSS_IRONCLAD;  // (ships keep their hull in the ship)
+    const bool ship = bossKind == BOSS_LEVIATHAN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_ARMADA || bossKind == BOSS_IRONCLAD || bossKind == BOSS_STORM;  // (ships keep their hull in the ship)
     if (ship) {
         bossHpNow = B.alive ? B.hp : 0.0f;
         bossHpMax = B.maxHp;
@@ -4610,6 +4625,10 @@ void World::UpdateBoss(float dt) {
     }
     if (bossKind == BOSS_IRONCLAD) {
         UpdateIronclad(dt, phase, prey);
+        return;
+    }
+    if (bossKind == BOSS_STORM) {
+        UpdateStormCaller(dt, phase, prey);
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
@@ -6196,6 +6215,219 @@ void World::UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& 
                 events.push_back(f);
                 break;
             }
+        }
+    }
+}
+
+// ---- the Storm Caller ---------------------------------------------------------------------
+// A ship that commands the weather: the sky goes black over the bay while it's there. Lightning comes down where red
+// rings mark the water; waterspouts wander the bay, drift at us, and take hold of anything that comes near - drag it
+// in, swing it round, throw it about; from two thirds down rogue waves roll right across the bay, throwing everything
+// they pass. Its own broadsides are the least of it.
+void World::SpawnStormCaller() {
+    int j = NewShipSlot();
+    if (j < 0) return;
+    Ship& b = ships[j];
+    b = Ship{};
+    b.active = true;
+    b.id = (uint16_t)j;
+    b.isBot = true;
+    b.boss = true;
+    b.fixedCls = true;
+    b.team = 1;
+    b.cls = b.nextCls = SC_LINE;
+    b.name = kBossNames[BOSS_STORM];
+    float a = RandF() * 2.0f * PI;
+    b.pos = {sinf(a) * 230.0f, ocean.Height(sinf(a) * 230.0f, cosf(a) * 230.0f) + 1.0f, cosf(a) * 230.0f};
+    b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI * 0.5f);
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
+    b.maxHp = b.hp = (1300.0f + 550.0f * std::max(captains, 1)) * Diff().bossHp;
+    if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
+    b.alive = true;
+    b.sail = 0.5f;
+    bossId = j;
+    bossHpMax = bossHpNow = b.hp;
+    bossPos = b.pos;
+    bossBolt = 4.0f;
+    bossWave = getenv("BS_BOSSUP") ? 8.0f : 12.0f;  // (BS_BOSSUP: screenshots, a wave from the start)
+    bossTimer = 6.0f;
+    bossParts.clear();
+}
+
+void World::UpdateStormCaller(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& C = ships[bossId];
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
+    static const bool bossUpTest = getenv("BS_BOSSUP") != nullptr;
+    auto inBay = [](Vector3 p) {
+        float r = sqrtf(p.x * p.x + p.z * p.z);
+        if (r > 560.0f) { p.x *= 560.0f / r; p.z *= 560.0f / r; }
+        return p;
+    };
+    // lightning: rings on the water, then the strike
+    bossBolt -= dt * rate;
+    if (bossBolt <= 0.0f && !prey.empty()) {
+        bossBolt = 5.0f;
+        for (int k = 0; k < 1 + phase / 2; ++k) {
+            const Ship* t = prey[(size_t)(RandF() * prey.size()) % prey.size()];
+            BossPart b;
+            b.state = sc::STRIKE;
+            b.pos = Vector3Add(t->pos, Vector3Scale(t->vel, 1.1f));  // (where she'll be if she holds on: a turn, or a shortened sail, gets out of it)
+            b.pos.x += (RandF() - 0.5f) * 30.0f;
+            b.pos.z += (RandF() - 0.5f) * 30.0f;
+            b.pos.y = ocean.Height(b.pos.x, b.pos.z);
+            b.root = b.pos;
+            b.timer = 2.2f;
+            b.len = sc::boltR;
+            bossParts.push_back(b);
+            GameEvent e{EventType::BossTell};
+            e.a = C.id;
+            e.flags = 1;  // (a ring)
+            e.pos = b.pos;
+            e.dir = {sc::boltR, 0.0f, 0.0f};
+            e.value = 2.2f;
+            events.push_back(e);
+        }
+    }
+    // waterspouts: as many as its phase
+    int spouts = 0;
+    for (const BossPart& p : bossParts) spouts += p.state == sc::SPOUT;
+    if (spouts < phase) {
+        BossPart s;
+        s.state = sc::SPOUT;
+        float a = RandF() * 2.0f * PI, r = 180.0f + RandF() * 260.0f;
+        s.pos = {sinf(a) * r, 0.0f, cosf(a) * r};
+        s.root = s.pos;
+        s.dir = {sinf(a + 1.6f), cosf(a + 1.6f)};
+        s.timer = 40.0f;
+        s.len = sc::spoutR;
+        bossParts.push_back(s);
+        GameEvent e{EventType::BossPart};
+        e.b = NO_SHIP;
+        e.flags = 10;  // (a spout forms)
+        e.pos = s.pos;
+        events.push_back(e);
+    }
+    // rogue waves (phase 2 on)
+    if (phase >= 2 || bossUpTest) {
+        bossWave -= dt * rate;
+        if (bossWave <= 0.0f) {
+            bossWave = 24.0f;
+            BossPart w;
+            w.state = sc::WAVE;
+            float a = RandF() * 2.0f * PI;
+            w.dir = {sinf(a), cosf(a)};
+            w.pos = {-w.dir.x * 680.0f, 0.0f, -w.dir.y * 680.0f};
+            w.root = w.pos;
+            w.len = sc::waveHalf;
+            w.timer = 1400.0f / sc::waveSpeed;
+            bossParts.push_back(w);
+            GameEvent e{EventType::BossPart};
+            e.b = NO_SHIP;
+            e.flags = 9;  // (a rogue wave)
+            e.pos = w.pos;
+            e.dir = {w.dir.x, 0.0f, w.dir.y};
+            events.push_back(e);
+        }
+    }
+    for (size_t i = 0; i < bossParts.size();) {
+        BossPart& p = bossParts[i];
+        p.t += dt;
+        p.timer -= dt;
+        bool gone = p.timer <= 0.0f;
+        if (p.state == sc::STRIKE && gone) {  // the strike
+            for (Ship& s : ships) {
+                if (!s.active || !s.alive || s.stowed || s.team == 1) continue;
+                if (Vector2Distance({s.pos.x, s.pos.z}, {p.pos.x, p.pos.z}) > sc::boltR + hull::maxHalfBeam * ClassOf(s.cls).scale) continue;
+                float dmg = 12.0f * Diff().monster;
+                stormDmg[0] += dmg;
+                ApplyImpulse(s, {0.0f, -tune::ballKnockback, 0.0f}, Vector3Add(s.pos, {0.0f, 6.0f, 0.0f}), {tune::hitPitch, 0.2f, 1.0f});
+                GameEvent h{EventType::Hit};
+                h.a = C.id;
+                h.b = s.id;
+                h.flags = EF_PLUNGING;
+                h.pos = Vector3Add(s.pos, {0.0f, 8.0f, 0.0f});
+                h.dir = {0, -1, 0};
+                h.value = dmg;
+                events.push_back(h);
+                Damage(s, dmg, C.id);
+            }
+            GameEvent e{EventType::BossSlam};
+            e.a = C.id;
+            e.flags = 4;  // (lightning)
+            e.pos = p.pos;
+            events.push_back(e);
+        } else if (p.state == sc::SPOUT) {  // wandering, drifting at the nearest of us, taking hold of what's near
+            p.dir = Vector2Normalize(Vector2Add(p.dir, {(RandF() - 0.5f) * 0.6f * dt, (RandF() - 0.5f) * 0.6f * dt}));
+            const Ship* near = nullptr;
+            float nd = 1e9f;
+            for (const Ship* s : prey) {
+                float d = Vector2Distance({s->pos.x, s->pos.z}, {p.pos.x, p.pos.z});
+                if (d < nd) { nd = d; near = s; }
+            }
+            Vector2 drift = Vector2Scale(p.dir, 6.0f);
+            if (near && nd < 500.0f) drift = Vector2Add(drift, Vector2Scale(Vector2Normalize({near->pos.x - p.pos.x, near->pos.z - p.pos.z}), 4.0f));
+            p.pos = inBay({p.pos.x + drift.x * dt, 0.0f, p.pos.z + drift.y * dt});
+            if (RocksHeight(rocks, p.pos.x, p.pos.z) > -5.0f) p.dir = Vector2Negate(p.dir);
+            p.pos.y = ocean.Height(p.pos.x, p.pos.z);
+            for (Ship& s : ships) {
+                if (!s.active || !s.alive || s.stowed || s.boss) continue;
+                Vector2 d = {p.pos.x - s.pos.x, p.pos.z - s.pos.z};
+                float r = Vector2Length(d);
+                if (r > p.len + 10.0f || r < 0.1f) continue;
+                Vector2 in = Vector2Scale(d, 1.0f / r), tang = {-in.y, in.x};
+                float k = 1.0f - r / (p.len + 10.0f);
+                s.vel.x += (in.x * 9.0f + tang.x * 14.0f) * k * dt;
+                s.vel.z += (in.y * 9.0f + tang.y * 14.0f) * k * dt;
+                s.vel.y += 7.0f * k * dt;
+                s.angVel.y += 0.8f * k * dt;
+                if (s.team == 0) {
+                    stormDmg[1] += 5.0f * Diff().monster * k * dt;
+                    Damage(s, 5.0f * Diff().monster * k * dt, C.id);
+                }
+            }
+        } else if (p.state == sc::WAVE) {  // rolling across the bay, throwing everything it passes
+            Vector2 before = {p.pos.x, p.pos.z};
+            p.pos.x += p.dir.x * sc::waveSpeed * dt;
+            p.pos.z += p.dir.y * sc::waveSpeed * dt;
+            for (Ship& s : ships) {
+                if (!s.active || !s.alive || s.stowed || s.boss) continue;
+                Vector2 rel0 = Vector2Subtract({s.pos.x, s.pos.z}, before), rel1 = Vector2Subtract({s.pos.x, s.pos.z}, {p.pos.x, p.pos.z});
+                float a0 = Vector2DotProduct(rel0, p.dir), a1 = Vector2DotProduct(rel1, p.dir);
+                float side = fabsf(rel1.x * p.dir.y - rel1.y * p.dir.x);
+                if (!(a0 > 0.0f && a1 <= 0.0f) || side > p.len) continue;  // (the crest just went under her)
+                ApplyImpulse(s, {p.dir.x * tune::ballKnockback * 3.5f, tune::ballKnockback * 3.0f, p.dir.y * tune::ballKnockback * 3.5f},
+                             Vector3Add(s.pos, {-p.dir.x * 8.0f, -2.0f, -p.dir.y * 8.0f}), {tune::hitPitch, 0.3f, 1.2f});
+                if (s.team == 0) {
+                    float dmg = 6.0f * Diff().monster;
+                    stormDmg[2] += dmg;
+                    GameEvent h{EventType::Hit};
+                    h.a = C.id;
+                    h.b = s.id;
+                    h.pos = Vector3Add(s.pos, {0.0f, 3.0f, 0.0f});
+                    h.dir = {p.dir.x, 0.0f, p.dir.y};
+                    h.value = dmg;
+                    events.push_back(h);
+                    Damage(s, dmg, C.id);
+                }
+            }
+        }
+        if (gone) bossParts.erase(bossParts.begin() + i);
+        else ++i;
+    }
+    // its own broadside at whoever's nearest
+    bossTimer -= dt * rate;
+    if (bossTimer <= 0.0f && C.alive) {
+        bossTimer = 6.0f;
+        const Ship* t = nullptr;
+        float bd = 460.0f;
+        for (const Ship* s : prey) {
+            float d = Vector3Distance(s->pos, C.pos);
+            if (d < bd) { bd = d; t = s; }
+        }
+        if (t) {
+            AimAt(C, t->pos, t->vel);
+            C.input.fireSeq++;
         }
     }
 }

@@ -557,7 +557,18 @@ Protocol 25.
   24 + 12% of her hull, thrown), RECOVER (slow, 3.5 s / 2 s). Phase 2 on: a deck gun's grapeshot at anyone inside 200 m.
   Hull 1500 + 650 per captain. Allied bots aim at its stern and get out of its lane. Bot runs (hull 1100 + 450): sunk
   in ~7 min, 5 lost; raised since.
-- [ ] Storm Caller
+- [x] Storm Caller (BOSS_STORM): an SC_LINE ship (purple sails) that brings a storm with it (client: stormMix in
+  UpdateAtmosphere - black cloud, rain, which sets the lightning going, dark fog). Lightning (bossParts sc::STRIKE): a
+  ring (BossTell flags 1, 2.2 s) where a ship will be 1.1 s on if she holds her course, then the bolt (12 dmg within
+  16 m, knocked down; BossSlam flags 4: a jagged additive bolt, flash, thunder), every 5 s (two at a time in phase 3).
+  Waterspouts (sc::SPOUT, as many as the phase, 40 s): wander, drift at the nearest of us, pull in, spin and lift within
+  34 m, 5 dmg/s at the middle (a twisting funnel + spray). Phase 2 on: rogue waves (sc::WAVE, every 24 s, a 1400 m
+  crest crossing the bay at 22 m/s: a big shove and 6 dmg as it passes under; drawn as a swell with a foam crest, in
+  linear colour so the post pass fogs and tonemaps it like the sea). Its own broadside every 6 s at the nearest. Hull
+  1300 + 550 per captain. Allied bots get to the side of a ring and shorten sail if it's ahead. World::stormDmg (tests)
+  splits our damage by bolt / spout / wave. BS_BOSSUP=1 sends a wave at once (screenshots). Bot runs: lightning first
+  dealt 846 of 1019 (bolts aimed 1.7 s ahead with a 1.7 s tell: nothing could turn out of them); now phase 2 at ~66%,
+  lost at 48% after ~8.5 min.
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

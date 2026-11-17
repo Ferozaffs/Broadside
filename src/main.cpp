@@ -606,6 +606,7 @@ private:
         if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
         if (curMode == MODE_BOSS && s.cls == SC_IRON) return {50, 50, 56, 255};  // (the Ironclad: iron grey, its canvas furled)
+        if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_STORM && id == bossView.bossShip) return {120, 60, 170, 255};  // (the Storm Caller)
         if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_ARMADA && s.team == 1)  // (the Navy: white, the Admiral gold)
             return id == bossView.bossShip ? ui::kGold : Color{236, 236, 228, 255};
         if (curMode == MODE_BOSS && s.team == 1) return kPirate;
@@ -678,6 +679,11 @@ private:
     void DrawFortressBoss(float dt);
     void FireshipFx(float dt);
     void DrawIronclad(float dt);
+    void DrawStormFx(float dt);
+    void DrawStormGeometry(const Camera3D& cam);
+    struct Bolt { Vector3 at; double t0; float seed; };
+    std::vector<Bolt> bolts;
+    float stormMix = 0.0f;
     float ironWheel = 0.0f;
     void DrawSearchlight(const Camera3D& cam);
     void DrawMortarMarks();
@@ -2976,6 +2982,19 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_STORM) {
+                const Color sc = {170, 130, 230, 255};
+                if (e.b == 1) {
+                    Notice("THE STORM CALLER", sc, 4.0f);
+                    Feed3("THE STORM CALLER", "  brings the storm: keep out of the rings and away from the spouts", "", sc, ui::kText);
+                } else {
+                    Notice(e.b == 2 ? "THE SEA RISES" : "THE TEMPEST", sc, 4.0f);
+                    Feed3("THE STORM CALLER", e.b == 2 ? "  sends rogue waves across the bay, and another spout" : "  calls up the tempest: three spouts, lightning everywhere", "", sc,
+                          ui::kText);
+                }
+                sfx::PlayFlat(sfx::Thunder, 1.0f, 0.8f);
+                break;
+            }
             if (e.flags == BOSS_IRONCLAD) {
                 if (e.b == 1) {
                     Notice("THE IRONCLAD", ui::kRed, 4.0f);
@@ -3078,6 +3097,19 @@ void Game::PlayEvent(const GameEvent& e) {
             if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 420.0f) sfx::PlayFlat(sfx::Creak, 0.7f, 0.5f);
             break;
         case EventType::BossSlam: {
+            if (e.flags == 4) {  // the Storm Caller's lightning
+                bolts.push_back({e.pos, GetTime(), Rnd(0.0f, 100.0f)});
+                lightning = 1.0f;
+                fx.Add(fx::Flash, Vector3Add(e.pos, {0, 3, 0}), {0, 0, 0}, 0.25f, 30.0f, 0, {220, 230, 255, 255});
+                for (int i = 0; i < 40; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(8, 22), Rnd(-6, 6)}, Rnd(1.0f, 2.0f), Rnd(0.5f, 1.1f), 0.5f, {235, 245, 250, 220}, 0);
+                AddFoam(e.pos, 3.0f, sc::boltR * 1.5f, 4.0f, 1.0f);
+                sfx::Play(sfx::Thunder, e.pos, 1.0f, 1.3f);
+                if (myId >= 0 && myId < NumShips() && view[myId].present) {
+                    float d = Vector3Distance(view[myId].s.pos, e.pos);
+                    if (d < 120.0f) { shake = fmaxf(shake, 1.2f); flash = fmaxf(flash, 0.5f * (1.0f - d / 120.0f)); }
+                }
+                break;
+            }
             if (e.flags == 3) {  // the Ironclad rams
                 fx.Explosion(e.pos, {0, 1, 0}, 2.0f);
                 for (int i = 0; i < 40; ++i) Emit(e.pos, RandDir(12.0f), Rnd(1.0f, 2.5f), Rnd(0.5f, 1.0f), 0.0f, {110, 75, 45, 255}, 4);
@@ -3162,6 +3194,15 @@ void Game::PlayEvent(const GameEvent& e) {
                     Notice("IT'S BEHIND YOU", {150, 255, 200, 255}, 3.0f);
                     sfx::PlayFlat(sfx::Thunder, 0.7f, 0.4f);
                 } else if (e.a < NumShips()) Feed3("The Dutchman", "  comes through astern of  ", NameOf(e.a), {150, 255, 200, 255}, TeamOf(e.a));
+                break;
+            }
+            if (e.flags == 9) {  // a rogue wave
+                Notice("ROGUE WAVE!", {140, 200, 230, 255}, 2.5f);
+                sfx::PlayFlat(sfx::Slam, 0.7f, 0.5f);
+                break;
+            }
+            if (e.flags == 10) {  // a waterspout forms
+                sfx::Play(sfx::Whoosh, e.pos, 1.0f, 0.5f);
                 break;
             }
             if (e.flags == 8) {  // the Ironclad has singled someone out
@@ -3526,6 +3567,22 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
             if (lightningSecond <= 0.0f) lightning = fmaxf(lightning, 0.85f);
         }
     }
+    {  // the Storm Caller brings its storm: black cloud, rain, lightning (the rain sets the lightning going)
+        float want = !menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_STORM ? 1.0f : 0.0f;
+        stormMix += (want - stormMix) * fminf(1.0f, dt * 0.3f);
+        const float g = stormMix;
+        if (g > 0.001f) {
+            a.rain = fmaxf(a.rain, 0.85f * g);
+            a.cloud = Lerp(a.cloud, 1.0f, g);
+            a.fogDensity = Lerp(a.fogDensity, fmaxf(a.fogDensity, 0.0007f), g);
+            a.fogColor = Vector3Lerp(a.fogColor, {0.16f, 0.18f, 0.22f}, g);
+            a.horizon = Vector3Lerp(a.horizon, {0.18f, 0.2f, 0.24f}, g);
+            a.zenith = Vector3Lerp(a.zenith, {0.05f, 0.06f, 0.08f}, g);
+            a.sunColor = Vector3Scale(a.sunColor, 1.0f - 0.6f * g);
+            a.ambient = Vector3Scale(a.ambient, 1.0f - 0.35f * g);
+            a.lanterns = fmaxf(a.lanterns, 0.7f * g);
+        }
+    }
     {  // the Dutchman brings its own fog, green-grey, the sun gone thin
         float want = !menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_DUTCHMAN ? 1.0f : 0.0f;
         ghostFog += (want - ghostFog) * fminf(1.0f, dt * 0.25f);
@@ -3851,6 +3908,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_FORTRESS) DrawFortressBoss(dt);
     if (!menu) FireshipFx(dt);
     if (!menu && curMode == MODE_BOSS) DrawIronclad(dt);
+    if (!menu && curMode == MODE_BOSS) DrawStormFx(dt);
 
     renderer.Water();
 
@@ -3875,6 +3933,7 @@ void Game::RenderWorld(float dt, bool menu) {
         DrawCurses();
         DrawGhostShip(dt);
         DrawSearchlight(cam);
+        DrawStormGeometry(cam);
     }
     if (!menu) DrawFleetRings();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
@@ -6338,6 +6397,14 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_STORM) {
+        int spouts = 0, waves = 0;
+        for (const NetBossPart& p : bossView.bossParts) {
+            spouts += p.state == sc::SPOUT;
+            waves += p.state == sc::WAVE;
+        }
+        extra = TextFormat("   \xC2\xB7   WATERSPOUTS %d%s", spouts, waves ? "   \xC2\xB7   A ROGUE WAVE IS ROLLING" : "");
+    }
     if (bossView.bossKind == BOSS_IRONCLAD) {
         const uint8_t st = bossView.bossState;
         extra = st == ic::CHARGE ? "   \xC2\xB7   CHARGING!" : st == ic::WINDUP ? "   \xC2\xB7   LINING UP: GET OUT OF ITS LANE" : st == ic::RECOVER ? "   \xC2\xB7   SLOW: HIT ITS STERN!"
@@ -6642,4 +6709,154 @@ void Game::DrawIronclad(float dt) {
         Vector3 bow = HullToWorld(s.pos, s.rot, {0.0f, 0.0f, hull::halfLength}, S);
         Emit(bow, {Rnd(-4, 4), Rnd(4, 9), Rnd(-4, 4)}, 1.0f, 0.6f, 0.4f, {235, 245, 250, 220}, 0);
     }
+}
+
+// The Storm Caller's weather: waterspouts (columns of spray whirling up into the cloud), rogue waves (a crest rolling
+// across the bay), lightning bolts
+void Game::DrawStormFx(float dt) {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_STORM) return;
+    const OceanCPU& oc = Ocean();
+    const float now = (float)GetTime();
+    for (const NetBossPart& p : bossView.bossParts) {
+        if (p.state == sc::SPOUT) {
+            Vector3 base = {p.pos.x, oc.Height(p.pos.x, p.pos.z), p.pos.z};
+            for (int i = 0; i < 3; ++i) {
+                if (Rnd(0.0f, 1.0f) > dt * 30.0f) continue;
+                float h = Rnd(0.0f, 140.0f), a = Rnd(0.0f, 2.0f * PI), r = 4.0f + h * 0.12f;
+                Vector3 at = {base.x + sinf(a) * r, base.y + h, base.z + cosf(a) * r};
+                Vector3 v = {cosf(a) * 14.0f, Rnd(14.0f, 22.0f), -sinf(a) * 14.0f};
+                fx::Particle& q = fx.Add(fx::Smoke, at, v, Rnd(2.0f, 3.5f), Rnd(5.0f, 9.0f), 2.0f, {190, 200, 205, 170});
+                q.drag = 0.4f;
+                q.rise = 4.0f;
+            }
+            if (Rnd(0.0f, 1.0f) < dt * 25.0f) Emit(Vector3Add(base, {Rnd(-8, 8), 0.0f, Rnd(-8, 8)}), {Rnd(-8, 8), Rnd(6, 16), Rnd(-8, 8)}, 1.2f, 0.8f, 0.5f, {225, 235, 240, 210}, 0);
+            if (Rnd(0.0f, 1.0f) < dt * 8.0f) AddFoam(base, 4.0f, p.len, 2.0f, 0.8f);
+        } else if (p.state == sc::WAVE) {
+            Vector2 d = p.dir, side = {d.y, -d.x};
+            for (float o = -p.len; o <= p.len; o += 30.0f) {
+                if (Rnd(0.0f, 1.0f) > dt * 4.0f) continue;
+                Vector3 at = {p.pos.x + side.x * o, 0.0f, p.pos.z + side.y * o};
+                if (at.x * at.x + at.z * at.z > 720.0f * 720.0f) continue;
+                at.y = oc.Height(at.x, at.z) + 6.0f;
+                AddFoam(at, 6.0f, 18.0f, 3.0f, 0.9f);
+                for (int k = 0; k < 3; ++k) Emit(at, {d.x * 10.0f + Rnd(-3, 3), Rnd(6, 14), d.y * 10.0f + Rnd(-3, 3)}, 1.4f, 1.0f, 0.6f, {230, 240, 245, 210}, 0);
+            }
+        }
+    }
+    (void)now;
+}
+
+void Game::DrawStormGeometry(const Camera3D& cam) {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_STORM) return;
+    const OceanCPU& oc = Ocean();
+    rlDrawRenderBatchActive();
+    rlDisableBackfaceCulling();
+    rlSetTexture(rlGetTextureIdDefault());
+    // the waves: a swell rising out of the sea behind, a grey-white crest, a steep face in front, rolling across the bay
+    {
+        struct Prof { float fwd, h; unsigned char r, g, b, a; };
+        // (linear colour: the post pass fogs it by depth and tonemaps it like the sea round it)
+        static const Prof prof[] = {{-75.0f, 0.0f, 4, 14, 18, 0},     {-40.0f, 2.2f, 4, 14, 18, 190},  {-15.0f, 6.0f, 6, 17, 21, 225},
+                                    {-4.0f, 8.4f, 12, 24, 28, 235},   {0.0f, 9.0f, 78, 82, 84, 235},    {3.0f, 7.2f, 30, 36, 38, 230},
+                                    {6.5f, 3.0f, 5, 15, 19, 225},     {10.0f, -0.6f, 4, 13, 17, 200}};
+        const int NP = (int)(sizeof(prof) / sizeof(prof[0]));
+        auto sea = [&](float x, float z) {  // (smoothed: the chop under it shouldn't make it jagged)
+            return (oc.Height(x, z) + oc.Height(x + 9.0f, z) + oc.Height(x - 9.0f, z) + oc.Height(x, z + 9.0f) + oc.Height(x, z - 9.0f)) * 0.2f;
+        };
+        auto vert = [&](const Prof& P, Vector3 v) {
+            rlColor4ub(P.r, P.g, P.b, P.a);
+            rlVertex3f(v.x, v.y, v.z);
+        };
+        rlBegin(RL_QUADS);
+        for (const NetBossPart& p : bossView.bossParts) {
+            if (p.state != sc::WAVE) continue;
+            const Vector2 d = p.dir, side = {d.y, -d.x};
+            const float step = 20.0f;
+            for (float o = -p.len; o < p.len; o += step) {
+                Vector2 c0 = {p.pos.x + side.x * o, p.pos.z + side.y * o}, c1 = {p.pos.x + side.x * (o + step), p.pos.z + side.y * (o + step)};
+                if (c0.x * c0.x + c0.y * c0.y > 760.0f * 760.0f && c1.x * c1.x + c1.y * c1.y > 760.0f * 760.0f) continue;
+                const float e0 = fminf(1.0f, (p.len - fabsf(o)) / 120.0f), e1 = fminf(1.0f, (p.len - fabsf(o + step)) / 120.0f);  // (its ends die away)
+                Vector3 v0[8], v1[8];
+                for (int k = 0; k < NP; ++k) {
+                    float x0 = c0.x + d.x * prof[k].fwd, z0 = c0.y + d.y * prof[k].fwd, x1 = c1.x + d.x * prof[k].fwd, z1 = c1.y + d.y * prof[k].fwd;
+                    v0[k] = {x0, sea(x0, z0) + prof[k].h * e0, z0};
+                    v1[k] = {x1, sea(x1, z1) + prof[k].h * e1, z1};
+                }
+                for (int k = 0; k + 1 < NP; ++k) {
+                    const Prof &A = prof[k], &B = prof[k + 1];
+                    vert(A, v0[k]);
+                    vert(A, v1[k]);
+                    vert(B, v1[k + 1]);
+                    vert(B, v0[k + 1]);
+                }
+            }
+        }
+        rlEnd();
+        rlDrawRenderBatchActive();
+    }
+    // the spouts: a twisting funnel of grey water from the sea up into the cloud, widening as it climbs
+    {
+        const float tNow = (float)GetTime();
+        rlDisableDepthMask();
+        rlBegin(RL_QUADS);
+        for (const NetBossPart& p : bossView.bossParts) {
+            if (p.state != sc::SPOUT) continue;
+            const float base = oc.Height(p.pos.x, p.pos.z) - 1.0f;
+            const int LV = 12, SG = 18;
+            const float near = Clamp((Vector2Distance({rv.pos.x, rv.pos.z}, {p.pos.x, p.pos.z}) - 25.0f) / 90.0f, 0.12f, 1.0f);  // (thin it out when we're right by it)
+            auto ring = [&](int l, int g, float* outA) {
+                float h = 180.0f * l / LV, r = 3.5f + h * 0.11f + h * h * 0.0004f;
+                float sway = h * 0.06f;
+                float a = 2.0f * PI * g / SG - tNow * 2.5f + h * 0.015f;
+                *outA = a;
+                return Vector3{p.pos.x + sinf(a) * r + sinf(tNow * 0.7f + h * 0.02f) * sway, base + h, p.pos.z + cosf(a) * r + cosf(tNow * 0.6f + h * 0.025f) * sway};
+            };
+            for (int l = 0; l < LV; ++l)
+                for (int g = 0; g < SG; ++g) {
+                    float a0, a1, a2, a3;
+                    Vector3 v0 = ring(l, g, &a0), v1 = ring(l, g + 1, &a1), v2 = ring(l + 1, g + 1, &a2), v3 = ring(l + 1, g, &a3);
+                    auto col = [&](int lv, float a) {
+                        float u = (float)lv / LV, stripe = 0.75f + 0.25f * sinf(a * 3.0f + u * 6.0f);
+                        float al = (u < 0.08f ? u / 0.08f : 1.0f) * (u > 0.6f ? (1.0f - u) / 0.4f : 1.0f) * 175.0f * stripe * near;
+                        unsigned char c = (unsigned char)(34 + 26 * stripe - 14 * u);  // (linear: the tonemap lifts it)
+                        rlColor4ub(c, (unsigned char)(c + 2), (unsigned char)(c + 4), (unsigned char)al);
+                    };
+                    col(l, a0); rlVertex3f(v0.x, v0.y, v0.z);
+                    col(l, a1); rlVertex3f(v1.x, v1.y, v1.z);
+                    col(l + 1, a2); rlVertex3f(v2.x, v2.y, v2.z);
+                    col(l + 1, a3); rlVertex3f(v3.x, v3.y, v3.z);
+                }
+        }
+        rlEnd();
+        rlDrawRenderBatchActive();
+        rlEnableDepthMask();
+    }
+    // the bolts: jagged, blinding, gone in a moment
+    const double now = GetTime();
+    bolts.erase(std::remove_if(bolts.begin(), bolts.end(), [&](const Bolt& b) { return now > b.t0 + 0.35; }), bolts.end());
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlBegin(RL_QUADS);
+    for (const Bolt& b : bolts) {
+        float k = 1.0f - (float)((now - b.t0) / 0.35);
+        Vector3 prev = Vector3Add(b.at, {0.0f, 260.0f, 0.0f});
+        for (int i = 1; i <= 12; ++i) {
+            float u = i / 12.0f;
+            Vector3 p = Vector3Add(b.at, {i == 12 ? 0.0f : sinf(b.seed * 7.1f + i * 2.3f) * 14.0f * (1.0f - u), 260.0f * (1.0f - u),
+                                          i == 12 ? 0.0f : cosf(b.seed * 3.7f + i * 1.9f) * 14.0f * (1.0f - u)});
+            Vector3 dir = Vector3Normalize(Vector3Subtract(p, prev)), toCam = Vector3Normalize(Vector3Subtract(rv.pos, p));
+            Vector3 w = Vector3Scale(Vector3Normalize(Vector3CrossProduct(dir, toCam)), 1.6f);
+            unsigned char a = (unsigned char)(255 * k);
+            rlColor4ub(220, 230, 255, a); rlVertex3f(prev.x + w.x, prev.y + w.y, prev.z + w.z);
+            rlColor4ub(220, 230, 255, a); rlVertex3f(prev.x - w.x, prev.y - w.y, prev.z - w.z);
+            rlColor4ub(220, 230, 255, a); rlVertex3f(p.x - w.x, p.y - w.y, p.z - w.z);
+            rlColor4ub(220, 230, 255, a); rlVertex3f(p.x + w.x, p.y + w.y, p.z + w.z);
+            prev = p;
+        }
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    EndBlendMode();
+    rlSetTexture(0);
+    rlEnableBackfaceCulling();
+    (void)cam;
 }

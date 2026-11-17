@@ -222,6 +222,13 @@ enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, F
 constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
 constexpr float curseSlow = 0.45f;
 }  // namespace fd
+namespace sc {  // the Storm Caller: what it conjures (bossParts' state)
+enum Part : uint8_t { SPOUT = 1, WAVE = 2, STRIKE = 3 };
+constexpr float spoutR = 34.0f;    // a waterspout takes hold of what's this near
+constexpr float boltR = 16.0f;     // a lightning strike: this near
+constexpr float waveHalf = 700.0f; // a rogue wave: this long either side
+constexpr float waveSpeed = 22.0f;
+}  // namespace sc
 namespace ic {  // the Ironclad: its states (World::bossState)
 enum State : uint8_t { CRUISE = 1, RECOVER = 3, WINDUP = 4, CHARGE = 5 };
 constexpr float chargeSpeed = 2.7f;  // x its top speed on the charge
@@ -708,6 +715,7 @@ public:
     int bossShots = 0;
     uint8_t bossChoice = BOSS_LEVIATHAN;  // host: which boss (or BOSS_RANDOM: a new one every round)
     uint8_t bossKind = BOSS_LEVIATHAN;    // the one we're fighting
+    float stormDmg[3] = {};               // (tests: what the Storm Caller's weather has done to us: bolts, spouts, waves)
     float bossHpNow = 0.0f, bossHpMax = 1.0f;  // its hull (the Leviathan: its ship's; the others keep their own)
     Vector3 bossPos{};                    // where it is
     float bossHeading = 0.0f, bossT = 0.0f;
@@ -806,6 +814,9 @@ private:
     void SpawnFortress();
     void SpawnArmada();
     void SpawnIronclad();
+    void SpawnStormCaller();
+    void UpdateStormCaller(float dt, int phase, const std::vector<const Ship*>& prey);
+    float bossBolt = 0.0f, bossWave = 0.0f;
     void UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& prey);
     void UpdateArmada(float dt, int phase, const std::vector<const Ship*>& prey);
     void ArmadaThink(Ship& s, float dt);
