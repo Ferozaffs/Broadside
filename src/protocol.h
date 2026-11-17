@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 22;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op)
+constexpr uint16_t PROTOCOL_VERSION = 23;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -221,6 +221,7 @@ struct Snapshot {
     std::vector<NetMonster> monsters;
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
+    uint8_t raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     float matchClock = 0;
     float raceClock = 0;  // race: s since the round started (the countdown is the first raceCountdown of it)
 };
@@ -234,6 +235,8 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(world.matchState);
     w.Put(world.round);
     w.Put(world.cove);
+    w.Put((uint8_t)std::min(world.raidTotal, 255));
+    w.Put((uint8_t)std::min(world.raidNeed, 255));
     w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
     w.Put((uint16_t)Clamp(world.raceClock * 20.0f, 0.0f, 65000.0f));
     uint16_t n = 0;
@@ -380,6 +383,8 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.matchState = r.Get<uint8_t>();
     s.round = r.Get<uint8_t>();
     s.cove = r.Get<uint8_t>();
+    s.raidTotal = r.Get<uint8_t>();
+    s.raidNeed = r.Get<uint8_t>();
     s.matchClock = r.Get<uint16_t>() / 10.0f;
     s.raceClock = r.Get<uint16_t>() / 20.0f;
     uint16_t n = r.Get<uint16_t>();

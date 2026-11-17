@@ -91,7 +91,7 @@ constexpr float gunTraverse = 0.6f;        // rad the carriages swing either sid
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
-constexpr int scoreLimit[5] = {12, 20, 5, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage: none)
+constexpr int scoreLimit[6] = {12, 20, 5, 0, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage, raid: none)
 // race: a sprint from one harbour to the far one through gates; sunk = crippled (slowed a while), not out
 constexpr float raceLength = 180.0f;       // s before a race is called off
 constexpr float raceCountdown = 4.0f;      // s held on the start line (3, 2, 1, go)
@@ -196,7 +196,9 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
 
 // ---- game modes and harbours -----------------------------------------------------
-enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_COUNT = 5 };
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_COUNT = 6 };
+// (raid: the voyage reversed. The players are the pirates (team 1); an AI convoy (team 0) sails the passage for the far
+// port, and they must sink enough of it before the rest gets in.)
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
 // The race courses (race mode always sails one of them, nothing else does): a long channel between cliffs, start at
 // one end, finish at the other. The strait runs straight down the z axis; the serpent is an S of two sweeping bends,
@@ -242,12 +244,13 @@ struct Level {
     float aimErr;                        // rad of scatter in the pirates' aim
     float kraken, megalodon;             // chance a voyage meets each sea monster
     float monster;                       // how tough and how savage the monsters are (x)
+    float raidShips, raidNeed;           // raid: the convoy's size (x 3 + 2 per pirate captain), and the share of it to sink
 };
 inline constexpr Level kLevels[DIFFICULTIES] = {
-    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f},   // easy: fewer, slower, worse gunners, three ships each in reserve
-    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f},      // normal
-    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f},    // hard: one ship each in reserve, more and bigger pirates
-    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f},    // deadly: no reserve at all, sunk is out
+    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f, 0.8f, 0.5f},   // easy: fewer, slower, worse gunners, three ships each in reserve
+    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f, 1.0f, 0.6f},      // normal
+    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f, 1.25f, 0.7f},    // hard: one ship each in reserve, more and bigger pirates
+    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f, 1.5f, 0.8f},    // deadly: no reserve at all, sunk is out
 };
 inline const char* const kDifficultyNames[DIFFICULTIES] = {"Easy", "Normal", "Hard", "Deadly"};
 }  // namespace voyage
@@ -471,6 +474,7 @@ struct Ship {
     float slowTimer = 0.0f; // crippled: s left at reduced speed
     bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
+    bool merchant = false;  // raid: one of the AI convoy (sunk, or in port, it's gone for the round)
     float raiderIdle = 0.0f;  // voyage: s this pirate has been far from every convoy ship
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
@@ -538,6 +542,7 @@ enum class EventType : uint8_t {
     RaceGate = 23,   // a = ship, b = gates now behind it
     RaceFinish = 24, // a = ship, b = place, value = time (s)
     Monster = 25,    // flags = MonsterEvent, a = ship (or NO_SHIP), b = MonsterType, value = damage
+    Escaped = 26,    // raid: a = the merchant that made port
 };
 constexpr uint8_t EF_CRIPPLE = 64;  // (Kill in a race: crippled, not sunk; shares the bit with EF_DENY, which only chests use)
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
@@ -618,7 +623,10 @@ public:
     float RouteS(float x, float z) const;
     Vector2 RouteAt(float s) const;
     float RouteLength() const { return route.size() > 1 ? (route.size() - 1) * raceLineStep : 0.0f; }
-    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE; }
+    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE || mode == MODE_RAID; }
+    bool Voyaging() const { return mode == MODE_VOYAGE || mode == MODE_RAID; }  // the passage modes (route, convoy, monsters)
+    int PlayerTeam() const { return mode == MODE_RAID ? 1 : 0; }  // the side the captains sail on (voyage: the convoy; raid: the pirates)
+    int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down (teamScore: [0] in port, [1] sunk)
     // how far beyond the open water a point is (0 inside; voyage: beyond the oblong, elsewhere beyond the ring),
     // and which way is back in
     float OutOfBounds(float x, float z, Vector2* home = nullptr) const;
@@ -697,6 +705,9 @@ private:
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
     void SpawnRaider(Vector2 at, float heading, int cls);
+    void UpdateRaid(float dt);
+    void SpawnConvoy();
+    void PlaceNearConvoy(Ship& s);  // raid: a pirate (back) in the fight: lying in wait ahead, or within reach of a merchant
     void RollMonsters();
     void UpdateMonsters(float dt);
     void MonsterDamage(Ship& v, float amount, int type);

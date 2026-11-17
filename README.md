@@ -131,6 +131,14 @@ The host picks the game in the menu:
     half a dozen times before it has had its fill. Shoot it when the fin is up.
 
   Slaying one counts as a kill. They roar, bite, ink and bleed; a banner and the feed tell everyone where they are.
+- **Raid** (co-op): the voyage the other way round. Everyone sails as a **pirate** (black sails; the menu's bot count
+  becomes your fellow pirates) and an AI **convoy** of merchantmen sails the Passage for the far port, down the sea
+  lane, laden and slow, keeping together and firing back at whatever comes close. Sink enough of it before the rest
+  gets in: the difficulty sets the convoy's size (three ships and two more for every pirate captain, x0.8 on Easy up
+  to x1.5 on Deadly, bigger ships the harder it is) and the share you must sink (half on Easy, 60% Normal, 70% Hard,
+  80% Deadly). Every merchant that makes port is one that got away; once too many have, the raid is lost. You start
+  lying in wait a couple of kilometres up the lane and come back from a sinking within a kilometre of the convoy. The
+  haven is your cove (repairs). The sea monsters come for the pirates here.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
@@ -202,7 +210,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--mode voyage --difficulty easy|normal|hard|deadly`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
+(also `--mode voyage` or `--mode raid`, `--difficulty easy|normal|hard|deadly`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

@@ -374,7 +374,73 @@ static int VoyageTest() {
     return 0;
 }
 
+// The raid: bot pirates (BS_PIRATES=n captains, 3) against the AI convoy. How many go down, how many get away, how long
+// it takes; BS_DIFF, BS_SEED, BS_REAL, BS_FLEETS, BS_SKILLS, BS_VOYMIN as for the voyage.
+static int RaidTest() {
+    World g;
+    g.rounds = true;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1;
+    g.Init(seed, 0, 0, MODE_RAID, getenv("BS_FLEETS") != nullptr, ARENA_PASSAGE);
+    g.realistic = getenv("BS_REAL") != nullptr;
+    g.skills = getenv("BS_SKILLS") != nullptr;
+    if (const char* e = getenv("BS_DIFF")) g.difficulty = (uint8_t)atoi(e);
+    const int N = getenv("BS_PIRATES") ? atoi(getenv("BS_PIRATES")) : 3;
+    for (int i = 0; i < N; ++i) g.AddShip(TextFormat("pirate%d", i), true);
+    printf("raid seed %u, %s, %d pirate captains\n", seed, voyage::kDifficultyNames[g.difficulty], N);
+    int pirSunk = 0, merSunk = 0, escaped = 0, result = -1, rockHits = 0;
+    float endT = 0;
+    double sum = 0;
+    int ticks = 0;
+    bool told = false;
+    const int T = (int)((getenv("BS_VOYMIN") ? atof(getenv("BS_VOYMIN")) : 30.0f) * 60 * 60);
+    for (int i = 0; i < T; ++i) {
+        double a = GetTimeNow();
+        g.Step();
+        sum += GetTimeNow() - a;
+        ++ticks;
+        if (!told && g.raidTotal > 0) {
+            told = true;
+            printf("   t=%4.0f the convoy sails: %d ships, %d to sink\n", g.time, g.raidTotal, g.raidNeed);
+        }
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::Kill && e.b < g.ShipCount()) {
+                if (g.ships[e.b].merchant) {
+                    merSunk++;
+                    printf("   t=%4.0f %s (%s) sunk at s %.0f by %s\n", g.time, g.ships[e.b].name.c_str(), ClassOf(g.ships[e.b].cls).name, g.RouteS(e.pos.x, e.pos.z),
+                           e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "the rocks / a monster");
+                } else if (g.ships[e.b].leader < 0) pirSunk++;
+            }
+            if (e.type == EventType::Escaped && e.a < g.ShipCount()) {
+                escaped++;
+                printf("   t=%4.0f %s made port\n", g.time, g.ships[e.a].name.c_str());
+            }
+            if (e.type == EventType::Ram && (e.flags & EF_ROCK)) rockHits++;
+            if (e.type == EventType::MatchEnd && result < 0) {
+                result = e.b;
+                endT = (float)g.time;
+            }
+        }
+        g.events.clear();
+        if (i % (60 * 60) == 0 && g.raidTotal > 0) {
+            int afloat = 0;
+            for (const Ship& x : g.ships) afloat += x.active && x.alive && x.merchant;
+            printf("   t=%4.0f convoy at s %5.0f / %.0f, %d afloat, sunk %d, in port %d, pirates sunk %d\n", g.time, g.voyageBest, g.RouteLength(), afloat,
+                   g.teamScore[1], g.teamScore[0], pirSunk);
+            for (const Ship& x : g.ships)
+                if (x.active && x.team == 1 && x.leader < 0)
+                    printf("      %s at %.0f %.0f (s %.0f, inside %.0f m), %.1f m/s, %s, damage dealt %.0f, %s\n", x.name.c_str(), x.pos.x, x.pos.z, g.RouteS(x.pos.x, x.pos.z),
+                           PassageInside(x.pos.x, x.pos.z), Vector3Length(x.vel), x.alive ? "afloat" : "sunk", x.statDamage, ClassOf(x.cls).name);
+        }
+        if (result >= 0) break;
+    }
+    printf("raid %s after %.0f s: %d of %d merchants sunk (%d needed), %d got away, pirates sunk %d times, rock hits %d, tick avg %.2f ms\n",
+           result == 1 ? "TAKEN" : result == 0 ? "ESCAPED" : "UNFINISHED", result >= 0 ? endT : (float)g.time, merSunk, g.raidTotal, g.raidNeed, escaped,
+           pirSunk, rockHits, sum / ticks * 1000.0);
+    return 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_RAIDTEST")) return RaidTest();
     if (getenv("BS_VOYAGETEST")) return VoyageTest();
     if (getenv("BS_LIVERYTEST")) return LiveryTest();
     if (getenv("BS_HANDLINGTEST")) return HandlingTest();
@@ -1276,7 +1342,7 @@ duels:
         }
     }
     for (int m = 0; m < MODE_COUNT; ++m) {
-        if (m == MODE_RACE || m == MODE_VOYAGE) continue;  // (their own tests)
+        if (m == MODE_RACE || m == MODE_VOYAGE || m == MODE_RAID) continue;  // (their own tests)
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;

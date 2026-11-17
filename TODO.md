@@ -467,7 +467,16 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   monsters.cpp (procedural: mantle, eyes, arms as per-frame tubes wrapping the hull, a lofted swimming shark with fins,
   gaping jaw, teeth); sfx Roar and Bite synthesised. Tests: BS_KRAKEN=m / BS_MEGALODON=m force one at m metres,
   BS_NOMONSTERS, BS_MONPOSE (harmless, holds you forever: screenshots), BS_MONCAM="dist height deg" (a camera on it).
-- Protocol 22.
+- [x] Raid (2026-11-17, user: "reversed mode were you are the pirates that should takedown a convoy before it reaches
+  port"): MODE_RAID on the passage. Captains (and host bots) are team 1, pirates; SpawnConvoy puts (3 + 2 per pirate
+  captain) x Level::raidShips merchants (Ship::merchant, team 0, AI, max 30) in the start harbour's line when someone's
+  aboard; they run the voyage's convoy logic (keep within 250 m of the hindmost, fight inside 230 m) at 72% speed
+  (laden). Sunk or in port (EventType::Escaped) they're gone. teamScore [0] in port, [1] sunk; won at raidNeed sunk
+  (Level::raidNeed share: 50/60/70/80%), lost once too many are in port. Pirates spawn/respawn by PlaceNearConvoy:
+  in wait 1.6-2.5 km up the lane, then 650-950 m from a merchant, ahead or abeam. The haven is the pirates' (repairs).
+  Monsters hunt the players' side (PlayerTeam()). Snapshot carries raidTotal / raidNeed: protocol 23. Test:
+  BS_RAIDTEST=1 (BS_PIRATES=n bot captains, BS_DIFF, BS_SEED, BS_RAIDSHIPS).
+- Protocol 23.
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

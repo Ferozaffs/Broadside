@@ -98,7 +98,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--mode") {
             std::string t = next("ffa");
-            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : MODE_FFA;
+            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : t == "raid" ? MODE_RAID : MODE_FFA;
         } else if (a == "--fleets") o.fleets = true;
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
@@ -168,7 +168,9 @@ static const Color kPalette[8] = {{220, 50, 40, 255},  {40, 110, 230, 255}, {40,
 static const Color kSide[2] = {{215, 56, 44, 255}, {44, 112, 232, 255}};  // teams: red, blue
 static const Color kNavy = {44, 112, 232, 255}, kPirate = {34, 32, 36, 255}, kPirateText = {255, 196, 80, 255};
 static const char* const kOrderText[ORDER_COUNT] = {"MAN THE PORT GUNS!", "MAN THE STARBOARD GUNS!", "PATCH THE HOLES!"};
-static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race", "Voyage"};
+static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race", "Voyage", "Raid"};
+static const char* const kModeShort[MODE_COUNT] = {"FFA", "Teams", "Pirate", "Race", "Voyage", "Raid"};  // (the menu's row of them)
+static bool PassageMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID; }
 static std::string RaceTimeStr(float t) { return TextFormat("%d:%04.1f", (int)(t / 60.0f), fmodf(t, 60.0f)); }
 static const char* Ordinal(int n) {
     static const char* k[] = {"", "1ST", "2ND", "3RD"};
@@ -329,6 +331,7 @@ public:
     int ffSel = 1;                   // host's choice: friendly fire off / on
     int diffSel = voyage::NORMAL;    // host's choice: how hard the voyage is
     int curDifficulty = voyage::NORMAL;
+    int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     bool curSkills = false;
     bool curRealistic = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
@@ -570,12 +573,12 @@ private:
         const NetShip& s = view[id].s;
         if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
-        if (curMode == MODE_VOYAGE) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
+        if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
     }
     Color TeamOf(int id) const {
         if (id >= 0 && id < NumShips() && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
-        if (id >= 0 && id < NumShips() && curMode == MODE_VOYAGE && view[id].s.team == 1) return kSide[0];
+        if (id >= 0 && id < NumShips() && PassageMode(curMode) && view[id].s.team == 1) return curMode == MODE_RAID ? kPirateText : kSide[0];  // (raid: they're us)
         return ColorOf(id);
     }
     bool IsCarrier(int id) const { return id >= 0 && id < NumShips() && view[id].present && (view[id].s.flags & SF_PIRATE); }
@@ -587,7 +590,7 @@ private:
     bool IsEnemy(int id) const {
         if (myId < 0 || id == myId || id < 0 || id >= NumShips()) return false;
         const NetShip &a = view[myId].s, &b = view[id].s;
-        if (curMode != MODE_TEAMS && curMode != MODE_VOYAGE) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
+        if (curMode != MODE_TEAMS && !PassageMode(curMode)) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
     bool IsCaptain(int id) const { return id >= 0 && id < NumShips() && view[id].s.leader < 0; }
@@ -595,6 +598,7 @@ private:
         int owner = HarbourOwner(curMode, i);
         if (curMode == MODE_PIRATE && i == cove) return kPirate;  // the delivery harbour flies the black flag
         if (curMode == MODE_VOYAGE) return i == voyage::endHarbour ? ui::kGold : kNavy;
+        if (curMode == MODE_RAID) return i == voyage::haven ? kPirate : kNavy;
         if (owner < 0) return {232, 228, 216, 255};
         return kSide[owner];
     }
@@ -748,7 +752,7 @@ void Game::StartSession(bool host, int bots, bool open) {
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
-        int arena = modeSel == MODE_VOYAGE ? ARENA_PASSAGE : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
+        int arena = PassageMode(modeSel) ? ARENA_PASSAGE : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
                           arena, handlingSel != 0, ffSel != 0, diffSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
@@ -908,6 +912,10 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 Feed("Welcome aboard. Take the convoy to the far harbour: pirates hunt it all the way.", ui::kText);
                 if (curDifficulty == voyage::DEADLY) Feed("Deadly: no ships in reserve. Sunk is out until the next voyage.", ui::kRed);
                 else Feed("Follow the dotted sea lane. Sunk ships rejoin the convoy while there are ships in reserve.", ui::kDim);
+            } else if (curMode == MODE_RAID) {
+                Feed(TextFormat("Welcome aboard, pirate. A convoy sails for the far port: sink %d%% of it before the rest gets in!",
+                                (int)roundf(voyage::kLevels[curDifficulty].raidNeed * 100.0f)), ui::kText);
+                Feed("It follows the dotted sea lane. Lie in wait along it. The haven is your cove: repairs.", ui::kDim);
             } else
             Feed(curMode == MODE_TEAMS ? "Welcome aboard. Sink the other side!"
                  : curMode == MODE_RACE ? TextFormat("Welcome aboard. Race down %s: first across the finish line wins!", RaceCourseName(curArena))
@@ -951,7 +959,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 info[id] = {name, bot, true, leader};
                 view[id].s.leader = leader;
                 hullHits[id].clear();
-                if (!wasPresent && id != myId && leader < 0 && mode == Mode::Playing && !(curMode == MODE_VOYAGE && bot))  // (voyage: pirates are called out below)
+                if (!wasPresent && id != myId && leader < 0 && mode == Mode::Playing && !(PassageMode(curMode) && bot))  // (voyage: pirates are called out below; raid: the convoy)
                     Feed3(name, "  sets sail", "", TeamOf(id), ui::kDim);
             }
             break;
@@ -959,7 +967,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
         case MSG_PLAYER_LEFT: {
             uint16_t id = r.Get<uint16_t>();
             if (id < NumShips()) {
-                if (info[id].leader < 0 && !(curMode == MODE_VOYAGE && info[id].bot)) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
+                if (info[id].leader < 0 && !(PassageMode(curMode) && info[id].bot)) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
                 info[id].present = false;
                 shipLivery[id].Clear();
             }
@@ -1033,6 +1041,8 @@ void Game::Interpolate() {
     teamScore[1] = snaps.back().teamScore[1];
     matchState = snaps.back().matchState;
     cove = snaps.back().cove;
+    raidTotal = snaps.back().raidTotal;
+    raidNeed = snaps.back().raidNeed;
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
     raceClock = snaps.back().raceClock;
@@ -1474,6 +1484,11 @@ void Game::DrawResults(float W, float H) {
         if (winTeam == 0) { title = "SAFE HARBOUR"; sub = TextFormat("the convoy made it through   \xC2\xB7   %d pirate%s sunk   \xC2\xB7   %s", teamScore[1], teamScore[1] == 1 ? "" : "s", lvl); }
         else if (winTeam == 1) { title = "LOST AT SEA"; tc = kRed; sub = TextFormat("the pirates took the convoy   \xC2\xB7   %d of them sunk first   \xC2\xB7   %s", teamScore[1], lvl); }
         else { title = "BECALMED"; tc = kText; sub = "the voyage took too long"; }
+    } else if (curMode == MODE_RAID) {
+        const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
+        if (winTeam == 1) { title = "THE CONVOY IS TAKEN"; sub = TextFormat("%d of %d sunk   \xC2\xB7   %d got away   \xC2\xB7   %s", teamScore[1], raidTotal, teamScore[0], lvl); }
+        else if (winTeam == 0) { title = "THE CONVOY GOT AWAY"; tc = kRed; sub = TextFormat("%d of %d sunk (%d needed)   \xC2\xB7   %d made port   \xC2\xB7   %s", teamScore[1], raidTotal, raidNeed, teamScore[0], lvl); }
+        else { title = "BECALMED"; tc = kText; sub = "the raid took too long"; }
     } else if (curMode == MODE_TEAMS) {
         if (winTeam < 0) { title = "A DRAW"; tc = kText; }
         else { title = winTeam == 0 ? "RED WINS THE ROUND" : "BLUE WINS THE ROUND"; tc = kSide[winTeam]; }
@@ -1491,7 +1506,8 @@ void Game::DrawResults(float W, float H) {
     // standings
     std::vector<int> order;
     for (int id = 0; id < NumShips(); ++id)
-        if (view[id].present && IsCaptain(id) && !(curMode == MODE_VOYAGE && view[id].s.team == 1)) order.push_back(id);  // (not the pirates)
+        if (view[id].present && IsCaptain(id) && !(curMode == MODE_VOYAGE && view[id].s.team == 1) && !(curMode == MODE_RAID && view[id].s.team == 0))
+            order.push_back(id);  // (not the AI's side: the voyage's pirates, the raid's convoy)
     auto score = [&](int id) { return curMode == MODE_PIRATE ? (int)view[id].s.banked : (int)view[id].s.kills; };
     const bool race = curMode == MODE_RACE;
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
@@ -2832,6 +2848,10 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         }
+        case EventType::Escaped:
+            Feed3(NameOf(e.a), "  made port: one got away", "", TeamOf(e.a), ui::kRed);
+            sfx::PlayFlat(sfx::Chime, 0.6f, 0.5f);
+            break;
         case EventType::Respawn:
             if (curMode == MODE_VOYAGE && (e.flags & 1) && GetTime() - lastSighting > 4.0) {  // pirates turning up (one call per band)
                 lastSighting = GetTime();
@@ -3053,7 +3073,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     // the captain's paint; in teams (and for the pirate) the sails still show whose side she's on
     const LiveryGpu* liv = id == -2 ? &yard.gpu : LiveryFor(id);
     bool teamSails = id >= 0 && (curMode == MODE_TEAMS || (curMode == MODE_PIRATE && ns && IsCarrier(ns->leader >= 0 ? ns->leader : id)) ||
-                                 (curMode == MODE_VOYAGE && ns && ns->team == 1));  // (the voyage's pirates: black sails, whatever they're painted)
+                                 (PassageMode(curMode) && ns && ns->team == 1));  // (the voyage's pirates: black sails, whatever they're painted)
     if (shadowPass) {
         model.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase, liv, teamSails);
         renderer.SetDamage(0.0f, nullptr, 0);
@@ -3827,8 +3847,12 @@ void Game::DrawHUD() {
             c = i == voyage::endHarbour ? kGold : i == voyage::haven ? kGreen : kDim;
             what = i == voyage::endHarbour ? "SAFE HARBOUR" : i == voyage::haven ? "HAVEN   \xC2\xB7   REPAIRS" : "DEPARTURE";
         }
+        if (curMode == MODE_RAID) {
+            c = i == voyage::endHarbour ? kRed : i == voyage::haven ? kGreen : kDim;
+            what = i == voyage::endHarbour ? "THE CONVOY'S PORT" : i == voyage::haven ? "PIRATE COVE   \xC2\xB7   REPAIRS" : "THE CONVOY SAILS FROM";
+        }
         float a = Clamp(1.4f - d / 1400.0f, 0.45f, 1.0f);
-        if (curMode == MODE_VOYAGE && i == voyage::endHarbour) a = 1.0f;  // (the goal: always clear)
+        if (PassageMode(curMode) && i == voyage::endHarbour) a = 1.0f;  // (the goal: always clear)
         DrawCircleV(sp, 9.0f, A({0, 0, 0, 150}, a));
         DrawCircleLines((int)sp.x, (int)sp.y, 8.0f, A(c, a));
         DrawLineEx({sp.x, sp.y - 5}, {sp.x, sp.y + 5}, 2.0f, A(c, a));  // a little anchor
@@ -3906,6 +3930,28 @@ void Game::DrawHUD() {
         Text(t, W * 0.5f, r.y + 4, 16, kPirateText, true, Center);
         bannerRight = r.x + r.width;
         if (unload > 0.0f) Bar({r.x + 10, r.y + r.height - 4, (r.width - 20), 3}, unload, kPirateText, {0, 0, 0, 120});
+    }
+    // ---- raid: the convoy (afloat, sunk of how many needed, in port), how far its leader has to go ----
+    if (curMode == MODE_RAID && !pred.route.empty()) {
+        float lead = 0.0f;
+        int afloat = 0;
+        for (int id = 0; id < NumShips(); ++id)
+            if (view[id].present && view[id].s.team == 0 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0) {
+                afloat++;
+                lead = fmaxf(lead, pred.RouteS(view[id].s.pos.x, view[id].s.pos.z));
+            }
+        int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
+        std::string t = raidTotal == 0
+            ? std::string(TextFormat("RAID   \xC2\xB7   %s   \xC2\xB7   THE CONVOY IS MAKING READY TO SAIL", TextToUpper(voyage::kDifficultyNames[curDifficulty])))
+            : std::string(TextFormat("RAID   \xC2\xB7   %s   \xC2\xB7   CONVOY %d AFLOAT   \xC2\xB7   SUNK %d / %d   \xC2\xB7   IN PORT %d   \xC2\xB7   LEADER %.1f km OUT   \xC2\xB7   %d:%02d",
+                                     TextToUpper(voyage::kDifficultyNames[curDifficulty]), afloat, teamScore[1], raidNeed, teamScore[0],
+                                     fmaxf(0.0f, pred.RouteLength() - lead) / 1000.0f, el / 60, el % 60));
+        Vector2 m = Measure(t.c_str(), 16, true);
+        Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
+        Panel(r, kPanel, 8);
+        Text(t.c_str(), W * 0.5f, r.y + 4, 16, kText, true, Center);
+        bannerRight = r.x + r.width;
+        if (raidNeed > 0) Bar({r.x + 10, r.y + r.height - 4, r.width - 20, 3}, Clamp((float)teamScore[1] / raidNeed, 0.0f, 1.0f), kGold, {0, 0, 0, 120});
     }
     // ---- voyage: how far to go, the convoy's reserve, the pirates about; and the sea lane on the water ahead ----
     if (curMode == MODE_VOYAGE && !pred.route.empty()) {
@@ -4006,7 +4052,7 @@ void Game::DrawHUD() {
         }
     }
     // ---- round clock ----
-    if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && curMode != MODE_VOYAGE) {
+    if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode)) {
         int secs = (int)ceilf(matchClock);
         int lim = tune::scoreLimit[curMode < 3 ? curMode : 0];
         const char* goal = curMode == MODE_PIRATE ? TextFormat("FIRST TO %d TREASURE", lim)
@@ -4322,7 +4368,7 @@ void Game::DrawHUD() {
     // ---- scoreboard ----
     if (IsKeyDown(KEY_TAB) || opt.showScores) {
         std::vector<int> order;
-        const int side0 = curMode == MODE_TEAMS || curMode == MODE_VOYAGE ? 0 : -1, side1 = curMode == MODE_TEAMS ? 1 : side0;  // (voyage: the convoy)
+        const int side0 = curMode == MODE_TEAMS || curMode == MODE_VOYAGE ? 0 : curMode == MODE_RAID ? 1 : -1, side1 = curMode == MODE_TEAMS ? 1 : side0;  // (voyage: the convoy; raid: the pirates)
         for (int side = side0; side <= side1; ++side)
             for (int id = 0; id < NumShips(); ++id)
                 if (view[id].present && IsCaptain(id) && (side < 0 || view[id].s.team == side)) order.push_back(id);
@@ -4456,7 +4502,7 @@ void Game::DrawMenu() {
     if (Button({st.x + 4, st.y + 7, 36, 40}, "-")) botCount = std::max(0, botCount <= 10 ? botCount - 1 : botCount - 5);
     if (Button({st.x + st.width - 40, st.y + 7, 36, 40}, "+")) botCount = botCount < 10 ? botCount + 1 : botCount + 5;
     Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 4, 24, kText, true, Center, false);
-    Label(modeSel == MODE_VOYAGE ? "ALLIES" : "BOTS", st.x + st.width * 0.5f, st.y + bh - 20, 9, kDim, Center);
+    Label(modeSel == MODE_VOYAGE ? "ALLIES" : modeSel == MODE_RAID ? "PIRATES" : "BOTS", st.x + st.width * 0.5f, st.y + bh - 20, 9, kDim, Center);
     // match settings for hosting (the backdrop previews them)
     y += 2.0f * bh + 18.0f;
     static const char* const kTimes[] = {"Noon", "Sunset", "Night"};
@@ -4468,12 +4514,13 @@ void Game::DrawMenu() {
     Segmented({x + hw + 8, y + 18, hw, 40}, kWeathers, 3, weatherSel);
     y += row;
     Label("GAME", x + 2, y, 11, kDim);
-    Segmented({x, y + 18, fw, 40}, kModeNames, MODE_COUNT, modeSel);
+    Segmented({x, y + 18, fw, 40}, kModeShort, MODE_COUNT, modeSel);
     y += row;
-    if (modeSel == MODE_VOYAGE) {  // the voyage: its own sea (the Passage, 9 km); how hard, and fleets as usual (skills: next row)
+    if (PassageMode(modeSel)) {  // the voyage / raid: its own sea (the Passage, 9 km); how hard, and fleets as usual (skills: next row)
         static const char* const kFleets[] = {"Solo", "Fleets"};
         static const char* const kHow[] = {"FEWER PIRATES", "CO-OP", "MORE PIRATES", "SUNK IS OUT"};
-        Label(TextFormat("DIFFICULTY   \xC2\xB7   %s", kHow[diffSel]), x + 2, y, 11, kDim);
+        static const char* const kHowRaid[] = {"SINK HALF", "SINK 60%", "BIGGER, SINK 70%", "BIGGEST, SINK 80%"};
+        Label(TextFormat("DIFFICULTY   \xC2\xB7   %s", modeSel == MODE_RAID ? kHowRaid[diffSel] : kHow[diffSel]), x + 2, y, 11, kDim);
         Label("SHIPS", x + mw + 10, y, 11, kDim);
         Segmented({x, y + 18, mw, 40}, voyage::kDifficultyNames, voyage::DIFFICULTIES, diffSel);
         Segmented({x + mw + 8, y + 18, 128, 40}, kFleets, 2, fleetSel);
@@ -4499,7 +4546,7 @@ void Game::DrawMenu() {
         static const char* const kOnOff[] = {"Off", "On"};
         Label("FRIENDLY FIRE", x + mw + 10, y, 11, kDim);
         Segmented({x + mw + 8, y + 18, 128, 40}, kOnOff, 2, ffSel);
-        if (modeSel == MODE_VOYAGE) {  // (the voyage's row above holds the difficulty: the skills come down here)
+        if (PassageMode(modeSel)) {  // (the voyage's row above holds the difficulty: the skills come down here)
             const float sw = 100.0f, aw = fw - sw - 128 - 16;
             Label("HANDLING", x + 2, y, 11, kDim);
             Label("SKILLS", x + aw + 10, y, 11, kDim);
