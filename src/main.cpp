@@ -633,6 +633,13 @@ private:
     void DrawGhostShip(float dt);
     void DrawCurses();
     float ghostFog = 0.0f;
+    bool fortressRock = false;
+    void SetFortressRock(bool on) {
+        if (on == fortressRock) return;
+        fortressRock = on;
+        pred.rocks.erase(std::remove_if(pred.rocks.begin(), pred.rocks.end(), [](const Rock& k) { return k.seed == kFortressSeed; }), pred.rocks.end());
+        if (on) pred.rocks.push_back(FortressRock());
+    }
     bool BossShot(const NetBall& b) const {  // (boss mode: the Leviathan's or its gunboats')
         return curMode == MODE_BOSS && b.owner < NumShips() && view[b.owner].present && view[b.owner].s.team == 1;
     }
@@ -665,6 +672,8 @@ private:
     void DrawTells();
     void DrawKrakenQueen(float dt);
     void DrawSerpentBoss(float dt);
+    void DrawFortressBoss(float dt);
+    void DrawSearchlight(const Camera3D& cam);
     void DrawMortarMarks();
     void DrawBossBar(float W);
     std::string notice;                  // a big line across the screen for a few seconds
@@ -1152,6 +1161,7 @@ void Game::Interpolate() {
                 if (a->bossParts[i].state == b->bossParts[i].state) bossView.bossParts[i].pos = Vector3Lerp(a->bossParts[i].pos, b->bossParts[i].pos, t);
         if (was && bossView.bossState == 2) bossDownAt = (float)GetTime();
         pred.bossKind = b->bossKind;
+        SetFortressRock(b->bossKind == BOSS_FORTRESS);
         pred.bossPhase = b->bossPhase;
         pred.bossPos = b->bossPos;
         pred.bossHpNow = b->bossHp > 0.0f && b->bossState != 2 ? 1.0f : 0.0f;
@@ -1162,7 +1172,10 @@ void Game::Interpolate() {
             pred.bossParts[i].pos = b->bossParts[i].pos;
             pred.bossParts[i].len = b->bossParts[i].len;
         }
-    } else bossView.hasBoss = false;
+    } else {
+        bossView.hasBoss = false;
+        SetFortressRock(false);
+    }
     monView.clear();  // the sea monsters, between the two snapshots like the ships
     for (const NetMonster& mb : b->monsters) {
         NetMonster m = mb;
@@ -2951,6 +2964,19 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_FORTRESS) {
+                const Color fc = {230, 200, 150, 255};
+                if (e.b == 1) {
+                    Notice("THE SEA FORTRESS", fc, 4.0f);
+                    Feed3("THE SEA FORTRESS", "  rises in the bay: bring down its towers, then the keep", "", fc, ui::kText);
+                    shake = fmaxf(shake, 1.0f);
+                } else {
+                    Notice(e.b == 2 ? "ITS GUNBOATS SALLY OUT" : "THE LAST STAND", fc, 4.0f);
+                    Feed3("THE SEA FORTRESS", e.b == 2 ? "  sends out its gunboats, and the light hunts faster" : "  makes its last stand: the keep fires too", "", fc, ui::kText);
+                }
+                sfx::PlayFlat(sfx::Thunder, 0.8f, 0.7f);
+                break;
+            }
             if (e.flags == BOSS_SERPENT) {
                 const Color sc = {120, 220, 210, 255};
                 if (e.b == 1) {
@@ -3081,6 +3107,13 @@ void Game::PlayEvent(const GameEvent& e) {
                 } else if (e.a < NumShips()) Feed3("The Dutchman", "  comes through astern of  ", NameOf(e.a), {150, 255, 200, 255}, TeamOf(e.a));
                 break;
             }
+            if (e.flags == 7) {  // the Fortress's light, settled on someone
+                if (e.a == myId) {
+                    Notice("THE LIGHT IS ON YOU!  MOVE!", ui::kRed, 2.5f);
+                    sfx::PlayFlat(sfx::Chime, 0.8f, 0.4f);
+                }
+                break;
+            }
             if (e.flags == 5) {  // fading
                 sfx::Play(sfx::Whoosh, e.pos, 0.8f, 0.5f);
                 break;
@@ -3094,9 +3127,14 @@ void Game::PlayEvent(const GameEvent& e) {
                 sfx::Play(sfx::Roar, e.pos, 0.8f, 1.3f);
                 AddFoam(e.pos, 4.0f, 18.0f, 5.0f, 1.0f);
                 for (int i = 0; i < 40; ++i) Emit(e.pos, Vector3Add(RandDir(8.0f), {0, Rnd(4, 12), 0}), Rnd(1.0f, 2.0f), Rnd(0.5f, 1.2f), 0.5f, {120, 20, 40, 230}, 0);
-                const bool serp = bossView.bossKind == BOSS_SERPENT;
-                if (e.a < NumShips()) Feed3(NameOf(e.a), serp ? "  made it let go!" : "  shot off one of her arms!", "", TeamOf(e.a), ui::kGold);
-                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), serp ? "IT LETS GO!" : "ARM OFF!", ui::kGold, 2.2f});
+                const bool serp = bossView.bossKind == BOSS_SERPENT, fort = bossView.bossKind == BOSS_FORTRESS;
+                if (fort) {
+                    fx.BigExplosion(e.pos);
+                    sfx::Play(sfx::Thunder, e.pos, 1.0f, 0.8f);
+                }
+                if (e.a < NumShips())
+                    Feed3(NameOf(e.a), fort ? "  brought down a tower!" : serp ? "  made it let go!" : "  shot off one of her arms!", "", TeamOf(e.a), ui::kGold);
+                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), fort ? "TOWER DOWN!" : serp ? "IT LETS GO!" : "ARM OFF!", ui::kGold, 2.2f});
             } else if (e.flags == 3) {  // got hold of one of us
                 const bool serp = bossView.bossKind == BOSS_SERPENT;
                 Feed3(serp ? "The Sea Serpent" : "The Kraken Queen", serp ? "  coils round  " : "  has  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
@@ -3685,7 +3723,8 @@ void Game::RenderWorld(float dt, bool menu) {
 
     const std::vector<Rock>& rocks = menu ? menuWorld.rocks : pred.rocks;
     const bool whirl = (menu ? arenaSel : curArena) == ARENA_MAELSTROM;
-    uint32_t key = (menu ? 0x80000007u : oceanSeed) + (whirl ? 0x01000000u : 0u) + (!menu && RaceArena(curArena) ? (uint32_t)curArena * 0x01000000u : 0u);
+    uint32_t key = (menu ? 0x80000007u : oceanSeed) + (whirl ? 0x01000000u : 0u) + (!menu && RaceArena(curArena) ? (uint32_t)curArena * 0x01000000u : 0u) +
+                   (!menu && fortressRock ? 0x40000000u : 0u);  // (the Sea Fortress's island)
     if (key != sceneryKey) {
         scenery.Build(rocks, whirl);
         scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
@@ -3745,6 +3784,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu && !monView.empty()) DrawMonsters(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_KRAKEN) DrawKrakenQueen(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_SERPENT) DrawSerpentBoss(dt);
+    if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_FORTRESS) DrawFortressBoss(dt);
 
     renderer.Water();
 
@@ -3768,6 +3808,7 @@ void Game::RenderWorld(float dt, bool menu) {
         DrawTells();
         DrawCurses();
         DrawGhostShip(dt);
+        DrawSearchlight(cam);
     }
     if (!menu) DrawFleetRings();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
@@ -6231,6 +6272,12 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_FORTRESS) {
+        int up = 0;
+        for (const NetBossPart& p : bossView.bossParts) up += p.state == 1;
+        extra = TextFormat("   \xC2\xB7   TOWERS %d / %d%s", up, (int)bossView.bossParts.size(), up >= 4 ? "  (SHIELDING THE KEEP)" : up >= 1 ? "" : "  (THE KEEP IS OPEN)");
+        if (bossView.bossState == sf::LIGHT_LOCKED) extra += "   \xC2\xB7   THE LIGHT HAS SOMEONE";
+    }
     if (bossView.bossKind == BOSS_SERPENT) {
         const uint8_t st = bossView.bossState;
         extra = st == ss::CRUISE ? "   \xC2\xB7   UP: FIRE!" : st == ss::BREACH ? "   \xC2\xB7   BREACHING!" : st == ss::COIL ? "   \xC2\xB7   COILED: SHOOT IT OFF HER!"
@@ -6430,4 +6477,54 @@ void Game::DrawSerpentBoss(float dt) {
     if (bossView.bossState == ss::BREACH)  // streaming water off it in the air
         for (size_t i = 0; i < spine.size(); i += 3)
             if (Rnd(0.0f, 1.0f) < dt * 12.0f) Emit(spine[i], {Rnd(-2, 2), Rnd(-4, 0), Rnd(-2, 2)}, 1.5f, 0.6f, 0.3f, {225, 235, 240, 200}, 0);
+}
+
+// The Sea Fortress: its stonework, smoke off its fallen towers, and its searchlight over the water
+void Game::DrawFortressBoss(float dt) {
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    std::vector<FortTower> towers;
+    for (const NetBossPart& p : bossView.bossParts) {
+        towers.push_back({p.root, p.state == 1});
+        if (p.state != 1 && Rnd(0.0f, 1.0f) < dt * 4.0f) {  // (still burning)
+            fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(p.root, {Rnd(-4, 4), 6.0f, Rnd(-4, 4)}), {Rnd(-1, 1), 3.0f, Rnd(-1, 1)}, Rnd(4.0f, 7.0f), Rnd(3.0f, 5.0f),
+                                     2.5f, {40, 38, 36, 200});
+            q.drag = 0.6f;
+            q.rise = 2.0f;
+        }
+    }
+    float sink = bossView.bossState == 2 ? Clamp(((float)GetTime() - bossDownAt) / 6.0f, 0.0f, 1.0f) : 0.0f;
+    monArt.DrawFortress(renderer, towers, sf::top - 8.0f * sink, sf::keepH * (1.0f - 0.5f * sink), sf::keepR, bossHurt, (float)GetTime());
+}
+
+void Game::DrawSearchlight(const Camera3D& cam) {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_FORTRESS || bossView.bossState == 2) return;
+    const Vector3 lamp = {0.0f, sf::top + sf::keepH + 8.0f, 0.0f};
+    const bool locked = bossView.bossState == sf::LIGHT_LOCKED;
+    Vector3 dir = Vector3Normalize({sinf(bossView.bossHeading), -0.075f, cosf(bossView.bossHeading)});
+    const float L = 650.0f;
+    Color c = locked ? Color{255, 90, 60, 255} : Color{255, 236, 190, 255};
+    fx.Lantern(lamp, 9.0f, Fade(c, 0.9f));
+    rlDrawRenderBatchActive();
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlDisableBackfaceCulling();
+    rlSetTexture(rlGetTextureIdDefault());
+    rlBegin(RL_QUADS);
+    for (int k = 0; k < 3; ++k) {  // three crossed ribbons make a beam from any angle
+        float a = PI * k / 3.0f;
+        Vector3 side = Vector3Normalize(Vector3CrossProduct(dir, {0, 1, 0}));
+        Vector3 up = Vector3CrossProduct(side, dir);
+        Vector3 w = Vector3Add(Vector3Scale(side, cosf(a)), Vector3Scale(up, sinf(a)));
+        Vector3 end = Vector3Add(lamp, Vector3Scale(dir, L));
+        float w0 = 1.5f, w1 = 24.0f;
+        unsigned char a0 = (unsigned char)(locked ? 70 : 34), a1 = 0;
+        rlColor4ub(c.r, c.g, c.b, a0); rlVertex3f(lamp.x + w.x * w0, lamp.y + w.y * w0, lamp.z + w.z * w0);
+        rlColor4ub(c.r, c.g, c.b, a0); rlVertex3f(lamp.x - w.x * w0, lamp.y - w.y * w0, lamp.z - w.z * w0);
+        rlColor4ub(c.r, c.g, c.b, a1); rlVertex3f(end.x - w.x * w1, end.y - w.y * w1, end.z - w.z * w1);
+        rlColor4ub(c.r, c.g, c.b, a1); rlVertex3f(end.x + w.x * w1, end.y + w.y * w1, end.z + w.z * w1);
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    rlSetTexture(0);
+    rlEnableBackfaceCulling();
+    EndBlendMode();
 }

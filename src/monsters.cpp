@@ -174,6 +174,8 @@ void MonsterArt::Init(Shader lit) {
     eye = GenMeshSphere(1.0f, 14, 18);
     pupil = GenMeshSphere(1.0f, 10, 14);
     tooth = GenMeshCone(0.5f, 1.0f, 6);
+    cube = GenMeshCube(1.0f, 1.0f, 1.0f);
+    cyl = GenMeshCylinder(1.0f, 1.0f, 20);
     for (Dyn& d : arms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
     for (Dyn& d : queenArms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
     MakeDyn(serpent, kSerpRings * kSerpSides + 1 + kSerpFins * 6, (kSerpRings - 1) * kSerpSides * 2 + kSerpSides + kSerpFins * 2);
@@ -590,6 +592,76 @@ void MonsterArt::DrawSerpent(Renderer& r, const std::vector<Vector3>& spine, flo
         DrawMesh(tooth, mat, MatrixMultiply(MatrixMultiply(MatrixScale(1.6f, 6.0f, 1.6f), QuaternionToMatrix(QuaternionFromVector3ToVector3({0, 1, 0}, hd))),
                                             MatrixTranslate(h.x, h.y, h.z)));
     }
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r.SetLitParams(0.0f, 0.0f);
+}
+
+// The Sea Fortress on its island: a curtain wall round the rim, six round gun towers (stumps once they're down), a
+// keep in the middle with its lamp-house and a black banner
+void MonsterArt::DrawFortress(Renderer& r, const std::vector<FortTower>& towers, float top, float keepH, float keepR, float hurt, float time) {
+    if (!ready) return;
+    const Color stone = {158, 150, 138, 255}, dark = {104, 98, 90, 255}, burnt = {52, 46, 42, 255}, iron = {46, 46, 52, 255};
+    auto box = [&](Vector3 at, Vector3 size, float yaw, Color c) {
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = c;
+        DrawMesh(cube, mat, MatrixMultiply(MatrixMultiply(MatrixScale(size.x, size.y, size.z), MatrixRotateY(yaw)), MatrixTranslate(at.x, at.y, at.z)));
+    };
+    auto drum = [&](Vector3 base, float rad, float h, Color c) {
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = c;
+        DrawMesh(cyl, mat, MatrixMultiply(MatrixScale(rad, h, rad), MatrixTranslate(base.x, base.y, base.z)));
+    };
+    r.SetLitParams(hurt * 0.4f, 0.0f);
+    r.SetProp(1.0f);
+    // the curtain wall, with its crenellations
+    const int segs = 26;
+    const float wallR = 54.0f;
+    for (int i = 0; i < segs; ++i) {
+        float a = 2.0f * PI * (i + 0.5f) / segs;
+        Vector3 c = {sinf(a) * wallR, top + 3.5f, cosf(a) * wallR};
+        box(c, {13.5f, 7.0f, 3.0f}, a + PI * 0.5f, (i % 2) ? stone : Color{150, 142, 130, 255});
+        for (int m = -1; m <= 1; m += 2) {
+            Vector3 t = {sinf(a + m * 0.06f) * wallR, top + 7.9f, cosf(a + m * 0.06f) * wallR};
+            box(t, {2.4f, 1.8f, 3.2f}, a + PI * 0.5f, stone);
+        }
+    }
+    // the towers
+    for (const FortTower& t : towers) {
+        float yaw = atan2f(t.root.x, t.root.z);
+        if (t.up) {
+            drum(t.root, 7.0f, 26.0f, stone);
+            drum(Vector3Add(t.root, {0.0f, 25.0f, 0.0f}), 7.8f, 1.6f, dark);
+            for (int m = 0; m < 8; ++m) {
+                float a = 2.0f * PI * m / 8 + yaw;
+                box({t.root.x + sinf(a) * 7.2f, t.root.y + 27.6f, t.root.z + cosf(a) * 7.2f}, {2.6f, 2.2f, 1.6f}, a, stone);
+            }
+            Vector3 out = Vector3Normalize({t.root.x, 0.0f, t.root.z});
+            mat.maps[MATERIAL_MAP_DIFFUSE].color = iron;  // its gun, run out
+            Vector3 g = Vector3Add(t.root, Vector3Add(Vector3Scale(out, 7.0f), {0.0f, 20.0f, 0.0f}));
+            DrawMesh(cyl, mat, MatrixMultiply(MatrixMultiply(MatrixScale(0.9f, 5.0f, 0.9f), QuaternionToMatrix(QuaternionFromVector3ToVector3({0, 1, 0}, out))),
+                                              MatrixTranslate(g.x, g.y, g.z)));
+        } else {  // a blackened stump
+            drum(t.root, 7.4f, 7.0f + 1.5f * sinf(t.root.x), burnt);
+            for (int m = 0; m < 5; ++m) {
+                float a = 1.3f * m + t.root.z;
+                box({t.root.x + sinf(a) * 9.0f, t.root.y + 1.0f, t.root.z + cosf(a) * 9.0f}, {3.0f, 2.0f, 2.5f}, a, burnt);
+            }
+        }
+    }
+    // the keep, its lamp-house, its banner
+    drum({0.0f, top, 0.0f}, keepR, keepH, stone);
+    drum({0.0f, top + keepH - 0.5f, 0.0f}, keepR + 1.0f, 1.8f, dark);
+    for (int m = 0; m < 14; ++m) {
+        float a = 2.0f * PI * m / 14;
+        box({sinf(a) * (keepR + 0.5f), top + keepH + 2.2f, cosf(a) * (keepR + 0.5f)}, {3.2f, 2.6f, 1.8f}, a, stone);
+    }
+    drum({0.0f, top + keepH, 0.0f}, 4.5f, 8.0f, dark);
+    float flap = 0.25f * sinf(time * 2.0f);
+    box({7.0f, top + keepH + 14.0f, 0.0f}, {0.3f, 5.0f, 8.0f}, flap, {14, 12, 12, 255});
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = iron;
+    DrawMesh(cyl, mat, MatrixMultiply(MatrixScale(0.25f, 12.0f, 0.25f), MatrixTranslate(7.0f, top + keepH + 6.0f, 4.0f)));
+    r.SetProp(0.0f);
+    r.SetLitParams(0.0f, 0.9f);  // the lamp
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = {255, 236, 190, 255};
+    DrawMesh(eye, mat, MatrixMultiply(MatrixScale(2.6f, 2.6f, 2.6f), MatrixTranslate(0.0f, top + keepH + 8.0f, 0.0f)));
     mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     r.SetLitParams(0.0f, 0.0f);
 }

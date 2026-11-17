@@ -25,6 +25,11 @@ struct KrakenPose {
     float hurt = 0.0f;       // a flash when hit, 0..1
 };
 
+struct FortTower {  // a Sea Fortress tower: where it stands, whether it still does
+    Vector3 root{};
+    bool up = true;
+};
+
 struct SharkPose {
     Vector3 mid{};           // the middle of its body
     float heading = 0.0f;
@@ -44,6 +49,7 @@ public:
     void DrawQueenBody(Renderer& r, Vector3 body, float heading, float size, float hurt, float limp, float time);
     void DrawQueenArm(Renderer& r, int slot, const std::vector<Vector3>& ctrl, float r0, float r1, Vector3 inner, float time, float hurt);
     void DrawSerpent(Renderer& r, const std::vector<Vector3>& spine, float time, float hurt);  // the Sea Serpent along its spine (head first)
+    void DrawFortress(Renderer& r, const std::vector<FortTower>& towers, float top, float keepH, float keepR, float hurt, float time);
     // points along the kraken's arms over the water (for spray and drips), filled by DrawKraken
     std::vector<Vector3> armTips;
 
@@ -59,6 +65,7 @@ private:
     void Tube(Dyn& d, const std::vector<Vector3>& pts, const std::vector<float>& radius, Vector3 inner, float suckers, float time);
     Material mat{};
     Mesh mantle{}, eye{}, pupil{}, tooth{};
+    Mesh cube{}, cyl{};
     Dyn arms[9];
     Dyn queenArms[8];
     Dyn serpent;

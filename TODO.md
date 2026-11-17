@@ -529,7 +529,17 @@ Protocol 25.
   of the water. Phase 2: 40% a second breach straight away. Hull 1200 + 500 per captain. Art: MonsterArt::DrawSerpent
   (one tube along its spine, frill fins, eyes, horns). BS_BOSSUP=1 starts it up (screenshots). Bot runs: phase 3
   after ~15 min.
-- [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
+- [x] Sea Fortress (BOSS_FORTRESS): a proxy boss on its own island (FortressRock: a flat-topped rock 62 m round in the
+  middle of the bay, added to World::rocks while it's the boss - FortressRockOn - and to the client's pred.rocks, the
+  scenery rebuilt; ships ground on it, shot hits its walls). Six towers on a 50 m rim (bossParts, hull 300 + 110 per
+  captain), each its own fire by k % 3: cannon fans, mortars (marked), grapeshot inside 170 m / long shots; aim scattered
+  +-30 m (from a fixed platform a perfect lead hit a third of the time). Flat shots allow for the drop from the towers.
+  The keep (hull 2300 + 950 per captain): 0.25 of its damage while 4+ towers stand, 0.6 with 1-3, all with none. A
+  searchlight from the keep sweeps (bossHeading), settles on a ship for 2.5 s (bossState LIGHT_LOCKED, "THE LIGHT IS ON
+  YOU"), then 6 mortars there. Phase 2: 2 gunboats sally out, the light sweeps faster; phase 3: the keep fires rings.
+  Art: MonsterArt::DrawFortress (wall, towers / stumps, keep, lamp-house, banner); the beam additive ribbons. Bot runs:
+  phase 2 at ~66% after ~8 min.
+- [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

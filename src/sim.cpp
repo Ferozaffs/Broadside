@@ -3363,6 +3363,7 @@ void World::StartRound() {
         bossParts.clear();
         bossHpNow = 0.0f;
         bossState = 0;
+        FortressRockOn(false);
         teamScore[0] = 0;
     }
     for (Ship& s : ships)
@@ -4340,13 +4341,15 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
-    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 4) % 4);  // (random: among the ones there are so far)
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 5) % 5);  // (random: among the ones there are so far)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
     bossParts.clear();
-    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT) {
+    FortressRockOn(false);
+    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS) {
         if (bossKind == BOSS_KRAKEN) SpawnKrakenQueen();
         else if (bossKind == BOSS_DUTCHMAN) SpawnDutchman();
-        else SpawnSerpent();
+        else if (bossKind == BOSS_SERPENT) SpawnSerpent();
+        else SpawnFortress();
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
@@ -4483,6 +4486,11 @@ void World::UpdateBoss(float dt) {
         e.flags = bossKind;
         e.pos = bossPos;
         events.push_back(e);
+        if (phase == 2 && bossKind == BOSS_FORTRESS)  // its gunboats sally out
+            for (int k = 0; k < 2; ++k) {
+                float a = RandF() * 2.0f * PI;
+                SpawnRaider({sinf(a) * 110.0f, cosf(a) * 110.0f}, a, SC_CUTTER);
+            }
         if (phase == 3 && bossKind == BOSS_LEVIATHAN) {  // its gunboats come out
             int captains = 0;
             for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
@@ -4508,6 +4516,10 @@ void World::UpdateBoss(float dt) {
     }
     if (bossKind == BOSS_SERPENT) {
         UpdateSerpent(dt, phase, prey);
+        return;
+    }
+    if (bossKind == BOSS_FORTRESS) {
+        UpdateFortress(dt, phase, prey);
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
@@ -4921,6 +4933,25 @@ void World::UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*
 bool World::BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at) {
     if (bossId < 0 || bossHpNow <= 0.0f || b.owner == bossId) return false;
     if (b.owner < ShipCount() && ships[b.owner].team == 1) return false;
+    if (bossKind == BOSS_FORTRESS) {
+        for (int k = 0; k < (int)bossParts.size(); ++k) {
+            const BossPart& t = bossParts[k];
+            if (t.state != 1) continue;
+            float s;
+            if (SegSegDist(prev, b.pos, t.root, t.pos, s) < sf::towerR) {
+                part = k;
+                at = Vector3Lerp(prev, b.pos, s);
+                return true;
+            }
+        }
+        float s;
+        if (SegSegDist(prev, b.pos, {0.0f, sf::top, 0.0f}, {0.0f, sf::top + sf::keepH, 0.0f}, s) < sf::keepR) {
+            part = -1;
+            at = Vector3Lerp(prev, b.pos, s);
+            return true;
+        }
+        return false;
+    }
     if (bossKind == BOSS_SERPENT) {
         for (int i = 0; i < (int)bossParts.size(); ++i) {
             const Vector3& p = bossParts[i].pos;
@@ -4981,6 +5012,28 @@ void World::BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 di
                 bossT = 8.9f;
             }
         } else bossHpNow = fmaxf(0.0f, bossHpNow - dmg);
+    } else if (bossKind == BOSS_FORTRESS) {  // a tower, or the keep (the more towers stand, the less it takes)
+        if (part >= 0 && part < (int)bossParts.size()) {
+            BossPart& t = bossParts[part];
+            t.hp -= dmg;
+            e.value = dmg;
+            if (t.hp <= 0.0f && t.state == 1) {
+                t.hp = 0.0f;
+                t.state = 0;
+                GameEvent d{EventType::BossPart};
+                d.a = e.a;
+                d.b = (uint16_t)part;
+                d.flags = 1;
+                d.pos = t.pos;
+                events.push_back(d);
+            }
+        } else {
+            int up = 0;
+            for (const BossPart& t : bossParts) up += t.state == 1;
+            float k = up >= 4 ? 0.25f : up >= 1 ? 0.6f : 1.0f;
+            bossHpNow = fmaxf(0.0f, bossHpNow - dmg * k);
+            e.value = dmg * k;
+        }
     } else if (part >= 0 && part < (int)bossParts.size()) {
         BossPart& a = bossParts[part];
         a.hp -= dmg;
@@ -5012,6 +5065,18 @@ void World::BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 di
 // where an ally aims at a boss that isn't a ship: the Kraken Queen's arm with a ship in it first, then (while her
 // arms shield her) the nearest arm, else her body
 bool World::BossAimFor(Vector3 from, Vector3& at) const {
+    if (bossKind == BOSS_FORTRESS) {  // the nearest tower standing (high on it: its foot is behind the island's wall), else the keep
+        float bd = 1e9f;
+        bool found = false;
+        for (const BossPart& t : bossParts) {
+            if (t.state != 1) continue;
+            Vector3 p = Vector3Lerp(t.root, t.pos, 0.75f);
+            float d = Vector3Distance(p, from);
+            if (d < bd) { bd = d; at = p; found = true; }
+        }
+        if (!found) at = {0.0f, sf::top + sf::keepH * 0.6f, 0.0f};
+        return true;
+    }
     if (bossKind == BOSS_SERPENT) {  // its head if it's up, else the nearest hump out of the water
         float bd = 1e9f;
         bool found = false;
@@ -5453,4 +5518,203 @@ void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& p
         }
     }
     bossPos = head;
+}
+
+// ---- the Sea Fortress ---------------------------------------------------------------------
+// An island fortress rising in the middle of the bay: six gun towers on its rim, each with its own fire (aimed
+// cannon, mortars, grapeshot at whoever comes close), a keep in the middle with a searchlight that sweeps the water
+// and, when it settles on a ship, calls a barrage down on her. The keep is its hull: the more towers stand, the less
+// it takes. From two thirds down the light hunts faster and gunboats sally out; from a third, the last stand: the
+// keep fires rings of shot as well.
+Rock FortressRock() {
+    Rock k{};
+    k.x = 0.0f;
+    k.z = 0.0f;
+    k.r = 62.0f;
+    k.h = sf::top;
+    k.p = 7.0f;   // (flat on top, sheer at the sides)
+    k.q = 0.5f;
+    k.ph[0] = k.ph[1] = k.ph[2] = 0.0f;
+    k.seed = kFortressSeed;
+    k.stack = false;
+    return k;
+}
+
+void World::FortressRockOn(bool on) {
+    rocks.erase(std::remove_if(rocks.begin(), rocks.end(), [](const Rock& k) { return k.seed == kFortressSeed; }), rocks.end());
+    if (on) rocks.push_back(FortressRock());
+    rockInner = 1e9f;
+    for (const Rock& k : rocks) rockInner = fminf(rockInner, sqrtf(k.x * k.x + k.z * k.z) - k.r * 1.25f - 50.0f);
+}
+
+void World::SpawnFortress() {
+    bossId = BossProxy(kBossNames[BOSS_FORTRESS]);
+    if (bossId < 0) return;
+    for (Ship& s : ships)  // (anyone where it's coming up goes clear first)
+        if (s.active && s.alive && !s.stowed && Vector2Length({s.pos.x, s.pos.z}) < 140.0f) {
+            Vector2 out = Vector2Normalize({s.pos.x + 0.01f, s.pos.z});
+            s.pos.x = out.x * 160.0f;
+            s.pos.z = out.y * 160.0f;
+        }
+    FortressRockOn(true);
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
+    bossHpMax = bossHpNow = (2300.0f + 950.0f * std::max(captains, 1)) * Diff().bossHp;  // (it can't dodge, so it's stout)
+    if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
+    bossPos = {0.0f, sf::top, 0.0f};
+    bossState = sf::LIGHT_SWEEP;
+    bossT = 0.0f;
+    bossHeading = 0.0f;
+    bossTarget = -1;
+    bossStep = 0.0f;
+    bossSpit = 4.0f;
+    bossParts.assign(sf::towers, BossPart{});
+    const float towerHp = (300.0f + 110.0f * std::max(captains, 1)) * Diff().bossHp;
+    for (int k = 0; k < sf::towers; ++k) {
+        BossPart& t = bossParts[k];
+        float a = 2.0f * PI * k / sf::towers;
+        t.root = {sinf(a) * sf::rim, sf::top, cosf(a) * sf::rim};
+        t.pos = Vector3Add(t.root, {0.0f, sf::towerH, 0.0f});
+        t.maxHp = t.hp = towerHp;
+        t.state = 1;
+        t.timer = 2.0f + k * 0.6f;
+    }
+}
+
+void World::UpdateFortress(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& P = ships[bossId];
+    bossT += dt;
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
+    auto lobbed = [&](Vector3 from, Vector3 at, float speed, bool high) {
+        Vector2 d = {at.x - from.x, at.z - from.z};
+        float rng = Clamp(Vector2Length(d), 30.0f, 600.0f);
+        Vector2 dn = Vector2Normalize(d);
+        // (fired from high on the towers: a flat shot allows for the drop down to the sea, or it carries long)
+        float sn = Clamp(tune::gravity * rng / (speed * speed), 0.0f, 1.0f);
+        float e = high ? PI * 0.5f - 0.5f * asinf(sn) : 0.5f * asinf(sn) + atan2f(ocean.Height(at.x, at.z) - from.y, rng);
+        return Vector3{dn.x * speed * cosf(e), speed * sinf(e), dn.y * speed * cosf(e)};
+    };
+    auto mortar = [&](Vector3 from, Vector3 at) {
+        Vector3 v = lobbed(from, at, 72.0f, true);
+        BossBall(P, from, v, 2.0f, 17.0f);
+        Vector2 dn = Vector2Normalize({at.x - from.x, at.z - from.z});
+        float rng = Clamp(Vector2Distance({at.x, at.z}, {from.x, from.z}), 30.0f, 600.0f);
+        GameEvent m{EventType::BossMortar};
+        m.a = P.id;
+        m.pos = {from.x + dn.x * rng, 0.0f, from.z + dn.y * rng};
+        m.pos.y = ocean.Height(m.pos.x, m.pos.z);
+        m.value = 2.0f * v.y / tune::gravity;
+        events.push_back(m);
+    };
+    auto smoke = [&](Vector3 at, Vector3 dir) {
+        GameEvent e{EventType::Fire};
+        e.a = P.id;
+        e.pos = at;
+        e.dir = dir;
+        events.push_back(e);
+    };
+    // the towers, each with its own fire
+    for (int k = 0; k < (int)bossParts.size(); ++k) {
+        BossPart& t = bossParts[k];
+        if (t.state != 1) continue;
+        t.timer -= dt * rate;
+        if (t.timer > 0.0f) continue;
+        const Ship* near = nullptr;
+        float nd = 1e9f;
+        for (const Ship* s : prey) {
+            float d = Vector2Distance({s->pos.x, s->pos.z}, {t.pos.x, t.pos.z});
+            if (d < nd) { nd = d; near = s; }
+        }
+        if (!near || nd > 620.0f) { t.timer = 1.5f; continue; }
+        Vector3 muzzle = t.pos;
+        switch (k % 3) {
+            case 0: {  // cannon: a fan at where she'll be
+                Vector3 at = Vector3Add(near->pos, Vector3Scale(near->vel, nd / 75.0f));
+                at.x += (RandF() - 0.5f) * 60.0f;  // (old guns on a rock: they scatter)
+                at.z += (RandF() - 0.5f) * 60.0f;
+                nd = Vector2Distance({at.x, at.z}, {muzzle.x, muzzle.z});
+                float a = atan2f(at.x - muzzle.x, at.z - muzzle.z);
+                for (int g = 0; g < 3; ++g) {
+                    float aa = a + (g - 1) * 0.06f;
+                    Vector3 p = {muzzle.x + sinf(aa) * nd, 0.0f, muzzle.z + cosf(aa) * nd};
+                    BossBall(P, muzzle, lobbed(muzzle, p, 80.0f, false), 0.7f);
+                }
+                t.timer = 4.2f;
+                break;
+            }
+            case 1:  // mortars, the spots marked
+                for (int g = 0; g < 2; ++g)
+                    mortar(muzzle, Vector3Add(Vector3Add(near->pos, Vector3Scale(near->vel, 3.0f)), {(RandF() - 0.5f) * 50.0f, 0.0f, (RandF() - 0.5f) * 50.0f}));
+                t.timer = 6.5f;
+                break;
+            default:  // grapeshot at anyone close, a long shot otherwise
+                if (nd < 170.0f) {
+                    float a = atan2f(near->pos.x - muzzle.x, near->pos.z - muzzle.z);
+                    for (int g = 0; g < 6; ++g) {
+                        float aa = a + (g - 2.5f) * 0.09f;
+                        Vector3 p = {muzzle.x + sinf(aa) * nd, 0.0f, muzzle.z + cosf(aa) * nd};
+                        BossBall(P, muzzle, lobbed(muzzle, p, 70.0f, false), 0.7f);
+                    }
+                    t.timer = 3.0f;
+                } else {
+                    Vector3 at = Vector3Add(near->pos, Vector3Scale(near->vel, nd / 85.0f));
+                    at.x += (RandF() - 0.5f) * 60.0f;
+                    at.z += (RandF() - 0.5f) * 60.0f;
+                    BossBall(P, muzzle, lobbed(muzzle, at, 85.0f, false), 0.9f);
+                    t.timer = 3.5f;
+                }
+                break;
+        }
+        smoke(muzzle, Vector3Normalize({near->pos.x - muzzle.x, 0.0f, near->pos.z - muzzle.z}));
+    }
+    // the searchlight: sweeping, until it settles on one of us; then the barrage
+    const Vector3 lamp = {0.0f, sf::top + sf::keepH + 8.0f, 0.0f};
+    if (bossState == sf::LIGHT_SWEEP) {
+        bossHeading += (phase == 1 ? 0.35f : 0.6f) * dt;
+        bossStep -= dt;
+        if (bossStep <= 0.0f)
+            for (const Ship* s : prey) {
+                float a = atan2f(s->pos.x, s->pos.z), d = Vector2Length({s->pos.x, s->pos.z});
+                if (fabsf(remainderf(a - bossHeading, 2.0f * PI)) < 0.08f && d < 650.0f) {
+                    bossState = sf::LIGHT_LOCKED;
+                    bossTarget = s->id;
+                    bossStep = 2.5f / sqrtf(rate);
+                    GameEvent e{EventType::BossPart};
+                    e.a = s->id;
+                    e.b = NO_SHIP;
+                    e.flags = 7;  // (the light's on her)
+                    e.pos = s->pos;
+                    events.push_back(e);
+                    break;
+                }
+            }
+    } else {
+        const Ship* t = bossTarget >= 0 && bossTarget < ShipCount() && ships[bossTarget].active && ships[bossTarget].alive ? &ships[bossTarget] : nullptr;
+        if (t) bossHeading = atan2f(t->pos.x, t->pos.z);
+        bossStep -= dt;
+        if (bossStep <= 0.0f || !t) {
+            if (t)
+                for (int g = 0; g < 6; ++g)
+                    mortar(lamp, Vector3Add(Vector3Add(t->pos, Vector3Scale(t->vel, 3.5f)), {(RandF() - 0.5f) * 70.0f, 0.0f, (RandF() - 0.5f) * 70.0f}));
+            bossState = sf::LIGHT_SWEEP;
+            bossTarget = -1;
+            bossStep = 4.0f;  // (a moment before it can settle again)
+        }
+    }
+    // the last stand: rings of shot from the keep
+    if (phase >= 3) {
+        bossSpit -= dt * rate;
+        if (bossSpit <= 0.0f) {
+            bossSpit = 4.0f;
+            Vector3 c = {0.0f, sf::top + sf::keepH * 0.7f, 0.0f};
+            int n = 22;
+            for (int k = 0; k < n; ++k) {
+                float a = bossRot + 2.0f * PI * k / n;
+                Vector3 p = {sinf(a) * (170.0f + 60.0f * (k & 1)), 0.0f, cosf(a) * (170.0f + 60.0f * (k & 1))};
+                BossBall(P, c, lobbed(c, p, 60.0f, false), 0.75f);
+            }
+            bossRot += 0.3f;
+            smoke(c, {0, 1, 0});
+        }
+    }
 }

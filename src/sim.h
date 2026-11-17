@@ -222,6 +222,14 @@ enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, F
 constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
 constexpr float curseSlow = 0.45f;
 }  // namespace fd
+namespace sf {  // the Sea Fortress: towers on its rim (bossParts), a keep in the middle, a searchlight
+constexpr int towers = 6;
+constexpr float rim = 50.0f;       // m from the middle to the towers
+constexpr float top = 22.0f;       // the island's flat top
+constexpr float towerH = 26.0f, towerR = 7.0f;
+constexpr float keepH = 38.0f, keepR = 13.0f;
+constexpr uint8_t LIGHT_SWEEP = 1, LIGHT_LOCKED = 6;  // World::bossState: the searchlight
+}  // namespace sf
 namespace ss {  // the Sea Serpent: its states (World::bossState), its body (bossParts: the head first)
 enum State : uint8_t { ARRIVING = 0, CRUISE = 1, SUBMERGED = 3, TELL = 4, BREACH = 5, COIL = 6 };
 constexpr int segs = 18;          // ...this many pieces of it
@@ -380,6 +388,8 @@ struct Rock {
     bool stack;      // tall narrow sea stack
 };
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena = ARENA_ISLES);
+Rock FortressRock();  // boss mode: the Sea Fortress's island in the middle of the bay (the same on the server and the clients)
+constexpr uint32_t kFortressSeed = 0xF0F7u;
 // race course: lines to cross (centre, the way through, half width); the strait has one, the finish
 struct RaceGate {
     float x, z;
@@ -780,6 +790,9 @@ private:
     void SpawnKrakenQueen();
     void SpawnDutchman();
     void SpawnSerpent();
+    void SpawnFortress();
+    void UpdateFortress(float dt, int phase, const std::vector<const Ship*>& prey);
+    void FortressRockOn(bool on);  // its island in the sea (and out again)
     void UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& prey);
     Vector3 bossA{}, bossB{};  // the Serpent: where its breach starts and lands
     float bossDepth = 16.0f, bossCoilHp = 0.0f;
