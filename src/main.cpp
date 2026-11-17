@@ -654,7 +654,7 @@ private:
     float krakenSlam = 99.0f;            // s since an arm came down on a deck
     Vector3 krakenSlamLocal{};           // where on her (hull space)
     double lastBiteFeed = -100.0;
-    struct MortarMark { Vector3 pos; double t0; float dur; };
+    struct MortarMark { Vector3 pos; double t0; float dur; float r = 17.0f; };
     std::vector<MortarMark> mortarMarks;  // boss mode: where its shells will fall
     float bossShown = -1.0f;              // the boss bar's trailing (just-lost) part
     Snapshot bossView;                   // boss mode: the newest snapshot's boss (its parts between the last two)
@@ -664,6 +664,7 @@ private:
     float bossDownAt = 0.0f;
     void DrawTells();
     void DrawKrakenQueen(float dt);
+    void DrawSerpentBoss(float dt);
     void DrawMortarMarks();
     void DrawBossBar(float W);
     std::string notice;                  // a big line across the screen for a few seconds
@@ -2950,6 +2951,19 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_SERPENT) {
+                const Color sc = {120, 220, 210, 255};
+                if (e.b == 1) {
+                    Notice("THE SEA SERPENT", sc, 4.0f);
+                    Feed3("THE SEA SERPENT", "  is in the bay: hit it when it's up, get clear of the rings", "", sc, ui::kText);
+                } else {
+                    Notice(e.b == 2 ? "THE SERPENT IS ANGRY" : "THE SERPENT IS HUNGRY", sc, 4.0f);
+                    Feed3("THE SEA SERPENT", e.b == 2 ? "  is faster now, breaches twice and spits venom" : "  will coil round a ship: shoot the coils to free her", "", sc,
+                          ui::kText);
+                }
+                sfx::PlayFlat(sfx::Roar, 0.9f, 0.7f);
+                break;
+            }
             if (e.flags == BOSS_DUTCHMAN) {
                 if (e.b == 1) {
                     Notice("THE FLYING DUTCHMAN", {150, 255, 200, 255}, 4.0f);
@@ -2990,10 +3004,34 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::BossTell:
+            if (e.flags == 1) {  // a ring: where the Serpent comes down
+                mortarMarks.push_back({e.pos, GetTime(), e.value, e.dir.x});
+                if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < e.dir.x + 40.0f) {
+                    Notice("GET CLEAR!", ui::kRed, 1.5f);
+                    sfx::PlayFlat(sfx::Creak, 0.8f, 0.4f);
+                }
+                break;
+            }
             tells.push_back({e.pos, e.dir, kq::slamHalf, GetTime(), e.value});
             if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 420.0f) sfx::PlayFlat(sfx::Creak, 0.7f, 0.5f);
             break;
         case EventType::BossSlam: {
+            if (e.flags == 1) {  // the Serpent landing: a ring of white water and spray
+                for (int i = 0; i < 24; ++i) {
+                    float a = 2.0f * PI * i / 24, rr = e.value * 0.35f;
+                    Vector3 p = {e.pos.x + sinf(a) * rr, e.pos.y, e.pos.z + cosf(a) * rr};
+                    AddFoam(p, 3.0f, Rnd(10, 16), 5.0f, 1.0f);
+                    for (int j = 0; j < 6; ++j) Emit(p, {sinf(a) * Rnd(4, 10), Rnd(10, 26), cosf(a) * Rnd(4, 10)}, Rnd(1.2f, 2.4f), Rnd(0.8f, 1.6f), 0.6f, {235, 245, 250, 220}, 0);
+                }
+                AddFoam(e.pos, 10.0f, e.value, 8.0f, 1.0f);
+                sfx::Play(sfx::Slam, e.pos, 1.0f, 0.5f);
+                sfx::Play(sfx::Thunder, e.pos, 0.8f, 0.6f);
+                if (myId >= 0 && myId < NumShips() && view[myId].present) {
+                    float d = Vector3Distance(view[myId].s.pos, e.pos);
+                    if (d < e.value * 2.0f) shake = fmaxf(shake, 2.0f * (1.0f - d / (e.value * 2.0f)) + 0.4f);
+                }
+                break;
+            }
             float len = Vector3Length(e.dir);
             Vector3 d = len > 0.0f ? Vector3Scale(e.dir, 1.0f / len) : Vector3{0, 0, 1};
             for (float a = 10.0f; a < len; a += 22.0f) {
@@ -3056,12 +3094,14 @@ void Game::PlayEvent(const GameEvent& e) {
                 sfx::Play(sfx::Roar, e.pos, 0.8f, 1.3f);
                 AddFoam(e.pos, 4.0f, 18.0f, 5.0f, 1.0f);
                 for (int i = 0; i < 40; ++i) Emit(e.pos, Vector3Add(RandDir(8.0f), {0, Rnd(4, 12), 0}), Rnd(1.0f, 2.0f), Rnd(0.5f, 1.2f), 0.5f, {120, 20, 40, 230}, 0);
-                if (e.a < NumShips()) Feed3(NameOf(e.a), "  shot off one of her arms!", "", TeamOf(e.a), ui::kGold);
-                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "ARM OFF!", ui::kGold, 2.2f});
+                const bool serp = bossView.bossKind == BOSS_SERPENT;
+                if (e.a < NumShips()) Feed3(NameOf(e.a), serp ? "  made it let go!" : "  shot off one of her arms!", "", TeamOf(e.a), ui::kGold);
+                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), serp ? "IT LETS GO!" : "ARM OFF!", ui::kGold, 2.2f});
             } else if (e.flags == 3) {  // got hold of one of us
-                Feed3("The Kraken Queen", "  has  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
+                const bool serp = bossView.bossKind == BOSS_SERPENT;
+                Feed3(serp ? "The Sea Serpent" : "The Kraken Queen", serp ? "  coils round  " : "  has  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
                 if (e.a == myId) {
-                    Notice("SHE HAS YOU!  SHOOT THE ARM!", ui::kRed, 3.5f);
+                    Notice(serp ? "IT HAS YOU!  SHOOT THE COILS!" : "SHE HAS YOU!  SHOOT THE ARM!", ui::kRed, 3.5f);
                     shake = fmaxf(shake, 1.5f);
                 }
                 sfx::Play(sfx::Slam, e.pos, 0.8f, 0.7f);
@@ -3704,6 +3744,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu) DrawFigures();
     if (!menu && !monView.empty()) DrawMonsters(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_KRAKEN) DrawKrakenQueen(dt);
+    if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_SERPENT) DrawSerpentBoss(dt);
 
     renderer.Water();
 
@@ -6159,8 +6200,8 @@ void Game::DrawMortarMarks() {
         float pulse = 0.6f + 0.4f * sinf((float)now * (6.0f + 10.0f * k));
         Vector3 c = {m.pos.x, Ocean().Height(m.pos.x, m.pos.z) + 0.8f, m.pos.z};
         Color red = Fade({255, 50, 40, 255}, pulse);
-        for (float r : {16.6f, 17.0f, 17.4f}) DrawCircle3D(c, r, {1, 0, 0}, 90.0f, red);
-        float inner = 17.0f * k;
+        for (float r : {m.r - 0.4f, m.r, m.r + 0.4f}) DrawCircle3D(c, r, {1, 0, 0}, 90.0f, red);
+        float inner = m.r * k;
         for (float dr : {-0.3f, 0.0f, 0.3f}) DrawCircle3D(c, fmaxf(0.5f, inner + dr), {1, 0, 0}, 90.0f, Fade({255, 200, 80, 255}, 0.9f));
     }
     rlDrawRenderBatchActive();
@@ -6190,6 +6231,11 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_SERPENT) {
+        const uint8_t st = bossView.bossState;
+        extra = st == ss::CRUISE ? "   \xC2\xB7   UP: FIRE!" : st == ss::BREACH ? "   \xC2\xB7   BREACHING!" : st == ss::COIL ? "   \xC2\xB7   COILED: SHOOT IT OFF HER!"
+                : st == ss::TELL ? "   \xC2\xB7   COMING UP: GET CLEAR OF THE RING" : "   \xC2\xB7   UNDER";
+    }
     if (bossView.bossKind == BOSS_DUTCHMAN) {
         const uint8_t st = bossView.bossState;
         extra = st == fd::SOLID ? "   \xC2\xB7   SOLID: FIRE!" : st == fd::MATERIALISING ? "   \xC2\xB7   COMING THROUGH..." : "   \xC2\xB7   ETHEREAL: OUT OF REACH";
@@ -6363,4 +6409,25 @@ void Game::DrawCurses() {
         for (float dr : {-0.3f, 0.3f}) DrawCircle3D(p, c.len * 0.6f + dr, {1, 0, 0}, 90.0f, Fade({90, 255, 150, 255}, pulse * 0.5f));
     }
     rlDrawRenderBatchActive();
+}
+
+// The Sea Serpent: drawn along its body as the server has it; the sea where it breaks the surface
+void Game::DrawSerpentBoss(float dt) {
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    std::vector<Vector3> spine;
+    for (const NetBossPart& p : bossView.bossParts) spine.push_back(p.pos);
+    if (spine.size() < 3) return;
+    if (bossView.bossState == 2) {  // going down: sinking where it died
+        float k = Clamp(((float)GetTime() - bossDownAt) / 4.0f, 0.0f, 1.0f);
+        for (Vector3& p : spine) p.y -= 20.0f * k;
+    }
+    monArt.DrawSerpent(renderer, spine, (float)GetTime(), bossHurt);
+    const OceanCPU& oc = Ocean();
+    for (size_t i = 0; i < spine.size(); i += 2) {  // white water where it cuts the surface
+        float sea = oc.Height(spine[i].x, spine[i].z);
+        if (fabsf(spine[i].y - sea) < 5.0f && Rnd(0.0f, 1.0f) < dt * 6.0f) AddFoam({spine[i].x, sea, spine[i].z}, 2.0f, Rnd(5, 9), 2.5f, 0.6f);
+    }
+    if (bossView.bossState == ss::BREACH)  // streaming water off it in the air
+        for (size_t i = 0; i < spine.size(); i += 3)
+            if (Rnd(0.0f, 1.0f) < dt * 12.0f) Emit(spine[i], {Rnd(-2, 2), Rnd(-4, 0), Rnd(-2, 2)}, 1.5f, 0.6f, 0.3f, {225, 235, 240, 200}, 0);
 }

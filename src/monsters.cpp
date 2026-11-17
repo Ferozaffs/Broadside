@@ -47,6 +47,7 @@ Vector3 Spline(const std::vector<Vector3>& c, float u) {
 const Color kSkin = {98, 26, 40, 255}, kSkinDark = {34, 9, 20, 255}, kSkinPale = {176, 104, 102, 255}, kSucker = {222, 172, 158, 255};
 constexpr int kArmRings = 44, kArmSides = 10;
 constexpr int kSharkRings = 34, kSharkSides = 16, kSharkFinVerts = 96, kSharkFinTris = 48;
+constexpr int kSerpRings = 90, kSerpSides = 12, kSerpFins = 14;
 }  // namespace
 
 void MonsterArt::MakeDyn(Dyn& d, int verts, int tris) {
@@ -175,6 +176,7 @@ void MonsterArt::Init(Shader lit) {
     tooth = GenMeshCone(0.5f, 1.0f, 6);
     for (Dyn& d : arms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
     for (Dyn& d : queenArms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
+    MakeDyn(serpent, kSerpRings * kSerpSides + 1 + kSerpFins * 6, (kSerpRings - 1) * kSerpSides * 2 + kSerpSides + kSerpFins * 2);
     MakeDyn(shark, kSharkRings * kSharkSides + 1 + kSharkFinVerts, (kSharkRings - 1) * kSharkSides * 2 + kSharkSides + kSharkFinTris);
     ready = true;
 }
@@ -481,5 +483,113 @@ void MonsterArt::DrawQueenArm(Renderer& r, int slot, const std::vector<Vector3>&
     Tube(queenArms[slot], pts, rad, inner, 1.0f, time);
     mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     DrawMesh(queenArms[slot].mesh, mat, MatrixIdentity());
+    r.SetLitParams(0.0f, 0.0f);
+}
+
+// The Sea Serpent: one long tube through its spine (head first), a head that swells behind the snout, a neck, a
+// long body tapering to the tail; dark teal over a pale belly, banded, a crimson frill down its back, gold eyes, horns
+void MonsterArt::DrawSerpent(Renderer& r, const std::vector<Vector3>& spine, float time, float hurt) {
+    if (!ready || spine.size() < 3) return;
+    const int NR = kSerpRings, NS = kSerpSides;
+    std::vector<Vector3> pts(NR);
+    for (int i = 0; i < NR; ++i) pts[i] = Spline(spine, (float)i / (NR - 1));
+    auto radius = [](float u) {
+        if (u < 0.03f) return 2.5f + u / 0.03f * 4.5f;
+        if (u < 0.07f) return 7.0f - (u - 0.03f) / 0.04f * 2.0f;
+        if (u < 0.5f) return 5.0f + 1.2f * sinf((u - 0.07f) / 0.43f * PI);
+        return 5.0f * powf(fmaxf(0.0f, 1.0f - (u - 0.5f) / 0.5f), 0.8f) + 0.3f;
+    };
+    const Color back = {24, 70, 74, 255}, band = {12, 38, 42, 255}, belly = {205, 195, 140, 255}, frill = {170, 48, 40, 255};
+    std::vector<Vector3> P, N;
+    std::vector<Color> C;
+    std::vector<unsigned short> I;
+    std::vector<Vector3> ups(NR), sides(NR), tans(NR);
+    Vector3 prevUp = {0, 1, 0};
+    for (int i = 0; i < NR; ++i) {
+        Vector3 t = Vector3Normalize(Vector3Subtract(pts[std::max(i - 1, 0)], pts[std::min(i + 1, NR - 1)]));  // (towards the head)
+        Vector3 up = Vector3Subtract({0, 1, 0}, Vector3Scale(t, t.y));
+        if (Vector3Length(up) < 0.2f) up = Vector3Subtract(prevUp, Vector3Scale(t, Vector3DotProduct(prevUp, t)));
+        up = Vector3Normalize(up);
+        prevUp = up;
+        Vector3 b = Vector3CrossProduct(t, up);
+        ups[i] = up;
+        sides[i] = b;
+        tans[i] = t;
+        float u = (float)i / (NR - 1), rr = radius(u);
+        bool banded = (i / 5) % 2 == 1 && u > 0.08f;
+        for (int k = 0; k < NS; ++k) {
+            float a = 2.0f * PI * k / NS, ca = cosf(a), sa = sinf(a);
+            float flat = ca < 0.0f ? 0.78f : 1.0f;  // (a flatter belly)
+            Vector3 dir = Vector3Add(Vector3Scale(up, ca * flat), Vector3Scale(b, sa));
+            P.push_back(Vector3Add(pts[i], Vector3Scale(dir, rr)));
+            N.push_back(Vector3Normalize(Vector3Add(Vector3Scale(up, ca), Vector3Scale(b, sa))));
+            Color c = Mix(belly, banded ? band : back, Clamp((ca + 0.35f) / 0.5f, 0.0f, 1.0f));
+            C.push_back(c);
+        }
+    }
+    const unsigned short tip = (unsigned short)P.size();
+    P.push_back(Vector3Add(pts[0], Vector3Scale(tans[0], 4.0f)));
+    N.push_back(tans[0]);
+    C.push_back(back);
+    // the frill down its back
+    const size_t fin0 = P.size();
+    int fins = 0;
+    for (int i = 6; i + 3 < NR - 8 && fins < kSerpFins; i += 5, ++fins) {
+        float u = (float)i / (NR - 1), rr = radius(u) * 0.9f, h = 2.0f + 3.5f * (1.0f - u);
+        Vector3 a = Vector3Add(pts[i], Vector3Scale(ups[i], rr)), c = Vector3Add(pts[i + 3], Vector3Scale(ups[i + 3], radius((float)(i + 3) / (NR - 1)) * 0.9f));
+        Vector3 apex = Vector3Add(Vector3Add(a, Vector3Scale(ups[i], h)), Vector3Scale(tans[i], -2.5f + 0.6f * sinf(time * 3.0f + i)));
+        Vector3 n = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(c, a), Vector3Subtract(apex, a)));
+        for (int f = 0; f < 2; ++f) {
+            P.insert(P.end(), {a, c, apex});
+            Vector3 nn = f ? Vector3Negate(n) : n;
+            N.insert(N.end(), {nn, nn, nn});
+            C.insert(C.end(), {frill, frill, Mix(frill, {255, 120, 90, 255}, 0.4f)});
+        }
+    }
+    if (!serpent.ready) {
+        for (int i = 0; i + 1 < NR; ++i)
+            for (int k = 0; k < NS; ++k) {
+                unsigned short a = (unsigned short)(i * NS + k), b = (unsigned short)(i * NS + (k + 1) % NS);
+                unsigned short c = (unsigned short)(a + NS), e = (unsigned short)(b + NS);
+                I.insert(I.end(), {a, c, b, b, c, e});
+            }
+        for (int k = 0; k < NS; ++k) I.insert(I.end(), {tip, (unsigned short)((k + 1) % NS), (unsigned short)k});
+        for (int f = 0; f < kSerpFins * 2; ++f) {
+            unsigned short o = (unsigned short)(fin0 + f * 3);
+            if ((f & 1) == 0) I.insert(I.end(), {o, (unsigned short)(o + 1), (unsigned short)(o + 2)});
+            else I.insert(I.end(), {o, (unsigned short)(o + 2), (unsigned short)(o + 1)});
+        }
+        while ((int)I.size() < serpent.maxTris * 3) I.push_back(0);
+    }
+    while ((int)P.size() < serpent.maxVerts) {
+        P.push_back(P[0]);
+        N.push_back(N[0]);
+        C.push_back(C[0]);
+    }
+    Upload(serpent, P, N, C, I);
+    r.SetLitParams(hurt * 0.5f, 0.0f);
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    DrawMesh(serpent.mesh, mat, MatrixIdentity());
+    // eyes and horns on the head
+    for (int sd = -1; sd <= 1; sd += 2) {
+        int i = 3;
+        float rr = radius((float)i / (NR - 1));
+        Vector3 e = Vector3Add(pts[i], Vector3Add(Vector3Scale(ups[i], rr * 0.35f), Vector3Scale(sides[i], sd * rr * 0.8f)));
+        r.SetLitParams(hurt * 0.5f, 0.45f);
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = {240, 190, 40, 255};
+        DrawMesh(eye, mat, MatrixMultiply(MatrixScale(1.3f, 1.3f, 1.3f), MatrixTranslate(e.x, e.y, e.z)));
+        r.SetLitParams(hurt * 0.5f, 0.0f);
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = {10, 8, 6, 255};
+        Vector3 pe = Vector3Add(e, Vector3Scale(sides[i], sd * 0.9f));
+        DrawMesh(pupil, mat, MatrixMultiply(MatrixScale(0.5f, 1.0f, 0.5f), MatrixTranslate(pe.x, pe.y, pe.z)));
+        int j = 6;
+        float rj = radius((float)j / (NR - 1));
+        Vector3 h = Vector3Add(pts[j], Vector3Add(Vector3Scale(ups[j], rj * 0.8f), Vector3Scale(sides[j], sd * rj * 0.45f)));
+        Vector3 hd = Vector3Normalize(Vector3Add(Vector3Scale(ups[j], 0.7f), Vector3Scale(tans[j], -0.7f)));
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = {220, 210, 180, 255};
+        DrawMesh(tooth, mat, MatrixMultiply(MatrixMultiply(MatrixScale(1.6f, 6.0f, 1.6f), QuaternionToMatrix(QuaternionFromVector3ToVector3({0, 1, 0}, hd))),
+                                            MatrixTranslate(h.x, h.y, h.z)));
+    }
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     r.SetLitParams(0.0f, 0.0f);
 }

@@ -2620,6 +2620,8 @@ void World::BotThink(Ship& s, float dt) {
                 if (along > -20.0f && along < a.len + 20.0f && fabsf(side) < kq::slamHalf + 30.0f)
                     flee = Vector2Add(flee, Vector2Scale({a.dir.y, -a.dir.x}, side >= 0.0f ? 1.0f : -1.0f));
             }
+        if (bossKind == BOSS_SERPENT && (bossState == ss::TELL || bossState == ss::SUBMERGED) && Vector2Distance(me, {bossB.x, bossB.z}) < ss::landShove + 15.0f)
+            flee = Vector2Add(flee, Vector2Normalize(Vector2Subtract(me, {bossB.x, bossB.z})));  // (where it's coming down)
         for (const Ball& bl : balls) {
             if (bl.splash <= 0.0f || bl.inWater) continue;
             float t = (bl.vel.y + sqrtf(fmaxf(0.0f, bl.vel.y * bl.vel.y + 2.0f * tune::gravity * bl.pos.y))) / tune::gravity;
@@ -2700,7 +2702,7 @@ void World::BotThink(Ship& s, float dt) {
             tPos = p;
             tVel = {0.0f, 0.0f, 0.0f};
             tDist = Vector3Distance(p, s.pos);
-        }
+        } else tDist = 1e9f;  // (nothing of it to shoot at)
     }
     if (tDist < (MC.muzzleSpeed < 90.0f ? 460.0f : 520.0f)) {
         const float best = tDist;
@@ -4338,12 +4340,13 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
-    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 3) % 3);  // (random: among the ones there are so far)
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 4) % 4);  // (random: among the ones there are so far)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
     bossParts.clear();
-    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN) {
+    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT) {
         if (bossKind == BOSS_KRAKEN) SpawnKrakenQueen();
-        else SpawnDutchman();
+        else if (bossKind == BOSS_DUTCHMAN) SpawnDutchman();
+        else SpawnSerpent();
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
@@ -4501,6 +4504,10 @@ void World::UpdateBoss(float dt) {
     }
     if (bossKind == BOSS_DUTCHMAN) {
         UpdateDutchman(dt, phase, prey);
+        return;
+    }
+    if (bossKind == BOSS_SERPENT) {
+        UpdateSerpent(dt, phase, prey);
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
@@ -4914,6 +4921,19 @@ void World::UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*
 bool World::BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at) {
     if (bossId < 0 || bossHpNow <= 0.0f || b.owner == bossId) return false;
     if (b.owner < ShipCount() && ships[b.owner].team == 1) return false;
+    if (bossKind == BOSS_SERPENT) {
+        for (int i = 0; i < (int)bossParts.size(); ++i) {
+            const Vector3& p = bossParts[i].pos;
+            if (p.y < ocean.Height(p.x, p.z) - 3.0f) continue;  // (under the water: out of reach)
+            float s;
+            if (SegSegDist(prev, b.pos, p, p, s) < (i == 0 ? ss::headR : ss::bodyR)) {
+                part = i;
+                at = Vector3Lerp(prev, b.pos, s);
+                return true;
+            }
+        }
+        return false;
+    }
     if (bossKind == BOSS_KRAKEN) {
         for (int k = 0; k < (int)bossParts.size(); ++k) {
             const BossPart& a = bossParts[k];
@@ -4929,7 +4949,7 @@ bool World::BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at) {
         }
         float s;
         Vector3 c = Vector3Add(bossPos, {0.0f, 10.0f, 0.0f});
-        if (bossState >= 1 && SegSegDist(prev, b.pos, c, c, s) < kq::bodyR) {
+        if (bossKind == BOSS_KRAKEN && bossState >= 1 && SegSegDist(prev, b.pos, c, c, s) < kq::bodyR) {
             part = -1;
             at = Vector3Lerp(prev, b.pos, s);
             return true;
@@ -4944,7 +4964,24 @@ void World::BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 di
     e.b = part >= 0 ? (uint16_t)part : NO_SHIP;
     e.pos = at;
     e.dir = dir;
-    if (part >= 0 && part < (int)bossParts.size()) {
+    if (bossKind == BOSS_SERPENT) {  // all of it is the serpent; round a ship, the coils take it first
+        e.value = dmg;
+        if (bossState == ss::COIL && bossCoilHp > 0.0f) {
+            bossCoilHp -= dmg;
+            bossHpNow = fmaxf(0.0f, bossHpNow - dmg * 0.5f);
+            if (bossCoilHp <= 0.0f) {  // it lets go
+                GameEvent d{EventType::BossPart};
+                d.a = e.a;
+                d.b = 0;
+                d.flags = 1;
+                d.pos = at;
+                events.push_back(d);
+                bossCoilHp = -1.0f;  // (UpdateSerpent: under, and off)
+                bossState = ss::CRUISE;
+                bossT = 8.9f;
+            }
+        } else bossHpNow = fmaxf(0.0f, bossHpNow - dmg);
+    } else if (part >= 0 && part < (int)bossParts.size()) {
         BossPart& a = bossParts[part];
         a.hp -= dmg;
         e.value = dmg;
@@ -4975,6 +5012,17 @@ void World::BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 di
 // where an ally aims at a boss that isn't a ship: the Kraken Queen's arm with a ship in it first, then (while her
 // arms shield her) the nearest arm, else her body
 bool World::BossAimFor(Vector3 from, Vector3& at) const {
+    if (bossKind == BOSS_SERPENT) {  // its head if it's up, else the nearest hump out of the water
+        float bd = 1e9f;
+        bool found = false;
+        for (int i = 0; i < (int)bossParts.size(); ++i) {
+            const Vector3& p = bossParts[i].pos;
+            if (p.y < ocean.Height(p.x, p.z) - 1.0f) continue;
+            float d = Vector3Distance(p, from) * (i == 0 ? 0.6f : 1.0f);
+            if (d < bd) { bd = d; at = p; found = true; }
+        }
+        return found;
+    }
     if (bossKind == BOSS_KRAKEN) {
         int up = 0;
         for (const BossPart& a : bossParts) up += a.state >= kq::ARM_RISING && a.state <= kq::ARM_GRAB;
@@ -5176,4 +5224,233 @@ void World::UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& 
             events.push_back(e);
         }
     }
+}
+
+// ---- the Sea Serpent ----------------------------------------------------------------------
+// A serpent nearly two cables long. It cruises the bay with its humps out of the water (head and humps are what
+// you can hit), then dives: a ring on the water marks where it's coming down, and it breaches clean across the bay
+// and lands there, the shock smashing anything close and throwing about everything near. In the air it's all
+// target. From two thirds down it's faster, breaches twice running and spits venom; from a third it coils round a
+// ship to crush her, and the others must shoot the coils to make it let go.
+void World::SpawnSerpent() {
+    bossId = BossProxy(kBossNames[BOSS_SERPENT]);
+    if (bossId < 0) return;
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
+    bossHpMax = bossHpNow = (1200.0f + 500.0f * std::max(captains, 1)) * Diff().bossHp;  // (much of the time it's out of reach)
+    if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
+    bossState = getenv("BS_BOSSUP") ? ss::CRUISE : ss::ARRIVING;  // (BS_BOSSUP: screenshots, it starts up)
+    bossT = 0.0f;
+    bossDepth = 16.0f;
+    bossHeading = RandF() * 2.0f * PI;
+    bossPos = {0.0f, ocean.Height(0.0f, 0.0f) - bossDepth, 0.0f};
+    bossSpit = 4.0f;
+    bossTarget = -1;
+    bossParts.assign(ss::segs, BossPart{});
+    for (int i = 0; i < ss::segs; ++i) {
+        bossParts[i].pos = {-sinf(bossHeading) * ss::spacing * i, bossPos.y, -cosf(bossHeading) * ss::spacing * i};
+        bossParts[i].maxHp = bossParts[i].hp = 1.0f;
+    }
+}
+
+void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& P = ships[bossId];
+    bossT += dt;
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    Vector3& head = bossParts[0].pos;
+    auto enter = [&](uint8_t st) { bossState = st; bossT = 0.0f; };
+    auto nearest = [&](Vector3 from) {
+        const Ship* best = nullptr;
+        float bd = 1e9f;
+        for (const Ship* s : prey) {
+            float d = Vector2Distance({s->pos.x, s->pos.z}, {from.x, from.z});
+            if (d < bd) { bd = d; best = s; }
+        }
+        return best;
+    };
+    auto inBay = [&](Vector3 p) {  // (kept inside the islands, clear of rocks)
+        float r = sqrtf(p.x * p.x + p.z * p.z);
+        if (r > 560.0f) { p.x *= 560.0f / r; p.z *= 560.0f / r; }
+        return p;
+    };
+    // plan a breach at one of us: where it'll come down, and where it goes under to come up from
+    auto planBreach = [&]() {
+        const Ship* t = prey.empty() ? nullptr : prey[(size_t)(RandF() * prey.size()) % prey.size()];
+        if (!t) return false;
+        bossB = inBay(Vector3Add(t->pos, Vector3Scale(t->vel, 3.5f)));
+        Vector2 d = Vector2Normalize({bossB.x - head.x, bossB.z - head.z});
+        if (Vector2Length(d) < 0.5f) d = {sinf(bossHeading), cosf(bossHeading)};
+        bossA = inBay({bossB.x - d.x * ss::leap, 0.0f, bossB.z - d.y * ss::leap});
+        bossTarget = t->id;
+        enter(ss::SUBMERGED);
+        return true;
+    };
+    auto swim = [&](Vector3 goal, float speed, float turn) {
+        float want = atan2f(goal.x - head.x, goal.z - head.z);
+        bossHeading += Clamp(remainderf(want - bossHeading, 2.0f * PI), -turn * dt, turn * dt);
+        head.x += sinf(bossHeading) * speed * dt;
+        head.z += cosf(bossHeading) * speed * dt;
+        head = inBay(head);
+    };
+    bool chainY = false;  // (in the air its body follows its head's arc; in the water it lies to the surface)
+    switch (bossState) {
+        case ss::ARRIVING:
+            bossDepth = 16.0f;
+            if (bossT > 3.0f) planBreach();
+            break;
+        case ss::CRUISE: {
+            bossDepth = fmaxf(0.0f, bossDepth - 6.0f * dt);
+            const Ship* t = nearest(head);
+            if (t) {  // round the nearest of us at a cable or so
+                Vector2 away = Vector2Normalize({head.x - t->pos.x, head.z - t->pos.z});
+                float a = atan2f(away.x, away.y) + 0.6f;
+                swim({t->pos.x + sinf(a) * 120.0f, 0.0f, t->pos.z + cosf(a) * 120.0f}, phase == 1 ? 13.0f : 16.0f, 0.55f);
+            } else swim({0, 0, 0}, 12.0f, 0.4f);
+            if (t) {  // venom (slower before it's angry)
+                bossSpit -= dt * rate;
+                float d = Vector2Distance({t->pos.x, t->pos.z}, {head.x, head.z});
+                if (bossSpit <= 0.0f && d < 320.0f) {
+                    bossSpit = phase == 1 ? 6.0f : 4.5f;
+                    Vector3 mouth = Vector3Add(head, {0.0f, 6.0f, 0.0f});
+                    Vector3 at = Vector3Add(t->pos, Vector3Scale(t->vel, d / 60.0f));
+                    float a = atan2f(at.x - mouth.x, at.z - mouth.z), rng = Clamp(d, 40.0f, 320.0f);
+                    for (int k = 0; k < 5; ++k) {
+                        float aa = a + (k - 2) * 0.1f, sn = Clamp(tune::gravity * rng / 3600.0f, 0.0f, 1.0f), e = 0.5f * asinf(sn);
+                        BossBall(P, mouth, {sinf(aa) * 60.0f * cosf(e), 60.0f * sinf(e), cosf(aa) * 60.0f * cosf(e)}, 0.9f);
+                    }
+                    GameEvent e{EventType::Fire};
+                    e.a = P.id;
+                    e.pos = mouth;
+                    e.dir = {sinf(a), 0.0f, cosf(a)};
+                    events.push_back(e);
+                }
+            }
+            if (bossT > 7.0f + RandF() * 0.05f) {
+                const Ship* c = nearest(head);
+                if (phase >= 3 && c && RandF() < 0.5f) {  // after one of us, to coil round her
+                    bossTarget = c->id;
+                    bossCoilHp = 0.0f;
+                    enter(ss::COIL);
+                } else planBreach();
+            }
+            break;
+        }
+        case ss::SUBMERGED:
+            bossDepth = fminf(16.0f, bossDepth + 8.0f * dt);
+            swim(bossA, 24.0f, 1.2f);
+            if (Vector2Distance({head.x, head.z}, {bossA.x, bossA.z}) < 18.0f || bossT > 14.0f) {
+                bossHeading = atan2f(bossB.x - head.x, bossB.z - head.z);
+                enter(ss::TELL);
+                GameEvent e{EventType::BossTell};
+                e.a = P.id;
+                e.flags = 1;  // (a ring: where it comes down)
+                e.pos = {bossB.x, ocean.Height(bossB.x, bossB.z), bossB.z};
+                e.dir = {ss::landR, 0.0f, 0.0f};
+                e.value = 2.2f / sqrtf(rate);
+                events.push_back(e);
+            }
+            break;
+        case ss::TELL:
+            bossDepth = 16.0f;
+            if (bossT > 2.2f / sqrtf(rate) - 1.2f) {  // (it's in the air for the last of the count)
+                bossA = {head.x, 0.0f, head.z};
+                enter(ss::BREACH);
+            }
+            break;
+        case ss::BREACH: {
+            const float T = 2.4f, u = Clamp(bossT / T, 0.0f, 1.0f);
+            Vector3 flat = Vector3Lerp(bossA, bossB, u);
+            head = {flat.x, ocean.Height(flat.x, flat.z) - 8.0f + 60.0f * 4.0f * u * (1.0f - u), flat.z};
+            bossHeading = atan2f(bossB.x - bossA.x, bossB.z - bossA.z);
+            bossDepth = 0.0f;
+            chainY = true;
+            if (u >= 1.0f) {  // down: the shock of it
+                for (Ship& s : ships) {
+                    if (!s.active || !s.alive || s.stowed || s.team == 1) continue;
+                    Vector2 d = {s.pos.x - bossB.x, s.pos.z - bossB.z};
+                    float r = Vector2Length(d);
+                    if (r > ss::landShove) continue;
+                    Vector2 out = r > 1.0f ? Vector2Scale(d, 1.0f / r) : Vector2{1, 0};
+                    float k = 1.0f - r / ss::landShove;
+                    ApplyImpulse(s, {out.x * tune::ballKnockback * 3.0f * k, tune::ballKnockback * 2.0f * k, out.y * tune::ballKnockback * 3.0f * k},
+                                 Vector3Add(s.pos, {0.0f, -2.0f, 0.0f}), {tune::hitPitch, 0.4f, 1.2f});
+                    if (r < ss::landR) {
+                        float dmg = 24.0f * Diff().monster * (1.0f - 0.5f * r / ss::landR);
+                        GameEvent h{EventType::Hit};
+                        h.a = P.id;
+                        h.b = s.id;
+                        h.flags = EF_PLUNGING;
+                        h.pos = Vector3Add(s.pos, {0.0f, 3.0f, 0.0f});
+                        h.dir = {0, -1, 0};
+                        h.value = dmg;
+                        events.push_back(h);
+                        Damage(s, dmg, P.id);
+                    }
+                }
+                GameEvent e{EventType::BossSlam};
+                e.a = P.id;
+                e.flags = 1;  // (a ring)
+                e.pos = {bossB.x, ocean.Height(bossB.x, bossB.z), bossB.z};
+                e.value = ss::landShove;
+                events.push_back(e);
+                if (phase >= 2 && RandF() < 0.4f) planBreach();  // (again, straight away)
+                else enter(ss::CRUISE);
+            }
+            break;
+        }
+        case ss::COIL: {
+            Ship* t = bossTarget >= 0 && bossTarget < ShipCount() && ships[bossTarget].active && ships[bossTarget].alive ? &ships[bossTarget] : nullptr;
+            if (!t) { planBreach(); break; }
+            float d = Vector2Distance({t->pos.x, t->pos.z}, {head.x, head.z});
+            if (bossCoilHp <= 0.0f && d > 30.0f) {  // closing on her
+                bossDepth = fmaxf(0.0f, bossDepth - 6.0f * dt);
+                swim(t->pos, 22.0f, 1.4f);
+                if (bossT > 12.0f) planBreach();
+                break;
+            }
+            if (bossCoilHp <= 0.0f) {  // round her
+                bossCoilHp = (260.0f + 90.0f * prey.size()) * Diff().bossHp;
+                bossT = 0.0f;
+                GameEvent e{EventType::BossPart};
+                e.a = t->id;
+                e.b = 0;
+                e.flags = 3;  // (got hold of one)
+                e.pos = t->pos;
+                events.push_back(e);
+            }
+            const float rr = hull::halfLength * ClassOf(t->cls).scale + 9.0f;
+            for (int i = 0; i < ss::segs; ++i) {
+                float a = i * 0.62f + bossT * 0.25f;
+                float lift = i == 0 ? 16.0f : 1.0f + 0.25f * i;
+                Vector3 p = {t->pos.x + sinf(a) * rr * (i == 0 ? 0.3f : 1.0f), 0.0f, t->pos.z + cosf(a) * rr * (i == 0 ? 0.3f : 1.0f)};
+                p.y = ocean.Height(p.x, p.z) + lift;
+                bossParts[i].pos = Vector3Lerp(bossParts[i].pos, p, fminf(1.0f, dt * 3.0f));
+            }
+            bossHeading = atan2f(t->pos.x - head.x, t->pos.z - head.z);
+            t->held = 1.0f;
+            Damage(*t, t->maxHp * 0.02f * Diff().monster * dt, P.id);
+            if (bossT > 12.0f) {  // it lets go of its own accord
+                bossCoilHp = 0.0f;
+                planBreach();
+            }
+            break;
+        }
+    }
+    // the body: each piece after the one before (round her, it's placed above)
+    if (bossState != ss::COIL || bossCoilHp <= 0.0f) {
+        head.y = chainY ? head.y : ocean.Height(head.x, head.z) - bossDepth;
+        for (int i = 1; i < ss::segs; ++i) {
+            Vector3& p = bossParts[i].pos;
+            const Vector3& q = bossParts[i - 1].pos;
+            Vector3 d = Vector3Subtract(p, q);
+            float L = Vector3Length(d);
+            if (L > ss::spacing) p = Vector3Add(q, Vector3Scale(d, ss::spacing / L));
+            if (!chainY && p.y < ocean.Height(p.x, p.z) + 6.0f) {  // in the sea: humps at the surface, or under
+                float hump = bossDepth < 2.0f ? 5.0f * sinf(i * 0.9f - (float)time * 2.2f) : 0.0f;  // (its humps well out of the water)
+                float want = ocean.Height(p.x, p.z) - bossDepth + hump + 0.5f;
+                p.y += (want - p.y) * fminf(1.0f, dt * 3.0f);
+            }
+        }
+    }
+    bossPos = head;
 }

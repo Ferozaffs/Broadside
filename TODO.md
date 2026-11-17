@@ -520,7 +520,16 @@ Protocol 25.
   through islands - fanned broadsides, rings of slow souls, aimed fans), FADING (1.5 s). Phase 2: 1-2 drowned cutters come
   up with it each time; phase 3: cursed water (bossParts state 1, 48 m, 12 s: sail at 0.45, predicted too). Hull 1500 +
   650 per captain. A green-grey fog comes in while it's the boss (client, UpdateAtmosphere). Bot runs: phase 2 at ~58%.
-- [ ] Sea Serpent  - [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
+- [x] Sea Serpent (BOSS_SERPENT): a proxy boss; its body is bossParts (18 pieces 10 m apart, the head first, each
+  following the one before; humps at the surface when it cruises). States (ss::): ARRIVING, CRUISE (7 s, round the
+  nearest of us at a cable, venom fans 6 s / 4.5 s angry), SUBMERGED (to the breach start), TELL (a red ring where it'll
+  come down: BossTell flags 1, MortarMark radius), BREACH (2.4 s, a 60 m arc over 165 m; landing: 24 dmg within 45 m,
+  thrown about within 110 m, BossSlam flags 1), COIL (phase 3: round a ship, held + 2% hull/s, coil hull 260 + 90 per
+  captain: shooting it does half to the serpent too; let go -> breach elsewhere). Hit: head (8 m) and pieces (6 m) out
+  of the water. Phase 2: 40% a second breach straight away. Hull 1200 + 500 per captain. Art: MonsterArt::DrawSerpent
+  (one tube along its spine, frill fins, eyes, horns). BS_BOSSUP=1 starts it up (screenshots). Bot runs: phase 3
+  after ~15 min.
+- [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

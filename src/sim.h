@@ -222,6 +222,15 @@ enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, F
 constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
 constexpr float curseSlow = 0.45f;
 }  // namespace fd
+namespace ss {  // the Sea Serpent: its states (World::bossState), its body (bossParts: the head first)
+enum State : uint8_t { ARRIVING = 0, CRUISE = 1, SUBMERGED = 3, TELL = 4, BREACH = 5, COIL = 6 };
+constexpr int segs = 18;          // ...this many pieces of it
+constexpr float spacing = 10.0f;  // ...this far apart (a 180 m serpent)
+constexpr float headR = 8.0f, bodyR = 6.0f;
+constexpr float leap = 165.0f;    // m its breach carries it
+constexpr float landR = 45.0f;    // its landing smashes everything this near, and throws about what's within landShove
+constexpr float landShove = 110.0f;
+}  // namespace ss
 namespace kq {  // the Kraken Queen
 enum ArmState : uint8_t { ARM_DOWN = 0, ARM_RISING = 1, ARM_UP = 2, ARM_WINDUP = 3, ARM_SLAM = 4, ARM_GRAB = 5, ARM_SINKING = 6 };
 constexpr int arms = 6;
@@ -770,6 +779,10 @@ private:
     int BossProxy(const char* name);  // a ship that isn't there (stowed), for a boss that isn't a ship: owns its shot, sinks ours
     void SpawnKrakenQueen();
     void SpawnDutchman();
+    void SpawnSerpent();
+    void UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& prey);
+    Vector3 bossA{}, bossB{};  // the Serpent: where its breach starts and lands
+    float bossDepth = 16.0f, bossCoilHp = 0.0f;
     void UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& prey);
     bool BossSolid() const { return bossKind != BOSS_DUTCHMAN || bossState == 1; }  // (the Dutchman: only while it's materialised)
     int bossTarget = -1;  // the ship it's after (the Dutchman: the one it's haunting)
