@@ -439,7 +439,92 @@ static int RaidTest() {
     return 0;
 }
 
+// Boss mode: bot captains (BS_CAPTAINS=n, 3) against the Leviathan. Its phases, how much shot it puts up (and how
+// much of it is in the air at once: the snapshot carries every ball), what it sinks, how long it lasts.
+static int BossTest() {
+    World g;
+    g.rounds = true;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1;
+    g.Init(seed, 0, 0, MODE_BOSS, getenv("BS_FLEETS") != nullptr, ARENA_ISLES);
+    g.realistic = getenv("BS_REAL") != nullptr;
+    g.skills = getenv("BS_SKILLS") != nullptr;
+    if (const char* e = getenv("BS_DIFF")) g.difficulty = (uint8_t)atoi(e);
+    const int N = getenv("BS_CAPTAINS") ? atoi(getenv("BS_CAPTAINS")) : 3;
+    for (int i = 0; i < N; ++i) g.AddShip(TextFormat("captain%d", i), true);
+    printf("boss seed %u, %s, %d captains\n", seed, voyage::kDifficultyNames[g.difficulty], N);
+    int result = -1, sunk = 0, hitsOnUs = 0, hitsOnIt = 0, maxBalls = 0, bossBalls = 0;
+    int ourVolleys = 0, misses = 0, nearMiss = 0;
+    double missDist = 0;
+    float endT = 0;
+    double sum = 0;
+    int ticks = 0;
+    std::vector<int> owned;
+    const int T = (int)((getenv("BS_VOYMIN") ? atof(getenv("BS_VOYMIN")) : 25.0f) * 60 * 60);
+    for (int i = 0; i < T; ++i) {
+        size_t before = g.balls.size();
+        double a = GetTimeNow();
+        g.Step();
+        sum += GetTimeNow() - a;
+        ++ticks;
+        if (g.balls.size() > before && g.bossId >= 0)
+            for (size_t k = before; k < g.balls.size(); ++k) bossBalls += g.balls[k].owner == g.bossId;
+        int flying = 0;
+        for (const Ball& b : g.balls) flying += !b.inWater;
+        maxBalls = std::max(maxBalls, flying);  // (in the air: what the snapshot carries)
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::BossPhase) printf("   t=%4.0f the Leviathan: phase %d (hull %.0f / %.0f)\n", g.time, e.b, g.ships[e.a].hp, g.ships[e.a].maxHp);
+            if (e.type == EventType::Fire && e.a < g.ShipCount() && g.ships[e.a].team == 0) ourVolleys++;
+            if (e.type == EventType::Splash && e.a < g.ShipCount() && g.ships[e.a].team == 0 && g.bossId >= 0) {  // our misses: how far off
+                float d = Vector2Distance({e.pos.x, e.pos.z}, {g.ships[g.bossId].pos.x, g.ships[g.bossId].pos.z});
+                missDist += d;
+                misses++;
+                if (d < 60.0f) nearMiss++;
+            }
+            if (e.type == EventType::Hit && e.b < g.ShipCount()) {
+                if (g.ships[e.b].boss) hitsOnIt++;
+                else if (g.ships[e.b].team == 0) hitsOnUs++;
+            }
+            if (e.type == EventType::Kill && e.b < g.ShipCount() && g.ships[e.b].team == 0 && g.ships[e.b].leader < 0) {
+                sunk++;
+                printf("   t=%4.0f %s sunk (by %s), reserve %d\n", g.time, g.ships[e.b].name.c_str(), e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "-", g.teamScore[0]);
+            }
+            if (e.type == EventType::MatchEnd && result < 0) {
+                result = e.b;
+                endT = (float)g.time;
+            }
+        }
+        g.events.clear();
+        if (i % (60 * 60) == 0 && g.bossId >= 0)
+            printf("   t=%4.0f Leviathan hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d\n", g.time, g.ships[g.bossId].hp, g.ships[g.bossId].maxHp,
+                   g.bossPhase, g.balls.size(), g.teamScore[0]);
+        if (i % (60 * 60) == 0 && g.bossId >= 0)
+            for (const Ship& x : g.ships)
+                if (x.active && x.team == 0 && x.leader < 0)
+                    printf("      %s (%s) %.0f m from it, damage dealt %.0f, %s, %.1f m/s, hull %.0f/%.0f\n", x.name.c_str(), ClassOf(x.cls).name,
+                           Vector3Distance(x.pos, g.ships[g.bossId].pos), x.statDamage, x.alive ? "afloat" : "sunk", Vector3Length(x.vel), x.hp, x.maxHp);
+        if (i % (60 * 10) == 0 && g.bossId >= 0 && getenv("BS_BOSSLOG")) {  // (where the Leviathan floats)
+            const Ship& B = g.ships[g.bossId];
+            printf("      [t=%.0f] Leviathan at %.0f %.1f %.0f (sea %.1f), submerged %.2f, %.1f m/s, buoy %.2f\n", g.time, B.pos.x, B.pos.y, B.pos.z,
+                   g.ocean.Height(B.pos.x, B.pos.z), B.submerged, Vector3Length(B.vel), B.buoyMul);
+        }
+        if (i % (60 * 10) == 0 && g.bossId >= 0 && getenv("BS_BOSSLOG"))  // (every 10 s: where the first captain is, what it's doing)
+            for (const Ship& x : g.ships)
+                if (x.active && x.team == 0 && x.leader < 0 && x.id == 0)
+                    printf("      [t=%.0f] %s at %.0f %.0f, %.0f m from it (it at %.0f %.0f), %.1f m/s, sail %.2f rudder %.2f\n", g.time, x.name.c_str(), x.pos.x,
+                           x.pos.z, Vector3Distance(x.pos, g.ships[g.bossId].pos), g.ships[g.bossId].pos.x, g.ships[g.bossId].pos.z, Vector3Length(x.vel),
+                           x.input.sail, x.input.rudder);
+        if (result >= 0) break;
+    }
+    printf("boss %s after %.0f s: %d of ours sunk, %d hits on us, %d on it, it fired %d balls (%.1f/s), at most %d in the air, tick avg %.2f ms\n",
+           result == 0 ? "SUNK" : result == 1 ? "WON" : "UNFINISHED", result >= 0 ? endT : (float)g.time, sunk, hitsOnUs, hitsOnIt, bossBalls,
+           bossBalls / fmaxf((float)g.time, 1.0f), maxBalls, sum / ticks * 1000.0);
+    printf("   our side: %d guns fired, %d balls into the sea (avg %.0f m from it, %d within 60 m), %d hits on it\n", ourVolleys, misses,
+           misses ? missDist / misses : 0.0, nearMiss, hitsOnIt);
+    return 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_BOSSTEST")) return BossTest();
     if (getenv("BS_RAIDTEST")) return RaidTest();
     if (getenv("BS_VOYAGETEST")) return VoyageTest();
     if (getenv("BS_LIVERYTEST")) return LiveryTest();
@@ -1342,7 +1427,7 @@ duels:
         }
     }
     for (int m = 0; m < MODE_COUNT; ++m) {
-        if (m == MODE_RACE || m == MODE_VOYAGE || m == MODE_RAID) continue;  // (their own tests)
+        if (m == MODE_RACE || m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS) continue;  // (their own tests)
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;

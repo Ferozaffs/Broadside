@@ -139,6 +139,14 @@ The host picks the game in the menu:
   80% Deadly). Every merchant that makes port is one that got away; once too many have, the raid is lost. You start
   lying in wait a couple of kilometres up the lane and come back from a sinking within a kilometre of the convoy. The
   haven is your cove (repairs). The sea monsters come for the pirates here.
+- **Boss** (co-op): everyone (and the bots, your allies) against **the Leviathan**, a man-o'-war three times the size
+  of a ship of the line, circling the bay under black sails. It doesn't fire broadsides: it fills the sea with shot in
+  patterns, bullet-hell style, bright magenta so you can read them: rings all round it, turning spirals, walls of
+  broadsides marching out from both sides, fans aimed at where you're going to be, and mortar shells lobbed high that
+  land where **red rings** mark the water. Come in close and it sweeps you with grapeshot. Three phases as its hull
+  goes (the bar at the top of the screen): from two thirds down it fires faster and adds spirals and mortars, from a
+  third its gunboats come out. Sunk ships come back while the fleet has ships in reserve (as in the Voyage). The
+  difficulty sets its hull and how fast the patterns come (Deadly: no reserve).
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
@@ -210,7 +218,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--mode voyage` or `--mode raid`, `--difficulty easy|normal|hard|deadly`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
+(also `--mode voyage`, `--mode raid` or `--mode boss`, `--difficulty easy|normal|hard|deadly`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

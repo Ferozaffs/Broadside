@@ -476,7 +476,25 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   in wait 1.6-2.5 km up the lane, then 650-950 m from a merchant, ahead or abeam. The haven is the pirates' (repairs).
   Monsters hunt the players' side (PlayerTeam()). Snapshot carries raidTotal / raidNeed: protocol 23. Test:
   BS_RAIDTEST=1 (BS_PIRATES=n bot captains, BS_DIFF, BS_SEED, BS_RAIDSHIPS).
-- Protocol 23.
+- [x] Boss mode (2026-11-17, user: "a boss mode where you fight a huge ship that feels a bit like bullet hell, coop"):
+  MODE_BOSS on the Isles; SC_BOSS (scale 3, the line's model) "The Leviathan", Ship::boss, team 1, its own brain
+  (BossThink: a 230 m circle round the bay) and guns (UpdateBoss: patterns, World::BossBall, not class guns). Hull
+  (3000 + 1500 per captain) x Level::bossHp (0.55 / 1 / 1.3 / 1.6), pattern rate x Level::bossRate. Patterns: ring
+  (2-3 waves at 120-320 m), spiral (2-3 arms, ranges cycling), broadside walls (3 waves from 90 m out), aimed fans,
+  mortars (Ball::splash 17 m bursts, EventType::BossMortar marks the spot), plus grapeshot at anyone inside 170 m
+  every 1.4 s. Phases at 2/3 and 1/3 (EventType::BossPhase); phase 3 brings 2 + captains/2 gunboats (SpawnRaider).
+  Shared reserve as in the voyage. Its shot never hits itself (fired from inside the hull). Allied bots circle it at
+  210-270 m, slower, and allow for their own way when aiming (boss mode only: the shot drifted ~100 m). Client: boss
+  bar with phase pips, magenta tracers for its shot, red mortar rings, banners. Network: snapshots now carry only
+  balls in flight, positions in 16 bits (0.2 m): ~16 bytes a ball; peaks ~220 balls in the air.
+  Bot runs: 3 captains Normal lose at phase 3 after ~8 min; Easy 2 captains got it to ~5%; Hard 4 captains lose in 3.5
+  min. Players who dodge should win Normal. Test: BS_BOSSTEST=1 (BS_CAPTAINS, BS_DIFF, BS_BOSSPAT=n one pattern,
+  BS_BOSSHP), BS_BOSSCAM="dist height deg spin".
+- [x] Menu redesign: two pages. Front: name, Host a game, Join (address + button), Shipwright, Quit, ship cards.
+  Host page: the modes as cards (VERSUS: FFA, Teams, Pirate, Race / CO-OP: Voyage, Raid, Boss) and beside them only
+  the chosen mode's settings, then "Host game - open to friends" and "Practice" (offline). Esc goes back.
+  BS_MENUPAGE=1 opens on the host page (screenshots).
+- Protocol 24.
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

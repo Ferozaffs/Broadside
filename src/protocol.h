@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 23;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 24;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -281,14 +281,18 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.PutVec3(s.angVel);
         w.PutQuat(s.rot);
     }
-    uint16_t nb = (uint16_t)std::min<size_t>(world.balls.size(), 65535);
+    // balls in flight (the ones in the sea are nobody's business but the server's: their splash went out as an
+    // event), positions to 0.2 m in 16 bits: the boss fills the sky with them
+    uint16_t nb = 0;
+    for (const Ball& b : world.balls) nb += b.inWater ? 0 : 1;
     w.Put(nb);
-    for (uint16_t i = 0; i < nb; ++i) {
-        const Ball& b = world.balls[i];
+    for (const Ball& b : world.balls) {
+        if (b.inWater) continue;
         w.Put(b.id);
         w.Put(b.owner);
-        w.Put((uint8_t)b.inWater);
-        w.PutVec3(b.pos);
+        w.Put((int16_t)Clamp(b.pos.x * 5.0f, -32000.f, 32000.f));
+        w.Put((int16_t)Clamp(b.pos.y * 5.0f, -32000.f, 32000.f));
+        w.Put((int16_t)Clamp(b.pos.z * 5.0f, -32000.f, 32000.f));
         w.Put((int16_t)Clamp(b.vel.x * 100, -32000.f, 32000.f));
         w.Put((int16_t)Clamp(b.vel.y * 100, -32000.f, 32000.f));
         w.Put((int16_t)Clamp(b.vel.z * 100, -32000.f, 32000.f));
@@ -431,8 +435,10 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     for (auto& b : s.balls) {
         b.id = r.Get<uint16_t>();
         b.owner = r.Get<uint16_t>();
-        b.inWater = r.Get<uint8_t>();
-        b.pos = r.GetVec3();
+        b.inWater = 0;
+        b.pos.x = r.Get<int16_t>() / 5.0f;
+        b.pos.y = r.Get<int16_t>() / 5.0f;
+        b.pos.z = r.Get<int16_t>() / 5.0f;
         b.vel.x = r.Get<int16_t>() / 100.0f;
         b.vel.y = r.Get<int16_t>() / 100.0f;
         b.vel.z = r.Get<int16_t>() / 100.0f;

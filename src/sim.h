@@ -25,7 +25,7 @@ constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 // Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
 // follow `scale`. How each one rides the swell falls out of that: a short light hull gets thrown off every
 // crest, a long heavy one spans them.
-enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_COUNT = 4 };
+enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_BOSS = 4, SC_COUNT = 5 };  // (the boss: boss mode's Leviathan)
 constexpr int SC_PLAYABLE = 3;  // captains sail classes 0..2; the gunboat is a fleet escort only
 constexpr uint8_t SC_ALL = (1 << SC_PLAYABLE) - 1;
 struct ShipClass {
@@ -91,7 +91,7 @@ constexpr float gunTraverse = 0.6f;        // rad the carriages swing either sid
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
-constexpr int scoreLimit[6] = {12, 20, 5, 0, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage, raid: none)
+constexpr int scoreLimit[7] = {12, 20, 5, 0, 0, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage, raid: none)
 // race: a sprint from one harbour to the far one through gates; sunk = crippled (slowed a while), not out
 constexpr float raceLength = 180.0f;       // s before a race is called off
 constexpr float raceCountdown = 4.0f;      // s held on the start line (3, 2, 1, go)
@@ -118,6 +118,7 @@ constexpr float rapidReload = 0.4f;        // reload time multiplier
 constexpr float speedBoost = 1.4f;         // top speed / acceleration multiplier
 constexpr int barrageBalls = 3;            // balls per gun with the barrage power-up
 constexpr float respawnTime = 7.0f;
+constexpr float bossLength = 1500.0f;      // s: boss mode's time limit
 constexpr float voyageLength = 3600.0f;    // s: the voyage's time limit (it ends when the convoy makes harbour or is sunk)
 // fleets, harbours and game modes
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
@@ -196,7 +197,8 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
 
 // ---- game modes and harbours -----------------------------------------------------
-enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_COUNT = 6 };
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_BOSS = 6, MODE_COUNT = 7 };
+// (boss: co-op against one huge ship, the Leviathan, that fills the bay with shot in patterns, bullet-hell style)
 // (raid: the voyage reversed. The players are the pirates (team 1); an AI convoy (team 0) sails the passage for the far
 // port, and they must sink enough of it before the rest gets in.)
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
@@ -245,12 +247,13 @@ struct Level {
     float kraken, megalodon;             // chance a voyage meets each sea monster
     float monster;                       // how tough and how savage the monsters are (x)
     float raidShips, raidNeed;           // raid: the convoy's size (x 3 + 2 per pirate captain), and the share of it to sink
+    float bossHp, bossRate;              // boss: how much hull the Leviathan has (x), and how fast its patterns come (x)
 };
 inline constexpr Level kLevels[DIFFICULTIES] = {
-    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f, 0.8f, 0.5f},   // easy: fewer, slower, worse gunners, three ships each in reserve
-    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f, 1.0f, 0.6f},      // normal
-    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f, 1.25f, 0.7f},    // hard: one ship each in reserve, more and bigger pirates
-    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f, 1.5f, 0.8f},    // deadly: no reserve at all, sunk is out
+    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f, 0.8f, 0.5f, 0.55f, 0.65f},   // easy: fewer, slower, worse gunners, three ships each in reserve
+    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f, 1.0f, 0.6f, 1.0f, 1.0f},      // normal
+    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f, 1.25f, 0.7f, 1.3f, 1.25f},    // hard: one ship each in reserve, more and bigger pirates
+    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f, 1.5f, 0.8f, 1.6f, 1.5f},    // deadly: no reserve at all, sunk is out
 };
 inline const char* const kDifficultyNames[DIFFICULTIES] = {"Easy", "Normal", "Hard", "Deadly"};
 }  // namespace voyage
@@ -475,6 +478,7 @@ struct Ship {
     bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool merchant = false;  // raid: one of the AI convoy (sunk, or in port, it's gone for the round)
+    bool boss = false;      // boss mode: the Leviathan (its own brain, BossThink; its guns fire patterns, UpdateBoss)
     float raiderIdle = 0.0f;  // voyage: s this pirate has been far from every convoy ship
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
@@ -521,6 +525,7 @@ struct Ball {
     float waterTime = 0.0f;
     int skips = 0;
     int16_t crew = -1;  // crew mode: the crewman who fired it
+    float splash = 0.0f;  // boss mode: a mortar shell, bursting where it lands with this radius (m)
     Vector3 pos{}, vel{};
 };
 
@@ -543,6 +548,8 @@ enum class EventType : uint8_t {
     RaceFinish = 24, // a = ship, b = place, value = time (s)
     Monster = 25,    // flags = MonsterEvent, a = ship (or NO_SHIP), b = MonsterType, value = damage
     Escaped = 26,    // raid: a = the merchant that made port
+    BossMortar = 27, // a = the boss, pos = where a shell will land, value = s until it does (the clients mark the spot)
+    BossPhase = 28,  // a = the boss, b = its phase (1 when it appears, then 2, 3 as its hull goes)
 };
 constexpr uint8_t EF_CRIPPLE = 64;  // (Kill in a race: crippled, not sunk; shares the bit with EF_DENY, which only chests use)
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
@@ -623,7 +630,12 @@ public:
     float RouteS(float x, float z) const;
     Vector2 RouteAt(float s) const;
     float RouteLength() const { return route.size() > 1 ? (route.size() - 1) * raceLineStep : 0.0f; }
-    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE || mode == MODE_RAID; }
+    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE || mode == MODE_RAID || mode == MODE_BOSS; }
+    int bossId = -1;                 // boss mode: the Leviathan's ship (-1: not yet)
+    int bossPhase = 0, bossPat = 0;  // its phase (1..3) and the pattern it's firing (0: none)
+    float bossTimer = 0.0f, bossPatT = 0.0f, bossRot = 0.0f, bossStep = 0.0f, bossWait = 0.0f;
+    int bossShots = 0;
+    float bossStep2 = 0.0f;  // to its next grapeshot at whoever's close
     bool Voyaging() const { return mode == MODE_VOYAGE || mode == MODE_RAID; }  // the passage modes (route, convoy, monsters)
     int PlayerTeam() const { return mode == MODE_RAID ? 1 : 0; }  // the side the captains sail on (voyage: the convoy; raid: the pirates)
     int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down (teamScore: [0] in port, [1] sunk)
@@ -706,6 +718,10 @@ private:
     void UpdateVoyage(float dt);
     void SpawnRaider(Vector2 at, float heading, int cls);
     void UpdateRaid(float dt);
+    void UpdateBoss(float dt);
+    void SpawnBoss();
+    void BossThink(Ship& s, float dt);
+    void BossBall(Ship& s, Vector3 from, Vector3 vel, float dmg, float splash = 0.0f);
     void SpawnConvoy();
     void PlaceNearConvoy(Ship& s);  // raid: a pirate (back) in the fight: lying in wait ahead, or within reach of a merchant
     void RollMonsters();
