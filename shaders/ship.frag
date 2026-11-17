@@ -25,6 +25,7 @@ uniform vec4 uGhostDir;       // ...what's in a cone round the line of sight (xy
 uniform float uGhostPass;     // 0: the solid parts only, 1: the faint parts only (drawn after, without depth)
 // the captain's livery (the Shipwright): colours in sRGB, a = 1 where they're painted
 uniform vec4 uPaintHull, uPaintTrim, uPaintSail;
+uniform vec4 uTeamTint;      // rgb: a side's colour, a: how far painted sails go over to it (teams: whose side she's on)
 uniform vec4 uPaint;          // x: what this mesh is (0 nothing, 1 hull, 2 trim, 3 hull and trim by colour, 4 sail cloth;
                               // + 8 when it carries canvas coordinates), y: its usual brightness, z / w: the keyed blues' and golds'
 uniform float uLogoMode;      // the picture on the sails: 0 none, 1 the main course, 2 every square sail, 3 every sail
@@ -171,6 +172,14 @@ void main() {
                 }
             }
         }
+    }
+
+    // Painted sails in a team game: recoloured to the side's colour by their brightness, so a white sail goes red / blue,
+    // a black one a deep dark red / blue (never plain black), and a picture on them still reads, in shades of the colour.
+    if (uTeamTint.a > 0.0) {
+        float ly = dot(base, vec3(0.2126, 0.7152, 0.0722));
+        vec3 tc = pow(uTeamTint.rgb, vec3(2.2));
+        base = mix(base, tc * (0.2 + 1.05 * sqrt(ly)), uTeamTint.a);
     }
 
     // ---- battle damage ----

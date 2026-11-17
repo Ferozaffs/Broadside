@@ -11,7 +11,8 @@
 class GameServer {
 public:
     bool Start(uint16_t port, int bots, uint32_t seed, int timeOfDay = 0, int weather = 0, int mode = 0, bool fleets = false,
-               uint8_t allowedCls = SC_ALL, bool deckOnly = false, bool skills = false, int arena = ARENA_ISLES, bool realistic = false);
+               uint8_t allowedCls = SC_ALL, bool deckOnly = false, bool skills = false, int arena = ARENA_ISLES, bool realistic = false,
+               bool friendlyFire = true);
     void Stop();
     bool Running() const { return running; }
     ~GameServer() { Stop(); }

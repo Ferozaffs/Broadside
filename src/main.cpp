@@ -61,6 +61,7 @@ struct Options {
     bool deckOnly = false;       // host: --deck-only
     bool skills = false;         // host: --skills (dash + grappling hook)
     bool realistic = false;      // host: --realistic (real ship handling)
+    bool friendlyFire = true;    // host: --no-friendly-fire to turn it off
     int arena = ARENA_ISLES;     // host: --arena isles|maelstrom
     int role = ROLE_CAPTAIN;     // --crew: sign on as crew instead of sailing your own ship
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
@@ -103,6 +104,8 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--deck-only") o.deckOnly = true;
         else if (a == "--skills") o.skills = true;
         else if (a == "--realistic") o.realistic = true;
+        else if (a == "--no-friendly-fire") o.friendlyFire = false;
+        else if (a == "--friendly-fire") o.friendlyFire = true;
         else if (a == "--crew") o.role = ROLE_CREW;
         else if (a == "--arena") {  // isles | maelstrom, or for a race: any | strait | serpent | hairpin | zigzag
             std::string v = next("isles");
@@ -317,6 +320,7 @@ public:
     bool curDeckOnly = false;
     int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
     int handlingSel = 0;             // host's choice: 0 arcade, 1 realistic
+    int ffSel = 1;                   // host's choice: friendly fire off / on
     bool curSkills = false;
     bool curRealistic = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
@@ -371,7 +375,13 @@ public:
     Vector3 PathNext(Vector3 goal);
     Material figMat{};
     int NearGun(float* dist) const;
-    int NearJob() const;               // the helm or the sails, if we stand at one (else -1)
+    int NearJob() const;               // the helm, the sails or the lookout, if we stand at one (else -1)
+    void CrewClimbDown() {             // leaving the lookout: back down the shrouds to the rail
+        if (crewGun != JOB_LOOKOUT) return;
+        Vector3 st = StationSpot(DeckModel(), JobStation(JOB_LOOKOUT));
+        crewLocal = st;
+        crewFoot = st.y;
+    }
     int crewOrder = -1;                // the captain's last order to us, and when
     double crewOrderTime = -100.0;
     int NearLeak() const;
@@ -665,6 +675,7 @@ void Game::Init() {
     viewSel = opt.deckOnly ? 1 : 0;
     skillSel = opt.skills ? 1 : 0;
     handlingSel = opt.realistic ? 1 : 0;
+    ffSel = opt.friendlyFire ? 1 : 0;
     arenaSel = RaceArena(opt.arena) || opt.arena == ARENA_RACE_ANY ? ARENA_ISLES : opt.arena;
     courseSel = RaceArena(opt.arena) ? opt.arena - ARENA_STRAIT + 1 : 0;
     roleSel = opt.role;
@@ -711,7 +722,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
         int arena = modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arena, handlingSel != 0)) {
+                          arena, handlingSel != 0, ffSel != 0)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -3590,6 +3601,7 @@ void Game::DrawHUD() {
             const float pad = 34.0f;  // ring radius-ish, so distant specks are easy to pick out
             under = seen > 0 && W * 0.5f > x0 - pad && W * 0.5f < x1 + pad && H * 0.5f > y0 - pad && H * 0.5f < y1 + pad;
         }
+        if (myId >= 0 && myId < NumShips() && view[myId].present && (view[myId].s.flags & SF_LOOKOUT) && IsEnemy(id)) under = true;
         tagFade[id] = Clamp(tagFade[id] + (under ? 8.0f : -3.0f) * GetFrameTime(), 0.0f, 1.0f);
         if (tagFade[id] <= 0.0f) continue;
         Vector2 sp;
@@ -4063,7 +4075,7 @@ void Game::DrawHUD() {
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
                           {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"SHIFT", nullptr, "Dash (skills)"}, {"E", nullptr, "Hook (skills)"}, {"TAB", nullptr, "Scores"},
                           {"Z", "X", "Crew: port / stbd guns"}, {"C", nullptr, "Crew: patch holes"}, {"F1", nullptr, "Hide"}};
-        const K crewKeys[] = {{"W", "S", "Walk"}, {"A", "D", "Sidestep"}, {"SHIFT", nullptr, "Run"}, {"E", nullptr, "Gun / helm / sails"},
+        const K crewKeys[] = {{"W", "S", "Walk"}, {"A", "D", "Sidestep"}, {"SHIFT", nullptr, "Run"}, {"E", nullptr, "Gun / helm / sails / lookout"},
                               {"LMB", nullptr, "Fire your gun"}, {"RMB", nullptr, "Zoom"}, {"F", nullptr, "Patch a hole (hold)"},
                               {"M", nullptr, "Sound on / off"}, {"TAB", nullptr, "Scores"}, {"F1", nullptr, "Hide"}};
         const K* list = IsCrew() ? crewKeys : keys;
@@ -4252,8 +4264,11 @@ void Game::DrawMenu() {
     y += row;
     {  // how the ships handle
         static const char* const kHandling[] = {"Arcade", "Realistic"};
-        Label(handlingSel ? "HANDLING   \xC2\xB7   REAL SPEEDS AND TURNING, NO JUMPS" : "HANDLING   \xC2\xB7   OVER THE TOP", x + 2, y, 11, kDim);
-        Segmented({x, y + 18, fw, 40}, kHandling, 2, handlingSel);
+        static const char* const kOnOff[] = {"Off", "On"};
+        Label(handlingSel ? "HANDLING   \xC2\xB7   REAL, NO JUMPS" : "HANDLING   \xC2\xB7   OVER THE TOP", x + 2, y, 11, kDim);
+        Label("FRIENDLY FIRE", x + mw + 10, y, 11, kDim);
+        Segmented({x, y + 18, mw, 40}, kHandling, 2, handlingSel);
+        Segmented({x + mw + 8, y + 18, 128, 40}, kOnOff, 2, ffSel);
     }
     y += row;
     // which ships captains may sail, and whether everyone plays from the deck
@@ -4317,7 +4332,7 @@ int Game::NearGun(float* distOut) const {
 int Game::NearJob() const {
     if (myId < 0 || !view[myId].present) return -1;
     float sc = ClassOf(view[myId].s.cls).scale;
-    for (int j : {(int)JOB_HELM, (int)JOB_SAILS}) {
+    for (int j : {(int)JOB_HELM, (int)JOB_SAILS, (int)JOB_LOOKOUT}) {
         Vector3 st = StationSpot(DeckModel(), JobStation(j));
         if (Vector2Distance({crewLocal.x, crewLocal.z}, {st.x, st.z}) * sc < tune::crewReach * 0.95f) return j;
     }
@@ -4615,13 +4630,13 @@ void Game::CrewInputUpdate(float dt) {
         mx = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
         run = IsKeyDown(KEY_LEFT_SHIFT);
         if (IsKeyPressed(KEY_E)) {
-            if (crewGun >= 0) crewGun = -1;
+            if (crewGun >= 0) { CrewClimbDown(); crewGun = -1; }
             else {
                 int g = NearGun(nullptr);
                 if (g < 0) g = NearJob();
                 int who = g >= 0 ? GunCrewman(myId, g) : -1;
                 if (g >= 0 && who >= 0 && who != crewId)
-                    Feed(TextFormat(g == JOB_HELM ? "%s has the helm" : g == JOB_SAILS ? "%s is tending the sails" : "%s is working that gun", crewNames[who].c_str()), ui::kDim);
+                    Feed(TextFormat(g == JOB_HELM ? "%s has the helm" : g == JOB_SAILS ? "%s is tending the sails" : g == JOB_LOOKOUT ? "%s is at the lookout" : "%s is working that gun", crewNames[who].c_str()), ui::kDim);
                 else if (g >= 0) crewGun = (int8_t)g;
             }
             crewGunAsked = GetTime();
@@ -4632,7 +4647,7 @@ void Game::CrewInputUpdate(float dt) {
     if (opt.autopilot && !crewOverboard) CrewAutopilot(dt, mx, mz);
     // walking (leaves the gun)
     if (mx != 0.0f || mz != 0.0f) {
-        if (crewGun >= 0 && !opt.autopilot) { crewGun = -1; crewGunAsked = GetTime(); }
+        if (crewGun >= 0 && !opt.autopilot) { CrewClimbDown(); crewGun = -1; crewGunAsked = GetTime(); }
         float fx = sinf(crewYaw), fz = cosf(crewYaw);
         float dx = fx * mz - fz * mx, dz = fz * mz + fx * mx;  // forward and right (right of +z is -x)
         if (opt.autopilot) { dx = mx; dz = mz; }               // (the autopilot gives hull-space directions)
@@ -4662,11 +4677,18 @@ void Game::CrewInputUpdate(float dt) {
         }
     }
     else stuckSince = GetTime();  // (standing still on purpose)
-    if (crewGun >= 0) {  // at the gun (or the wheel, the sails): stand at its station
+    if (static bool jobSet = false; !jobSet && crewPlaced && getenv("BS_CREWJOB")) {  // (testing: start at a job, e.g. 102 aloft)
+        jobSet = true;
+        crewGun = (int8_t)atoi(getenv("BS_CREWJOB"));
+    }
+    if (crewGun == JOB_LOOKOUT) {  // aloft: on the perch, wherever the Shipwright put the mainmast
+        crewLocal = DeckModel().RigPoint(LookoutSpot(DeckModel().MastTop()), LiveryFor(myId));
+        crewFoot = crewLocal.y;
+    } else if (crewGun >= 0) {  // at the gun (or the wheel, the sails): stand at its station
         Vector3 st = StationSpot(DeckModel(), IsGunJob(crewGun) ? GunStation(S.cls, crewGun / MAX_GUNS, crewGun % MAX_GUNS) : JobStation(crewGun));
         if (DeckModel().Walkable(st.y)) { crewLocal.x = st.x; crewLocal.z = st.z; }
     }
-    float h = DeckModel().DeckAt(crewLocal.x, crewLocal.z);
+    float h = crewGun == JOB_LOOKOUT ? -100.0f : DeckModel().DeckAt(crewLocal.x, crewLocal.z);
     if (h > -50.0f && fabsf(h - crewFoot) * C.scale > 0.35f && GetTime() - lastLadder > 0.6) {  // a step or a ladder rung
         lastLadder = GetTime();
         sfx::PlayFlat(sfx::Creak, 0.25f, 1.3f);
@@ -4927,7 +4949,7 @@ void Game::DrawFigures() {
             if (Vector3Distance(at, rv.pos) < 30.0f) sfx::Play(sfx::Step, at, 0.3f, 0.95f);
         }
         Quaternion q = QuaternionMultiply(S.rot, QuaternionFromAxisAngle({0, 1, 0}, c.yaw));
-        figWork = c.gun >= 0 || c.repair >= 0;
+        figWork = (c.gun >= 0 && c.gun != JOB_LOOKOUT) || c.repair >= 0;
         figOffset = (float)i * 3.0f;
         figOutfit = i;
         figure(HullToWorld(S.pos, S.rot, c.local, ClassOf(S.cls).scale), q, TeamOf(c.ship), false, g.speed, g.phase);
@@ -5021,6 +5043,9 @@ void Game::DrawCrewHUD(float W, float H) {
         } else if (crewGun == JOB_SAILS) {
             key = "E";
             what = "LEAVE THE SAILS      (TENDED, THEY GIVE 6% MORE SPEED)";
+        } else if (crewGun == JOB_LOOKOUT) {
+            key = "E";
+            what = "CLIMB DOWN      (ALOFT, EVERY ENEMY IS CALLED OUT TO ALL ABOARD)";
         } else if (crewGun >= 0) {
             key = "LMB";
             what = "FIRE      E  LEAVE THE GUN";
@@ -5030,8 +5055,8 @@ void Game::DrawCrewHUD(float W, float H) {
             else { key = "E"; what = "WORK THIS GUN"; }
         } else if (int job = NearJob(); job >= 0) {
             int who = GunCrewman(myId, job);
-            if (who >= 0 && who != crewId) { what = crewNames[who] + (job == JOB_HELM ? " HAS THE HELM" : " IS ON THE SAILS"); col = kDim; }
-            else { key = "E"; what = job == JOB_HELM ? "TAKE THE HELM" : "TEND THE SAILS"; }
+            if (who >= 0 && who != crewId) { what = crewNames[who] + (job == JOB_HELM ? " HAS THE HELM" : job == JOB_LOOKOUT ? " IS AT THE LOOKOUT" : " IS ON THE SAILS"); col = kDim; }
+            else { key = "E"; what = job == JOB_HELM ? "TAKE THE HELM" : job == JOB_LOOKOUT ? "CLIMB TO THE LOOKOUT" : "TEND THE SAILS"; }
         }
         if (!what.empty()) {
             Vector2 m = Measure(what.c_str(), 16, true);
@@ -5043,12 +5068,12 @@ void Game::DrawCrewHUD(float W, float H) {
     }
     // the wheel and the sails, marked on our deck
     if (alive && !crewOverboard)
-        for (int j : {(int)JOB_HELM, (int)JOB_SAILS}) {
+        for (int j : {(int)JOB_HELM, (int)JOB_SAILS, (int)JOB_LOOKOUT}) {
             if (crewGun == j) continue;
             Vector3 st = StationSpot(DeckModel(), JobStation(j));
             Vector3 p = HullToWorld(S.pos, S.rot, Vector3Add(st, {0, 1.2f / C.scale, 0}), C.scale);
             Vector2 sp;
-            if (Vector3Distance(p, rv.pos) < 45.0f && rv.Project(p, sp)) Label(j == JOB_HELM ? "HELM" : "SAILS", sp.x, sp.y, 10, A(kText, 0.7f), Center);
+            if (Vector3Distance(p, rv.pos) < 45.0f && rv.Project(p, sp)) Label(j == JOB_HELM ? "HELM" : j == JOB_LOOKOUT ? "LOOKOUT" : "SAILS", sp.x, sp.y, 10, A(kText, 0.7f), Center);
         }
     // the captain's order
     if (crewOrder >= 0 && GetTime() - crewOrderTime < 14.0) {
@@ -5342,7 +5367,7 @@ void Game::YardCamera() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic, o.friendlyFire)) return 1;
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();

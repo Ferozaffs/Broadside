@@ -90,6 +90,7 @@ void Renderer::Init() {
     locPaintTrim = GetShaderLocation(litShader, "uPaintTrim");
     locPaintSail = GetShaderLocation(litShader, "uPaintSail");
     locPaint = GetShaderLocation(litShader, "uPaint");
+    locTeamTint = GetShaderLocation(litShader, "uTeamTint");
     locLogoMode = GetShaderLocation(litShader, "uLogoMode");
     locLogo = GetShaderLocation(litShader, "uLogo");
     locRigOn = GetShaderLocation(litShader, "uRigOn");
@@ -647,6 +648,11 @@ void Renderer::SetRig(bool on, Vector3 rig, const Matrix& toHull, const float* b
 }
 
 void Renderer::SetRough(float rough) { SetShaderValue(litShader, locRough, &rough, SHADER_UNIFORM_FLOAT); }
+
+void Renderer::SetTeamTint(Color team, float amount) {
+    float v[4] = {team.r / 255.0f, team.g / 255.0f, team.b / 255.0f, amount};
+    SetShaderValue(litShader, locTeamTint, v, SHADER_UNIFORM_VEC4);
+}
 
 void Renderer::SetPaintMesh(int kind, float ref, float keyBlue, float keyGold, bool canvas) {
     float p[4] = {(float)kind + (canvas ? 8.0f : 0.0f), ref, keyBlue, keyGold};

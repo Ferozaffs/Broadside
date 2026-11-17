@@ -111,6 +111,8 @@ Landlubber for the captain who found the most rocks), and 18 seconds later a fre
   60-160 m, no turning at all without way on, no jumps, and a ball hit or your own broadside barely moves the hull.
   The wind is the one thing left arcade: you can sail any course, no tacking. It works in every mode and arena and
   with skills on or off. (Mind the Maelstrom: its current runs faster than a real ship sails.)
+- **Friendly fire**: on (the default), your balls hurt your own side and your own escorts too; off, they pass through
+  friends. Bots hold their fire when a friend is in the way either way.
 - **Ships allowed**: which of cutter / frigate / ship of the line players may pick. Bots keep to them too.
 - **Camera**: Free, or Deck to make everyone play from the quarterdeck (first person).
 - **Skills**: Dash (Shift) and grappling hook (E). A hooked line reels the two ships together for 7 seconds; the
@@ -133,14 +135,16 @@ and if nobody is sailing a bot takes the helm for you, so it works alone too.
 
 - **W A S D** walk the deck (Shift runs), up the quarterdeck ladders and along the gangways; the deck carries you.
 - **E** at a gun works it: you aim it yourself (it's laid on whatever is under the reticle) and **left mouse**
-  fires it. A gun you're working has its own reload. Guns nobody works are manned by the ship's own gun crew and
+  fires it. A gun you're working has its own reload, about seven times quicker than a broadside's. Guns nobody works are manned by the ship's own gun crew and
   fire with the captain's broadside as before.
 - **F** (hold) at a shot hole patches it. On a ship with human crew every hit leaves a hole that slowly lets water
   in (0.35 hull a second each) until someone patches it, which wins back half of what that hit cost.
 - Hold on: when she goes over on her beam ends, or slams down from a big jump, you can go over the side. Swim back
   (the current carries you) and press **E** at the hull to climb aboard, or wait and they'll haul you in.
 - **E** at the wheel takes the helm (she turns 15% quicker with a helmsman), at the pin rail by the mainmast it
-  tends the sails (6% more speed).
+  tends the sails (6% more speed), and at the port shrouds by the mainmast it sends you up to the **lookout**, high
+  on the mast (it moves with the Shipwright's mast sliders): while you're aloft every enemy is called out, so
+  everyone aboard sees their names and hulls whether or not they're under the reticle. Walk or press E to climb down.
 - The captain gives orders with **Z** (man the port guns), **X** (starboard guns) and **C** (patch the holes); bot
   captains give them too.
 - **Esc** lets you change ship, take a ship of your own, or (as a captain) sign on as crew, without leaving the game.
@@ -163,7 +167,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
+(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

@@ -423,6 +423,27 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   40 bots in practice: 46-61 fps on the GTX 1060. A snapshot is ~115 bytes a ship at 30 Hz, to every client.
 - [x] Realistic handling in every mode and arena, with or without skills (user: "We should not limit the users").
 
+## Playtest list (2026-11-17, user: "add friendly fire so bots play less chaotic, also red team spawn in the wrong directions.
+## Respawns should be close to harbor. Realistic mode could need a little better turn rate. Escort should have less hp so a
+## full salvo from a cutter kills on ... crew should have way higher fire rate like 5-10x ... climb up an be lookout.
+## Custom sails should also be heavily tinted towards their team color ... a blend mode that works with black")
+- [x] Friendly fire: host option (default on, `--no-friendly-fire`), World::friendlyFire. Bots hold fire with a friend within
+  ~20 m x scale of the line to the target (or 60 m past it), whatever the option. Mode tests, friendly hits in 6 min:
+  free-for-all 30 (of 162), teams 22 (of 123), pirate 6 (of 276).
+- [x] Respawns off a harbour mouth (500-610 m out along its axis, spread +-75 m, clear of rocks and other ships), facing the
+  centre of the bay. Teams: your side's harbour. Otherwise the approach furthest from enemies: a mouth, or 0.55 rad
+  beside one when every mouth is taken (pirate: 5 fleets, 4 harbours; first sinking 2 s -> 15 s). BS_KILLLOG=1 in the
+  mode tests prints the first kills.
+- [x] Realistic turning x0.07 -> x0.12: cutter 8.4 -> 13 deg/s, frigate 5.8 -> 7.3, ship of the line 2.9 -> 3.7.
+- [x] Escorts (the gunboat class) 35 -> 14 hp: a full cutter broadside (3 x 8 x 0.75 at ~0.8 speed) sinks one.
+- [x] Crew guns reload x0.15 (tune::crewReload, ~7x). Crew test: the crewman fired 106 of the ship's 229 shots in 3 min.
+- [x] Lookout (JOB_LOOKOUT 102): E at the port shrouds by the mainmast; perch LookoutSpot(MastTop) = 74% up, through
+  ShipModel::RigPoint (follows the sliders); the server lets a lookout's position up to 60 m; Ship::lookout -> SF_LOOKOUT;
+  every enemy captain's tag on for everyone aboard. BS_CREWJOB=102 starts a crewman aloft (tests).
+- [x] Team tint for painted sails (teams, and the pirate): ship.frag uTeamTint, colour = side colour x (0.2 + 1.05 sqrt(luma)),
+  mixed 0.8 (BS_TEAMPAINT): white -> bright red/blue, black -> deep red/blue, a picture stays in shades of it.
+- Protocol 21.
+
 ## Wider Shipwright sliders (2026-11-17, user: "increase the shipwright slider so we can have more rake etc. increase by at least 50%")
 - [x] livery.h ranges: height -30..+40 % (was -20..+25), rake -6..+15 deg (was -4..+10), yards -23..+30 % (was -15..+20).
   Protocol 20 (an older game refuses the new values, so the versions don't mix). All three classes checked at both ends.

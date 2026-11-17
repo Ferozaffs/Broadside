@@ -961,6 +961,9 @@ static Matrix TRS(Vector3 t, Matrix r, Vector3 s) {
     return MatrixMultiply(MatrixMultiply(MatrixScale(s.x, s.y, s.z), r), MatrixTranslate(t.x, t.y, t.z));
 }
 
+// how far a painted ship's sails go over to her side's colour in a team game (the picture stays, in shades of it)
+static const float kTeamPaint = getenv("BS_TEAMPAINT") ? (float)atof(getenv("BS_TEAMPAINT")) : 0.8f;
+
 void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, float flash, float hpFrac, bool lanterns,
                      float camDist, float phase, const LiveryGpu* liv, bool teamSails) {
     r.SetLitParams(flash, 0.0f);
@@ -995,13 +998,16 @@ void ShipModel::Draw(Renderer& r, const Matrix& model, float sail, Color team, f
             if ((dbgHide == 1 && (*isSail)[i]) || (dbgHide == 2 && !(*isSail)[i]) || (dbgHide == 3 && (*isRope)[i])) continue;
             Material& em = M->materials[M->meshMaterial[i]];
             Color keep = em.maps[MATERIAL_MAP_DIFFUSE].color;
-            Color c = (*isSail)[i] ? (painted && !teamSails ? keep : ColorTint(keep, ColorLerp(WHITE, team, 0.55f))) : ColorTint(keep, tint);
+            const bool teamPaint = painted && teamSails && (*isSail)[i];  // her own paint, taken over by her side's colour
+            Color c = (*isSail)[i] ? (painted ? keep : ColorTint(keep, ColorLerp(WHITE, team, 0.55f))) : ColorTint(keep, tint);
+            if (teamPaint) r.SetTeamTint(team, kTeamPaint);
             if (painted) r.SetPaintMesh((*paint)[i], (*ref)[i], keyBlue, keyGold, (*canvas)[i]);
             c.a = (unsigned char)(c.a * alpha);
             em.maps[MATERIAL_MAP_DIFFUSE].color = c;
             if ((*isSail)[i]) r.SetSail(flutter, phase);
             DrawMesh(M->meshes[i], em, m);
             if ((*isSail)[i]) r.SetSail(0.0f, 0.0f);
+            if (teamPaint) r.SetTeamTint(team, 0.0f);
             em.maps[MATERIAL_MAP_DIFFUSE].color = keep;
         }
         rlEnableBackfaceCulling();

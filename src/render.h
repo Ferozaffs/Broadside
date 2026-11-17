@@ -69,13 +69,14 @@ public:
     // carries canvas coordinates for the picture on the sails
     void SetLivery(const LiveryGpu* liv);
     void SetPaintMesh(int kind, float ref, float keyBlue, float keyGold, bool canvas);
+    void SetTeamTint(Color team, float amount);  // painted sails in a team game (amount 0: off)
     // a captain's masts (the Shipwright): above the hull's top (base, kRigN steps along z from z0) the rig is made
     // taller (rig.x), raked aft (rig.y per metre up) and its yards spread (rig.z). toHull: the model's units -> hull space.
     void SetRig(bool on, Vector3 rig = {1, 0, 1}, const Matrix& toHull = MatrixIdentity(), const float* base = nullptr, int n = 0,
                 float z0 = 0.0f, float dz = 1.0f);
     void SetRough(float rough);  // 0: the default (wood)
     int locRigOn = -1, locRig = -1, locRigZ = -1, locRigBase = -1, locToHull = -1, locFromHull = -1, locRough = -1;
-    int locPaintHull = -1, locPaintTrim = -1, locPaintSail = -1, locPaint = -1, locLogoMode = -1, locLogo = -1;
+    int locPaintHull = -1, locPaintTrim = -1, locPaintSail = -1, locPaint = -1, locLogoMode = -1, locLogo = -1, locTeamTint = -1;
     float logoMode = 0.0f;
     int locShore = -1, locShadowPass = -1, locGhost = -1, locGhostDir = -1, locGhostPass = -1;
     int locDamage = -1, locHits = -1, locHitCount = -1, locLights = -1, locLightCount = -1;

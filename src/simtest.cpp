@@ -1171,6 +1171,9 @@ duels:
                     if (e.a != e.b && g.ships[e.a].active && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
                 }
                 if (e.type == EventType::Kill) {
+                    if (getenv("BS_KILLLOG") && g.time < 30.0f && e.b < g.ShipCount())
+                        printf("  kill t=%.1f victim %d (%s, leader %d, cls %d) by %d at %.0f %.0f, %.0f m out\n", g.time, e.b, g.ships[e.b].name.c_str(),
+                               g.ships[e.b].leader, g.ships[e.b].cls, e.a == NO_SHIP ? -1 : e.a, e.pos.x, e.pos.z, sqrtf(e.pos.x * e.pos.x + e.pos.z * e.pos.z));
                     if (firstKill < 0.0f) firstKill = g.time;
                     if (g.time < 120.0f) kills2++;
                     kills++;

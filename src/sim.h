@@ -119,7 +119,7 @@ constexpr int barrageBalls = 3;            // balls per gun with the barrage pow
 constexpr float respawnTime = 7.0f;
 // fleets, harbours and game modes
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
-constexpr float escortHp = 60.0f;
+constexpr float escortHp = 14.0f;         // (the gunboat class's hull: one full cutter broadside, every ball home, sinks one)
 constexpr float escortSpeed = 1.15f;       // escorts are a little quicker so they can keep station
 constexpr float pirateHpBonus = 20.0f;     // the treasure carrier: a little tougher than its class
 constexpr float chaserReload = 2.2f;       // the cutter's bow chaser
@@ -142,6 +142,7 @@ constexpr float leakDrain = 0.35f;         // hp per second per open hole (only 
 constexpr float leakRestore = 0.5f;        // share of a hit's damage a patched hole gives back
 constexpr float repairTime = 2.5f;         // s of work to patch one hole
 constexpr float crewWalk = 4.5f;           // m/s on deck
+constexpr float crewReload = 0.15f;        // a crewman's own gun reloads this much faster than the broadside (~7x: being crew is busy)
 constexpr float helmTurn = 1.15f;          // a crewman at the wheel: she answers the helm this much quicker...
 constexpr float trimSpeed = 1.06f;         // ...and one tending the sails gets this much more out of them
 constexpr float orderEvery = 8.0f;         // s between a bot captain's orders to a human crew
@@ -172,7 +173,7 @@ constexpr float realSpeed = 0.21f;         // top speeds x this: cutter ~15 kn, 
 constexpr float realReverse = 1.5f;        // m/s astern (sails laid aback)
 constexpr float realAccel = 0.6f;          // m/s^2 the most a frigate's sails can add (/ scale^2: a cutter twice that, a 74 a bit over half)
 constexpr float realGain = 0.4f;           // 1/s: she settles onto a new speed over several seconds
-constexpr float realTurn = 0.07f;          // turn rates x this: a frigate ~4 deg/s at speed, none without way on
+constexpr float realTurn = 0.12f;         // turn rates x this: a frigate ~7 deg/s at speed (60 m circle), none without way on
 constexpr float realYawGrip = 0.6f;        // 1/s: a heavy hull takes a while to start and stop turning
 constexpr float realKnock = 0.02f;         // a ball hit shoves this share of the arcade shove (a 24 lb ball barely moves 1000 t)
 constexpr float realRecoil = 0.1f;         // and the guns' recoil (the breeching ropes take it)
@@ -331,8 +332,10 @@ struct Leak {
 Vector3 GunStation(int cls, int side, int index);
 Vector3 LeakStation(Vector3 leakLocal);
 // the other jobs: the wheel (aft), and the sheets and halyards by the mainmast
-constexpr int8_t JOB_HELM = 100, JOB_SAILS = 101;
+constexpr int8_t JOB_HELM = 100, JOB_SAILS = 101, JOB_LOOKOUT = 102;  // (the lookout climbs from the port rail by the mainmast)
 Vector3 JobStation(int job);
+// the lookout's perch high on the mainmast (hull space, before any Shipwright rig changes), for a masthead at mastTop
+inline Vector3 LookoutSpot(float mastTop) { return {0.0f, mastTop * 0.74f, -1.1f}; }
 inline bool IsGunJob(int g) { return g >= 0 && g < 2 * MAX_GUNS; }
 // captain's orders to the crew
 enum Order : uint8_t { ORDER_PORT = 0, ORDER_STARBOARD = 1, ORDER_PATCH = 2, ORDER_COUNT = 3 };
@@ -400,6 +403,7 @@ struct Ship {
     float gunReload[2][MAX_GUNS] = {};
     Leak leaks[MAX_LEAKS];
     bool helmed = false, trimmed = false;  // a crewman at the wheel / tending the sails
+    bool lookout = false;                  // a crewman aloft: everyone aboard sees every enemy called out
     bool crewed = false;                   // human crew aboard: she pops back up from a dunk faster (they're looking out)
     float orderTimer = 0.0f;               // bot captains: next order to the crew
     int8_t lastOrder = -1;
@@ -521,6 +525,7 @@ public:
     uint8_t allowedCls = SC_ALL;     // host: which classes captains may sail (bit per class)
     bool deckOnly = false;           // host: everyone plays from the deck (the client enforces it)
     bool skills = false;             // host: dash and grappling hook
+    bool friendlyFire = true;        // host: balls hurt your own side too (bots hold fire with a friend in the way either way)
     bool realistic = false;          // host: real ship handling (speeds, turning, no jumps); the wind still blows where it likes
     bool Real() const { return realistic; }  // (any mode, any arena, skills or not: the host's call)
     void UpdateHooks(float dt);

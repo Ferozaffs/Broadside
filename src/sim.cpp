@@ -35,7 +35,7 @@ static const ShipClass kClasses[SC_COUNT] = {
      30.0f, 22.0f, 1.7f, 0.55f, 1.0f, 4, {-9, -3, 3, 9}, {1.1f, 1.1f, 1.1f, 1.1f}, 3.5f, 95.0f, 1.0f, false, 0.6f},
     {"Ship of the Line", "slow and huge: six heavy guns a side on two decks, lands like a hammer, easy to rake", 1.3f, 160.0f,
      24.0f, 17.0f, 0.9f, 0.32f, 0.75f, 6, {-10, -3, 4, -7, 0, 7}, {0.3f, 0.3f, 0.3f, 2.1f, 2.1f, 2.1f}, 4.5f, 88.0f, 1.1f, false, 0.45f},
-    {"Gunboat", "a small fleet escort: two light guns a side", 0.5f, 35.0f,
+    {"Gunboat", "a small fleet escort: two light guns a side", 0.5f, tune::escortHp,
      32.0f, 22.0f, 2.6f, 0.9f, 0.9f, 2, {-4, 4}, {1.1f, 1.1f}, 3.0f, 90.0f, 0.55f, false, 0.6f},
 };
 const ShipClass& ClassOf(int id) { return kClasses[id >= 0 && id < SC_COUNT ? id : SC_FRIGATE]; }
@@ -839,6 +839,7 @@ Vector3 GunStation(int cls, int side, int index) {
 }
 Vector3 JobStation(int job) {
     if (job == JOB_HELM) return {0.0f, hull::DeckHeight(-12.0f), -12.0f};
+    if (job == JOB_LOOKOUT) return {-2.2f, hull::DeckHeight(-1.5f), -1.5f};  // (the port shrouds by the mainmast: up you go)
     return {2.2f, hull::DeckHeight(-1.5f), -1.5f};  // (the starboard pin rail by the mainmast)
 }
 
@@ -1037,16 +1038,59 @@ void World::Respawn(Ship& s) {
     float ang = RandF() * 2 * PI;
     const bool whirl = arena == ARENA_MAELSTROM;  // (start well clear of the funnel)
     float r = whirl ? maelstrom::spawnMin + RandF() * 200.0f : 220.0f + RandF() * 200.0f;
-    if (!harbours.empty() && mode == MODE_TEAMS && s.team >= 0) {  // each side starts off its own harbour
-        ang = harbours[s.team == 0 ? 0 : 2].ang + (RandF() - 0.5f) * 1.2f;
-        r = whirl ? maelstrom::spawnMin + RandF() * 180.0f : 280.0f + RandF() * 180.0f;
-    }
-    for (int tries = 0; tries < 20 && RocksHeight(rocks, cosf(ang) * r, sinf(ang) * r) > -25.0f; ++tries) ang += 0.25f;  // not on a stack
-    if (!s.isBot && getenv("BS_SPAWNR")) r = (float)atof(getenv("BS_SPAWNR"));  // (testing: put the player this far out)
     float x = cosf(ang) * r, z = sinf(ang) * r;
+    if (!harbours.empty() && mode != MODE_RACE) {
+        // Back to sea from a harbour: your own side's in teams, any you may use otherwise. Just inside its mouth (the
+        // stacks either side are left standing), spread across the approach, clear of rocks and of other ships.
+        std::vector<int> ok;
+        for (int h = 0; h < (int)harbours.size(); ++h)
+            if (mode == MODE_TEAMS ? HarbourOwner(mode, h) == s.team : FriendlyHarbour(s, h)) ok.push_back(h);
+        if (ok.empty())
+            for (int h = 0; h < (int)harbours.size(); ++h) ok.push_back(h);
+        // Outside teams, the approach furthest from anyone who'd shoot at us, so rivals don't start in each other's laps:
+        // a harbour's mouth, or (only when every mouth has someone hostile near it: more captains than harbours) the
+        // water a little to one side of one.
+        const Harbour& h0 = harbours[ok[(size_t)(RandF() * ok.size()) % ok.size()]];
+        float pickAng = atan2f(h0.z, h0.x);
+        if (mode != MODE_TEAMS) {
+            float bestH = -1e9f;
+            for (int h : ok)
+                for (float off : {0.0f, -0.55f, 0.55f}) {
+                    float a = atan2f(harbours[h].z, harbours[h].x) + off;
+                    Vector2 at = {cosf(a) * 560.0f, sinf(a) * 560.0f};
+                    float nearE = 2000.0f;
+                    for (const Ship& o : ships)
+                        if (o.active && o.alive && !o.stowed && o.id != s.id && Enemies(s, o)) nearE = fminf(nearE, Vector2Distance(at, {o.pos.x, o.pos.z}));
+                    float sc = fminf(nearE, 600.0f) - (off != 0.0f ? 250.0f : 0.0f) + RandF() * 120.0f;
+                    if (sc > bestH) { bestH = sc; pickAng = a; }
+                }
+        }
+        Vector2 ax = {cosf(pickAng), sinf(pickAng)}, px = {-ax.y, ax.x};
+        float bestScore = -1e9f;
+        for (int tries = 0; tries < 24; ++tries) {
+            float rr = 500.0f + RandF() * 110.0f, lat = (RandF() - 0.5f) * 150.0f;
+            float cx = ax.x * rr + px.x * lat, cz = ax.y * rr + px.y * lat;
+            if (RocksHeight(rocks, cx, cz) > -25.0f) continue;
+            float near = 1e9f;
+            for (const Ship& o : ships)
+                if (o.active && o.alive && !o.stowed && o.id != s.id) near = fminf(near, Vector2Distance({o.pos.x, o.pos.z}, {cx, cz}));
+            float score = fminf(near, 80.0f) - fabsf(lat) * 0.05f;
+            if (score > bestScore) { bestScore = score; x = cx; z = cz; }
+            if (near > 80.0f) break;
+        }
+    } else {
+        for (int tries = 0; tries < 20 && RocksHeight(rocks, cosf(ang) * r, sinf(ang) * r) > -25.0f; ++tries) ang += 0.25f;  // not on a stack
+        x = cosf(ang) * r;
+        z = sinf(ang) * r;
+    }
+    if (!s.isBot && getenv("BS_SPAWNR")) {  // (testing: put the player this far out)
+        float rr = (float)atof(getenv("BS_SPAWNR")), a = atan2f(z, x);
+        x = cosf(a) * rr;
+        z = sinf(a) * rr;
+    }
     s.pos = {x, ocean.Height(x, z) + 1.0f, z};
-    // face along the tangent so we start sailing around the arena
-    float heading = atan2f(-sinf(ang), cosf(ang)) + PI * 0.5f;
+    // face into the bay, towards the fight
+    float heading = atan2f(-x, -z);
     s.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
     s.vel = {0, 0, 0};
     s.angVel = {0, 0, 0};
@@ -1079,7 +1123,7 @@ void World::Respawn(Ship& s) {
 
 void World::Damage(Ship& v, float amount, int attacker) {
     if (!v.alive || matchState != 0 || RaceHeld()) return;  // (nothing counts on the start line)
-    if (attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // no friendly fire
+    if (!friendlyFire && attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // (host option)
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
     if (mode == MODE_RACE && v.slowTimer > 0.0f) v.hp = fmaxf(v.hp, 1.0f);  // (crippled already: no piling on)
@@ -1754,7 +1798,7 @@ void World::UpdateBalls(float dt) {
             Ship& sh = ships[s];
             if (!sh.active || !sh.alive || sh.stowed) continue;
             if (s == b.owner && b.age < 0.4f) continue;
-            if (s != b.owner && ships[b.owner].active && !Enemies(ships[b.owner], sh)) continue;  // friends duck
+            if (!friendlyFire && s != b.owner && ships[b.owner].active && !Enemies(ships[b.owner], sh)) continue;  // friends duck (host option)
             if (Vector3Distance(sh.pos, b.pos) > 75.0f) continue;
             float S = ClassOf(sh.cls).scale;
             Vector3 h0 = WorldToHull(sh.pos, sh.rot, prev, S);
@@ -2061,7 +2105,18 @@ void World::BotThink(Ship& s, float dt) {
         Vector3 ab = Vector3RotateByQuaternion(in.aim, QuaternionInvert(s.rot));
         float yawOff = side == 2 ? 0.0f : fabsf(atan2f(ab.z, fabsf(ab.x)));
         float keen = mode == MODE_RACE ? (best < 260.0f ? 0.015f : 0.0f) : 0.05f;  // (racing bots shoot less: the race is the thing)
-        if (yawOff < MC.traverse - 0.05f && s.reload[side] <= 0.0f && RandF() < keen) in.fireSeq++;
+        // a friend between us and the target (or just past it): hold fire, whether or not the host lets balls hurt friends
+        bool clear = true;
+        if (range > 1.0f) {
+            Vector2 dv = {d.x / range, d.z / range};
+            for (const Ship& f : ships) {
+                if (!f.active || !f.alive || f.stowed || f.id == s.id || Enemies(s, f)) continue;
+                Vector2 rel = {f.pos.x - s.pos.x, f.pos.z - s.pos.z};
+                float along = rel.x * dv.x + rel.y * dv.y, lat = fabsf(rel.x * dv.y - rel.y * dv.x);
+                if (along > 4.0f && along < range + 60.0f && lat < 20.0f * ClassOf(f.cls).scale + 14.0f) { clear = false; break; }
+            }
+        }
+        if (clear && yawOff < MC.traverse - 0.05f && s.reload[side] <= 0.0f && RandF() < keen) in.fireSeq++;
     }
     // nothing to shoot nearby: go for a power-up crate (captains only; escorts keep station)
     if (!haveGoal && !cap && !s.pirate && (!target || best > 320.0f)) {
@@ -2408,7 +2463,7 @@ void World::RemoveCrew(int id) {
 }
 
 void World::UpdateCrew(float dt) {
-    for (Ship& s : ships) s.mannedMask = 0, s.crewCount = 0, s.helmed = s.trimmed = false;
+    for (Ship& s : ships) s.mannedMask = 0, s.crewCount = 0, s.helmed = s.trimmed = s.lookout = false;
     for (const Crewman& c : crew)
         if (c.active && c.ship >= 0 && ships[c.ship].active) ships[c.ship].crewCount++;
     for (Ship& s : ships) s.crewed = s.crewCount > 0;
@@ -2430,6 +2485,8 @@ void World::UpdateCrew(float dt) {
         // where we stand: the client walks the deck; keep it on board (and keep where we signed on until it says)
         c.overboard = c.lastSeq > 0 && in.overboard;
         if (c.overboard) c.local = {Clamp(in.local.x, -1500.0f, 1500.0f), Clamp(in.local.y, -80.0f, 60.0f), Clamp(in.local.z, -1500.0f, 1500.0f)};
+        else if (c.lastSeq > 0 && in.gun == JOB_LOOKOUT)  // aloft (raked masts lean: the perch can be well off the mast step)
+            c.local = {Clamp(in.local.x, -3.0f, 3.0f), Clamp(in.local.y, -2.0f, 60.0f), Clamp(in.local.z, -16.0f, 14.0f)};
         else if (c.lastSeq > 0) c.local = {Clamp(in.local.x, -hull::maxHalfBeam, hull::maxHalfBeam), Clamp(in.local.y, -2.0f, 9.0f),
                    Clamp(in.local.z, -hull::halfLength - 2.0f, hull::halfLength + 2.0f)};
         c.yaw = in.yaw;
@@ -2438,13 +2495,14 @@ void World::UpdateCrew(float dt) {
         };
         // working a gun
         int g = c.overboard ? -1 : in.gun;
-        if (g == JOB_HELM || g == JOB_SAILS) {  // the wheel or the sails: one hand each
+        if (g == JOB_HELM || g == JOB_SAILS || g == JOB_LOOKOUT) {  // the wheel, the sails, the lookout: one hand each
             bool taken = false;
             for (const Crewman& o : crew)
                 if (&o != &c && o.active && o.ship == c.ship && o.gun == g) taken = true;
-            if (taken || !reach(JobStation(g))) g = -1;
+            if (taken || (g != JOB_LOOKOUT && !reach(JobStation(g)))) g = -1;  // (aloft we're nowhere near the rail)
             if (g == JOB_HELM) s.helmed = true;
             if (g == JOB_SAILS) s.trimmed = true;
+            if (g == JOB_LOOKOUT) s.lookout = true;
         } else if (g >= 0) {
             int side = g / MAX_GUNS, idx = g % MAX_GUNS;
             bool taken = false;
@@ -2459,7 +2517,7 @@ void World::UpdateCrew(float dt) {
             if (IsGunJob(c.gun) && s.alive && matchState == 0) {
                 int side = c.gun / MAX_GUNS, idx = c.gun % MAX_GUNS;
                 if (s.gunReload[side][idx] <= 0.0f) {
-                    s.gunReload[side][idx] = ReloadTime(s, side);
+                    s.gunReload[side][idx] = ReloadTime(s, side) * tune::crewReload;
                     PendingShot p{0.01f, side, idx};
                     p.crew = (int16_t)ci;
                     p.ownAim = true;

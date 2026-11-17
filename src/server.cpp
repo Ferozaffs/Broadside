@@ -11,7 +11,7 @@ static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy",
 static constexpr int kBotNameCount = sizeof(kBotNames) / sizeof(kBotNames[0]);
 
 bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets, uint8_t allowedCls,
-                       bool deckOnly, bool skills, int arena, bool realistic) {
+                       bool deckOnly, bool skills, int arena, bool realistic, bool friendlyFire) {
     Stop();
     if (!NetInit()) return false;
     if (!net.Start(port, kMaxPeers)) {
@@ -27,6 +27,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     world.deckOnly = deckOnly;
     world.skills = skills || mode == MODE_RACE;  // (dash and hook are what a race is about)
     world.realistic = realistic;
+    world.friendlyFire = friendlyFire;
     for (int i = 0; i < bots; ++i) {  // (as many as there are berths: past the list the names come round again, numbered)
         std::string nm = kBotNames[i % kBotNameCount];
         if (i >= kBotNameCount) nm += " " + std::to_string(i / kBotNameCount + 1);
