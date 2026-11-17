@@ -5501,6 +5501,15 @@ void Game::Frame() {
         if (IsCrew()) CrewCamera(dt);
         else UpdateCamera(dt, focus);
         if (opt.freeCam) { rv.pos = opt.freePos; rv.target = opt.freeTarget; rv.fovy = 55; }
+        if (const char* oc = getenv("BS_ORBIT")) {  // (film: \"cx cy cz radius height deg/s\" circling a point, looking at it)
+            float cx = 0, cy = 0, cz = 0, rad = 400, hgt = 150, spin = 4;
+            sscanf(oc, "%f %f %f %f %f %f", &cx, &cy, &cz, &rad, &hgt, &spin);
+            float a = spin * (float)GetTime() * DEG2RAD;
+            rv.target = {cx, cy, cz};
+            rv.pos = {cx + sinf(a) * rad, cy + hgt, cz + cosf(a) * rad};
+            rv.up = {0, 1, 0};
+            rv.fovy = 55;
+        }
         if (opt.harbourCam >= 0 && opt.harbourCam < (int)pred.harbours.size()) {
             const Harbour& hb = pred.harbours[opt.harbourCam];
             Vector2 o = {cosf(hb.ang), sinf(hb.ang)}, sd = {-o.y, o.x};
@@ -5532,8 +5541,8 @@ void Game::Frame() {
             rv.up = {0, 1, 0};
         }
         if (const char* mc = getenv("BS_MONCAM"); mc && !monView.empty()) {  // (testing the monsters' looks: "distance height degrees")
-            float dist = 60.0f, hgt = 18.0f, deg = 30.0f;
-            sscanf(mc, "%f %f %f", &dist, &hgt, &deg);
+            float dist = 60.0f, hgt = 18.0f, deg = 30.0f, spin = 0.0f;  // (spin: deg/s round it, for film)
+            sscanf(mc, "%f %f %f %f", &dist, &hgt, &deg, &spin);
             const NetMonster& m = monView.back();
             Vector3 at = {m.pos.x, Ocean().Height(m.pos.x, m.pos.z) + 4.0f, m.pos.z};
             float base = m.heading + PI;  // (from in front of it)
@@ -5542,7 +5551,9 @@ void Game::Frame() {
                 at.y = Ocean().Height(at.x, at.z) + 6.0f;
                 base = atan2f(m.pos.x - view[m.target].s.pos.x, m.pos.z - view[m.target].s.pos.z);
             }
-            float a = base + deg * DEG2RAD;
+            static float baseHeld = 1e9f;  // (a slow orbit wants a steady base, not one that swings with the prey)
+            if (spin != 0.0f) { if (baseHeld > 1e8f) baseHeld = base; base = baseHeld; }
+            float a = base + (deg + spin * (float)GetTime()) * DEG2RAD;
             rv.target = at;
             rv.pos = Vector3Add(at, {sinf(a) * dist, hgt, cosf(a) * dist});
             rv.up = {0, 1, 0};
@@ -5550,8 +5561,10 @@ void Game::Frame() {
         RenderWorld(dt, false);
         DrawLanternHalos(false);
         if (prof) mark[6] = GetTime();
-        DrawMonsterLabels();
-        DrawHUD();
+        if (!getenv("BS_NOHUD")) {  // (BS_NOHUD: clean shots for film)
+            DrawMonsterLabels();
+            DrawHUD();
+        }
         if (prof) {
             mark[7] = GetTime();
             static double lastEnd = 0.0;

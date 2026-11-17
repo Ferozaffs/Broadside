@@ -3,9 +3,9 @@
 Online PvP age-of-sail ship battles with over-the-top physics: FFT ocean swell you can jump off,
 360s in the air, cannonball arcs, power-up crates and an island-ringed arena.
 
-[![Broadside trailer: race mode down the strait, the serpent, the hairpin and the zigzag](docs/trailer_teaser.gif)](https://github.com/Ferozaffs/Broadside/releases/download/v0.12.0/Broadside_v0.12.0_trailer.mp4)
+[![Broadside trailer: the maelstrom, storms and broadsides, the kraken and the megalodon, Voyage and Raid](docs/trailer_teaser.gif)](https://github.com/Ferozaffs/Broadside/releases/download/v0.17.0/Broadside_v0.17.0_trailer.mp4)
 
-**[Watch the full trailer (70 s)](https://github.com/Ferozaffs/Broadside/releases/download/v0.12.0/Broadside_v0.12.0_trailer.mp4)**
+**[Watch the full trailer (1:48)](https://github.com/Ferozaffs/Broadside/releases/download/v0.17.0/Broadside_v0.17.0_trailer.mp4)**
 
 Built with [raylib](https://www.raylib.com/) and [ENet](http://enet.bespin.org/). The ocean is based on
 [GarrettGunnell/Water](https://github.com/GarrettGunnell/Water).
