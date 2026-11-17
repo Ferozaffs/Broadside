@@ -40,6 +40,9 @@ public:
     void Init(Shader lit);
     void DrawKraken(Renderer& r, const KrakenPose& k);
     void DrawShark(Renderer& r, const SharkPose& s);
+    // the Kraken Queen (boss mode): her body (`size` x a kraken's), facing `heading`; and one of her arms along `ctrl`
+    void DrawQueenBody(Renderer& r, Vector3 body, float heading, float size, float hurt, float limp, float time);
+    void DrawQueenArm(Renderer& r, int slot, const std::vector<Vector3>& ctrl, float r0, float r1, Vector3 inner, float time, float hurt);
     // points along the kraken's arms over the water (for spray and drips), filled by DrawKraken
     std::vector<Vector3> armTips;
 
@@ -56,6 +59,7 @@ private:
     Material mat{};
     Mesh mantle{}, eye{}, pupil{}, tooth{};
     Dyn arms[9];
+    Dyn queenArms[8];
     Dyn shark;
     bool ready = false;
 };

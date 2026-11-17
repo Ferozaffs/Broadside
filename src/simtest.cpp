@@ -451,6 +451,7 @@ static int BossTest() {
     if (const char* e = getenv("BS_DIFF")) g.difficulty = (uint8_t)atoi(e);
     const int N = getenv("BS_CAPTAINS") ? atoi(getenv("BS_CAPTAINS")) : 3;
     for (int i = 0; i < N; ++i) g.AddShip(TextFormat("captain%d", i), true);
+    if (const char* e = getenv("BS_BOSSCHOICE")) g.bossChoice = (uint8_t)atoi(e);
     printf("boss seed %u, %s, %d captains\n", seed, voyage::kDifficultyNames[g.difficulty], N);
     int result = -1, sunk = 0, hitsOnUs = 0, hitsOnIt = 0, maxBalls = 0, bossBalls = 0;
     int ourVolleys = 0, misses = 0, nearMiss = 0;
@@ -472,7 +473,10 @@ static int BossTest() {
         for (const Ball& b : g.balls) flying += !b.inWater;
         maxBalls = std::max(maxBalls, flying);  // (in the air: what the snapshot carries)
         for (const GameEvent& e : g.events) {
-            if (e.type == EventType::BossPhase) printf("   t=%4.0f the Leviathan: phase %d (hull %.0f / %.0f)\n", g.time, e.b, g.ships[e.a].hp, g.ships[e.a].maxHp);
+            if (e.type == EventType::BossPhase) printf("   t=%4.0f %s: phase %d (hull %.0f / %.0f)\n", g.time, kBossNames[g.bossKind % BOSS_KINDS], e.b, g.bossHpNow, g.bossHpMax);
+            if (e.type == EventType::BossHit) hitsOnIt++;
+            if (e.type == EventType::BossPart && e.flags == 1) printf("   t=%4.0f arm %d shot off by %s\n", g.time, e.b, e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "-");
+            if (e.type == EventType::BossPart && e.flags == 3) printf("   t=%4.0f arm %d grabs %s\n", g.time, e.b, g.ships[e.a].name.c_str());
             if (e.type == EventType::Fire && e.a < g.ShipCount() && g.ships[e.a].team == 0) ourVolleys++;
             if (e.type == EventType::Splash && e.a < g.ShipCount() && g.ships[e.a].team == 0 && g.bossId >= 0) {  // our misses: how far off
                 float d = Vector2Distance({e.pos.x, e.pos.z}, {g.ships[g.bossId].pos.x, g.ships[g.bossId].pos.z});
@@ -495,7 +499,7 @@ static int BossTest() {
         }
         g.events.clear();
         if (i % (60 * 60) == 0 && g.bossId >= 0)
-            printf("   t=%4.0f Leviathan hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d\n", g.time, g.ships[g.bossId].hp, g.ships[g.bossId].maxHp,
+            printf("   t=%4.0f boss hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d\n", g.time, g.bossHpNow, g.bossHpMax,
                    g.bossPhase, g.balls.size(), g.teamScore[0]);
         if (i % (60 * 60) == 0 && g.bossId >= 0)
             for (const Ship& x : g.ships)

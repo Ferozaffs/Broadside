@@ -64,6 +64,7 @@ struct Options {
     bool realistic = false;      // host: --realistic (real ship handling)
     bool friendlyFire = true;    // host: --no-friendly-fire to turn it off
     int difficulty = voyage::NORMAL;  // host: --difficulty easy|normal|hard|deadly (the voyage)
+    int boss = BOSS_RANDOM;           // host: --boss leviathan|kraken|...|random (boss mode)
     int arena = ARENA_ISLES;     // host: --arena isles|maelstrom
     int role = ROLE_CAPTAIN;     // --crew: sign on as crew instead of sailing your own ship
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
@@ -107,6 +108,13 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--skills") o.skills = true;
         else if (a == "--realistic") o.realistic = true;
         else if (a == "--no-friendly-fire") o.friendlyFire = false;
+        else if (a == "--boss") {
+            static const char* const kIds[BOSS_KINDS] = {"leviathan", "kraken", "dutchman", "serpent", "fortress", "armada", "ironclad", "storm"};
+            std::string v = next("random");
+            o.boss = BOSS_RANDOM;
+            for (int k = 0; k < BOSS_KINDS; ++k)
+                if (v == kIds[k]) o.boss = k;
+        }
         else if (a == "--difficulty") {
             std::string v = next("normal");
             o.difficulty = v == "easy" ? voyage::EASY : v == "hard" ? voyage::HARD : v == "deadly" ? voyage::DEADLY : voyage::NORMAL;
@@ -351,6 +359,7 @@ public:
     int ffSel = 1;                   // host's choice: friendly fire off / on
     int diffSel = voyage::NORMAL;    // host's choice: how hard the voyage is
     int menuPage = 0;                // the menu: 0 the front page, 1 hosting (the modes and their settings)
+    int bossSel = BOSS_RANDOM;       // host's choice in boss mode: one of them, or a new one every round
     int curDifficulty = voyage::NORMAL;
     int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     bool curSkills = false;
@@ -640,6 +649,13 @@ private:
     struct MortarMark { Vector3 pos; double t0; float dur; };
     std::vector<MortarMark> mortarMarks;  // boss mode: where its shells will fall
     float bossShown = -1.0f;              // the boss bar's trailing (just-lost) part
+    Snapshot bossView;                   // boss mode: the newest snapshot's boss (its parts between the last two)
+    struct Tell { Vector3 from, along; float half; double t0; float dur; };
+    std::vector<Tell> tells;             // strike lines on the water, about to be struck along
+    float bossHurt = 0.0f, armHurt[8] = {};
+    float bossDownAt = 0.0f;
+    void DrawTells();
+    void DrawKrakenQueen(float dt);
     void DrawMortarMarks();
     void DrawBossBar(float W);
     std::string notice;                  // a big line across the screen for a few seconds
@@ -739,6 +755,7 @@ void Game::Init() {
     handlingSel = opt.realistic ? 1 : 0;
     ffSel = opt.friendlyFire ? 1 : 0;
     diffSel = opt.difficulty;
+    bossSel = opt.boss;
     if (getenv("BS_MENUPAGE")) menuPage = atoi(getenv("BS_MENUPAGE"));  // (screenshots: open on the host page)
     arenaSel = RaceArena(opt.arena) || opt.arena == ARENA_RACE_ANY ? ARENA_ISLES : opt.arena;
     courseSel = RaceArena(opt.arena) ? opt.arena - ARENA_STRAIT + 1 : 0;
@@ -786,7 +803,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
         int arena = PassageMode(modeSel) ? ARENA_PASSAGE : modeSel == MODE_BOSS ? ARENA_ISLES : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arena, handlingSel != 0, ffSel != 0, diffSel)) {
+                          arena, handlingSel != 0, ffSel != 0, diffSel, bossSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -1118,6 +1135,18 @@ void Game::Interpolate() {
             }
     }
     leakView = snaps.back().leaks;
+    if (b->hasBoss) {
+        bool was = bossView.hasBoss && bossView.bossState != 2;
+        bossView = *b;
+        if (a != b && a->hasBoss && a->bossParts.size() == b->bossParts.size())
+            for (size_t i = 0; i < b->bossParts.size(); ++i)
+                if (a->bossParts[i].state == b->bossParts[i].state) bossView.bossParts[i].pos = Vector3Lerp(a->bossParts[i].pos, b->bossParts[i].pos, t);
+        if (was && bossView.bossState == 2) bossDownAt = (float)GetTime();
+        pred.bossKind = b->bossKind;
+        pred.bossPhase = b->bossPhase;
+        pred.bossPos = b->bossPos;
+        pred.bossHpNow = b->bossHp > 0.0f && b->bossState != 2 ? 1.0f : 0.0f;
+    } else bossView.hasBoss = false;
     monView.clear();  // the sea monsters, between the two snapshots like the ships
     for (const NetMonster& mb : b->monsters) {
         NetMonster m = mb;
@@ -2194,6 +2223,9 @@ void Game::Reconcile() {
     s.held = 0.0f;
     for (const NetMonster& m : sn.monsters)
         if (m.type == MON_KRAKEN && m.target == myId && (m.state == MS_STRIKE || m.state == MS_HOLD)) s.held = m.state == MS_HOLD ? 1.0f : Clamp(m.t / 2.5f, 0.0f, 1.0f);
+    if (sn.hasBoss && sn.bossKind == BOSS_KRAKEN)
+        for (const NetBossPart& p : sn.bossParts)
+            if (p.state == kq::ARM_GRAB && p.target == myId) s.held = 1.0f;
     s.lastFireSeq = ackedFireSeq;
     s.pending.clear();
     // ...and replay the inputs the server hasn't seen yet
@@ -2903,6 +2935,21 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_KRAKEN) {
+                if (e.b == 1) {
+                    Notice("THE KRAKEN QUEEN", ui::kRed, 4.0f);
+                    Feed3("THE KRAKEN QUEEN", "  rises in the bay: shoot off her arms, then her!", "", ui::kRed, ui::kText);
+                    sfx::PlayFlat(sfx::Roar, 1.0f, 0.5f);
+                    shake = fmaxf(shake, 1.0f);
+                } else {
+                    Notice(e.b == 2 ? "THE KRAKEN QUEEN CHURNS THE BAY" : "THE KRAKEN QUEEN IS ENRAGED", ui::kRed, 4.0f);
+                    Feed3("THE KRAKEN QUEEN", e.b == 2 ? "  stirs up a whirlpool and clouds the sea with ink" : "  spits ink bombs, her arms grow back faster", "",
+                          ui::kRed, ui::kText);
+                    sfx::PlayFlat(sfx::Roar, 0.9f, 0.45f);
+                    shake = fmaxf(shake, 0.8f);
+                }
+                break;
+            }
             if (e.b == 1) {
                 Notice("THE LEVIATHAN", ui::kRed, 4.0f);
                 Feed3("THE LEVIATHAN", "  comes round the islands: sink it!", "", ui::kRed, ui::kText);
@@ -2914,6 +2961,70 @@ void Game::PlayEvent(const GameEvent& e) {
                 sfx::PlayFlat(sfx::Thunder, 0.8f, 0.5f);
                 shake = fmaxf(shake, 0.8f);
             }
+            break;
+        case EventType::BossTell:
+            tells.push_back({e.pos, e.dir, kq::slamHalf, GetTime(), e.value});
+            if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 420.0f) sfx::PlayFlat(sfx::Creak, 0.7f, 0.5f);
+            break;
+        case EventType::BossSlam: {
+            float len = Vector3Length(e.dir);
+            Vector3 d = len > 0.0f ? Vector3Scale(e.dir, 1.0f / len) : Vector3{0, 0, 1};
+            for (float a = 10.0f; a < len; a += 22.0f) {
+                Vector3 p = Vector3Add(e.pos, Vector3Scale(d, a));
+                p.y = Ocean().Height(p.x, p.z);
+                AddFoam(p, 3.0f, Rnd(9, 14), 4.0f, 1.0f);
+                for (int i = 0; i < 10; ++i) Emit(p, {Rnd(-4, 4), Rnd(8, 20), Rnd(-4, 4)}, Rnd(1.0f, 2.0f), Rnd(0.6f, 1.3f), 0.6f, {235, 245, 250, 220}, 0);
+            }
+            sfx::Play(sfx::Slam, Vector3Add(e.pos, Vector3Scale(d, len * 0.5f)), 1.0f, 0.6f);
+            sfx::Play(sfx::Hit, Vector3Add(e.pos, Vector3Scale(d, len * 0.5f)), 0.8f, 0.5f);
+            if (myId >= 0 && myId < NumShips() && view[myId].present) {
+                Vector3 me = view[myId].s.pos;
+                float along = Vector3DotProduct(Vector3Subtract(me, e.pos), d);
+                if (along > -30.0f && along < len + 30.0f && Vector3Length(Vector3Subtract(Vector3Subtract(me, e.pos), Vector3Scale(d, along))) < 90.0f)
+                    shake = fmaxf(shake, 1.2f);
+            }
+            break;
+        }
+        case EventType::BossHit:
+            if (e.b < 8) armHurt[e.b] = 1.0f;
+            else bossHurt = 1.0f;
+            fx.Explosion(e.pos, e.dir, 0.9f);
+            for (int i = 0; i < 6; ++i) {
+                fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(e.pos, RandDir(1.5f)), Vector3Add(RandDir(2.5f), {0, -0.5f, 0}), Rnd(3.0f, 5.0f), Rnd(2.0f, 3.5f), 2.5f, {34, 16, 40, 210});
+                q.drag = 1.2f;
+            }
+            sfx::Play(sfx::Hit, e.pos, 0.7f, 0.55f);
+            if (e.a == myId) {
+                sfx::PlayFlat(sfx::Confirm, 0.45f, 0.8f);
+                hitMarker = 0.35f;
+                hitMarkerGold = e.b < 8;
+                floats.push_back({Vector3Add(e.pos, {0, 6, 0}), TextFormat("+%d%s", (int)roundf(e.value), e.b < 8 ? " ARM" : ""), e.b < 8 ? ui::kGold : ui::kText, 1.6f});
+            }
+            break;
+        case EventType::BossPart:
+            if (e.flags == 1) {  // an arm shot off
+                sfx::Play(sfx::Roar, e.pos, 0.8f, 1.3f);
+                AddFoam(e.pos, 4.0f, 18.0f, 5.0f, 1.0f);
+                for (int i = 0; i < 40; ++i) Emit(e.pos, Vector3Add(RandDir(8.0f), {0, Rnd(4, 12), 0}), Rnd(1.0f, 2.0f), Rnd(0.5f, 1.2f), 0.5f, {120, 20, 40, 230}, 0);
+                if (e.a < NumShips()) Feed3(NameOf(e.a), "  shot off one of her arms!", "", TeamOf(e.a), ui::kGold);
+                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "ARM OFF!", ui::kGold, 2.2f});
+            } else if (e.flags == 3) {  // got hold of one of us
+                Feed3("The Kraken Queen", "  has  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
+                if (e.a == myId) {
+                    Notice("SHE HAS YOU!  SHOOT THE ARM!", ui::kRed, 3.5f);
+                    shake = fmaxf(shake, 1.5f);
+                }
+                sfx::Play(sfx::Slam, e.pos, 0.8f, 0.7f);
+            }
+            break;
+        case EventType::BossInk:
+            for (int i = 0; i < 26; ++i) {
+                Vector3 p = Vector3Add(e.pos, {Rnd(-e.value, e.value) * 0.7f, Rnd(0.0f, 4.0f), Rnd(-e.value, e.value) * 0.7f});
+                fx::Particle& q = fx.Add(fx::Smoke, p, {Rnd(-1, 1), 0.2f, Rnd(-1, 1)}, Rnd(12.0f, 16.0f), Rnd(10.0f, 18.0f), 1.5f, {16, 8, 22, 235});
+                q.drag = 0.8f;
+                q.rise = 0.0f;
+            }
+            AddFoam(e.pos, 4.0f, e.value, 6.0f, 0.4f);
             break;
         case EventType::Escaped:
             Feed3(NameOf(e.a), "  made port: one got away", "", TeamOf(e.a), ui::kRed);
@@ -3525,6 +3636,7 @@ void Game::RenderWorld(float dt, bool menu) {
     DrawShips(menu, false, {}, 0.0f);
     if (!menu) DrawFigures();
     if (!menu && !monView.empty()) DrawMonsters(dt);
+    if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_KRAKEN) DrawKrakenQueen(dt);
 
     renderer.Water();
 
@@ -3543,7 +3655,10 @@ void Game::RenderWorld(float dt, bool menu) {
     DrawLighthouseBeams(cam);
     if (!menu) DrawTracers(cam);
     if (!menu) DrawHookLines();
-    if (!menu && curMode == MODE_BOSS) DrawMortarMarks();
+    if (!menu && curMode == MODE_BOSS) {
+        DrawMortarMarks();
+        DrawTells();
+    }
     if (!menu) DrawFleetRings();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
     if (!menu && myId >= 0 && view[myId].present && OwnShipLate()) {
@@ -4594,7 +4709,7 @@ void Game::DrawMenu() {
                                            {MODE_RACE, "Race", "first down the channel"}};
         static const ModeItem kCoop[] = {{MODE_VOYAGE, "Voyage", "take the convoy through"},
                                          {MODE_RAID, "Raid", "you are the pirates"},
-                                         {MODE_BOSS, "Boss", "sink the Leviathan"}};
+                                         {MODE_BOSS, "Boss", "fight a giant"}};
         const float cw = 200.0f, ch = compact ? 50.0f : 60.0f;
         // glass behind both columns: the backdrop battle sails right through here
         Panel({x - 14, y - 14, 2 * cw + 12 + 28, 18 + 4 * (ch + 8) + 22}, {8, 14, 22, 170}, 12);
@@ -4605,6 +4720,17 @@ void Game::DrawMenu() {
             if (ModeCard({x, y + 18 + i * (ch + 8), cw, ch}, kVersus[i].name, kVersus[i].line, modeSel == kVersus[i].mode)) modeSel = kVersus[i].mode;
         for (int i = 0; i < 3; ++i)
             if (ModeCard({x + cw + 12, y + 18 + i * (ch + 8), cw, ch}, kCoop[i].name, kCoop[i].line, modeSel == kCoop[i].mode)) modeSel = kCoop[i].mode;
+        if (modeSel == MODE_BOSS) {  // which boss: under the co-op cards, arrows either side
+            Rectangle r = {x + cw + 12, y + 18 + 3 * (ch + 8), cw, ch};
+            DrawRectangleRounded(r, 12.0f / r.height * 2.0f, 8, {255, 255, 255, 14});
+            const int n = BOSS_KINDS + 1;  // (the last: random)
+            int i = bossSel == BOSS_RANDOM ? BOSS_KINDS : bossSel;
+            if (Button({r.x + 4, r.y + 6, 30, r.height - 12}, "<")) i = (i + n - 1) % n;
+            if (Button({r.x + r.width - 34, r.y + 6, 30, r.height - 12}, ">")) i = (i + 1) % n;
+            bossSel = i == BOSS_KINDS ? BOSS_RANDOM : i;
+            Text(i == BOSS_KINDS ? "A new one each round" : kBossNames[i], r.x + r.width * 0.5f, r.y + r.height * 0.5f - 15, 16, kText, true, Center);
+            Label(i == BOSS_KINDS ? "BOSS   \xC2\xB7   RANDOM" : "BOSS", r.x + r.width * 0.5f, r.y + r.height * 0.5f + 6, 10, kGold, Center);
+        }
         // the settings, beside the modes
         const float sx = x + 2 * cw + 12 + 28 + 14, sw = 420.0f, nw = 128.0f, mw = sw - nw - 8;
         float sy = y;
@@ -5632,14 +5758,14 @@ void Game::Frame() {
         if (const char* bc = getenv("BS_BOSSCAM")) {  // (film / screenshots: "distance height degrees deg/s" round the Leviathan)
             float dist = 220.0f, hgt = 40.0f, deg = 30.0f, spin = 0.0f;
             sscanf(bc, "%f %f %f %f", &dist, &hgt, &deg, &spin);
-            for (int id = 0; id < NumShips(); ++id)
-                if (view[id].present && view[id].s.cls == SC_BOSS) {
-                    const NetShip& b = view[id].s;
-                    float a = (deg + spin * (float)GetTime()) * DEG2RAD;
-                    rv.target = Vector3Add(b.pos, {0.0f, 18.0f, 0.0f});
-                    rv.pos = Vector3Add(b.pos, {sinf(a) * dist, hgt, cosf(a) * dist});
-                    rv.up = {0, 1, 0};
-                }
+            if (bossView.hasBoss) {
+                Vector3 bp = bossView.bossPos;
+                bp.y = Ocean().Height(bp.x, bp.z);
+                float a = (deg + spin * (float)GetTime()) * DEG2RAD;
+                rv.target = Vector3Add(bp, {0.0f, 18.0f, 0.0f});
+                rv.pos = Vector3Add(bp, {sinf(a) * dist, hgt, cosf(a) * dist});
+                rv.up = {0, 1, 0};
+            }
         }
         if (const char* mc = getenv("BS_MONCAM"); mc && !monView.empty()) {  // (testing the monsters' looks: "distance height degrees")
             float dist = 60.0f, hgt = 18.0f, deg = 30.0f, spin = 0.0f;  // (spin: deg/s round it, for film)
@@ -5785,7 +5911,7 @@ void Game::YardCamera() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic, o.friendlyFire, o.difficulty)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic, o.friendlyFire, o.difficulty, o.boss)) return 1;
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();
@@ -5971,22 +6097,19 @@ void Game::DrawMortarMarks() {
 // Boss mode: the Leviathan's hull across the top of the screen, its phase, our reserve
 void Game::DrawBossBar(float W) {
     using namespace ui;
-    int bid = -1;
-    for (int id = 0; id < NumShips(); ++id)
-        if (view[id].present && view[id].s.cls == SC_BOSS) bid = id;
     int el = (int)fmaxf(0.0f, tune::bossLength - matchClock);
-    if (bid < 0) {
+    if (!bossView.hasBoss) {
         const char* t = "BOSS   \xC2\xB7   SOMETHING HUGE IS COMING ROUND THE ISLANDS...";
         Vector2 m = Measure(t, 16, true);
         Panel({W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26}, kPanel, 8);
         Text(t, W * 0.5f, 10, 16, kText, true, Center);
         return;
     }
-    const NetShip& b = view[bid].s;
-    float frac = Clamp(b.hp / fmaxf(b.maxHp, 1.0f), 0.0f, 1.0f);
+    float frac = Clamp(bossView.bossHp, 0.0f, 1.0f);
+    const bool down = bossView.bossState == 2 || frac <= 0.0f;
     const float bw = fminf(720.0f, W - 120.0f), x = W * 0.5f - bw * 0.5f;
     Panel({x - 16, 6, bw + 32, 64}, kPanel, 10);
-    Text("THE LEVIATHAN", W * 0.5f, 10, 20, (b.flags & SF_ALIVE) ? kRed : kDim, true, Center);
+    Text(TextToUpper(kBossNames[bossView.bossKind % BOSS_KINDS]), W * 0.5f, 10, 20, down ? kDim : kRed, true, Center);
     DrawRectangleRounded({x, 36, bw, 12}, 0.5f, 6, {0, 0, 0, 160});
     bossShown = bossShown < frac ? frac : fmaxf(frac, bossShown - GetFrameTime() * 0.12f);  // (the trail drains after a hit)
     float shown = bossShown;
@@ -5994,7 +6117,122 @@ void Game::DrawBossBar(float W) {
     DrawRectangleRounded({x, 36, bw * frac, 12}, 0.5f, 6, {214, 52, 52, 255});
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
-    Text(TextFormat("%s   \xC2\xB7   %s   \xC2\xB7   %d:%02d", TextToUpper(voyage::kDifficultyNames[curDifficulty]),
-                    noReserve ? "NO RESERVE" : TextFormat("RESERVE %d", teamScore[0]), el / 60, el % 60),
+    std::string extra;
+    if (bossView.bossKind == BOSS_KRAKEN) {
+        int up = 0;
+        for (const NetBossPart& p : bossView.bossParts) up += p.state >= kq::ARM_RISING && p.state <= kq::ARM_GRAB;
+        extra = TextFormat("   \xC2\xB7   ARMS %d / %d%s", up, (int)bossView.bossParts.size(), up >= 4 ? "  (SHIELDING HER)" : "  (SHE'S OPEN)");
+    }
+    Text(TextFormat("%s   \xC2\xB7   %s%s   \xC2\xB7   %d:%02d", TextToUpper(voyage::kDifficultyNames[curDifficulty]),
+                    noReserve ? "NO RESERVE" : TextFormat("RESERVE %d", teamScore[0]), extra.c_str(), el / 60, el % 60),
          W * 0.5f, 50, 13, teamScore[0] == 0 ? kRed : kDim, true, Center);
+}
+
+// Boss mode: the strike lines its arms are about to come down along, red on the water, a brighter band racing out
+// along each as the moment comes
+void Game::DrawTells() {
+    const double now = GetTime();
+    tells.erase(std::remove_if(tells.begin(), tells.end(), [&](const Tell& t) { return now > t.t0 + t.dur + 0.2; }), tells.end());
+    if (tells.empty()) return;
+    rlDrawRenderBatchActive();
+    rlDisableBackfaceCulling();
+    rlSetTexture(rlGetTextureIdDefault());
+    rlBegin(RL_QUADS);
+    for (const Tell& t : tells) {
+        float k = Clamp((float)((now - t.t0) / fmax(t.dur, 0.1)), 0.0f, 1.0f);
+        float len = Vector3Length(t.along);
+        if (len < 1.0f) continue;
+        Vector3 d = Vector3Scale(t.along, 1.0f / len), side = {d.z * t.half, 0.0f, -d.x * t.half};
+        float pulse = 0.35f + 0.25f * sinf((float)now * (8.0f + 14.0f * k));
+        auto strip = [&](float a0, float a1, Color c) {
+            for (float a = a0; a < a1; a += 10.0f) {
+                float b = fminf(a + 10.0f, a1);
+                Vector3 p0 = Vector3Add(t.from, Vector3Scale(d, a)), p1 = Vector3Add(t.from, Vector3Scale(d, b));
+                float h0 = Ocean().Height(p0.x, p0.z) + 0.7f, h1 = Ocean().Height(p1.x, p1.z) + 0.7f;
+                rlColor4ub(c.r, c.g, c.b, c.a);
+                rlVertex3f(p0.x - side.x, h0, p0.z - side.z);
+                rlVertex3f(p0.x + side.x, h0, p0.z + side.z);
+                rlVertex3f(p1.x + side.x, h1, p1.z + side.z);
+                rlVertex3f(p1.x - side.x, h1, p1.z - side.z);
+            }
+        };
+        strip(0.0f, len, {255, 40, 30, (unsigned char)(255 * pulse)});
+        strip(0.0f, len * k, {255, 170, 60, (unsigned char)(150 + 80 * k)});
+    }
+    rlEnd();
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+    rlSetTexture(0);
+}
+
+// The Kraken Queen: her body rising in the middle of the bay, her arms as the server has them (up, reared back,
+// slammed down along their line, wrapped round a ship), the sea churning round her
+void Game::DrawKrakenQueen(float dt) {
+    const float now = (float)GetTime();
+    const OceanCPU& oc = Ocean();
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    const float rise = bossView.bossState == 0 ? Clamp(bossView.bossT / 4.0f, 0.0f, 1.0f) : 1.0f;
+    const float limp = bossView.bossState == 2 ? Clamp((now - bossDownAt) / 3.0f, 0.0f, 1.0f) : 0.0f;
+    Vector3 body = bossView.bossPos;
+    body.y = oc.Height(body.x, body.z) - 22.0f * (1.0f - rise) - 18.0f * limp;
+    float heading = 0.0f;  // (she faces whoever's watching)
+    if (myId >= 0 && myId < NumShips() && view[myId].present) heading = atan2f(view[myId].s.pos.x - body.x, view[myId].s.pos.z - body.z);
+    else heading = atan2f(rv.pos.x - body.x, rv.pos.z - body.z);
+    if (rise > 0.02f) monArt.DrawQueenBody(renderer, body, heading, 3.4f, bossHurt, limp, now);
+    for (int k = 0; k < (int)bossView.bossParts.size() && k < 8; ++k) {
+        const NetBossPart& a = bossView.bossParts[k];
+        if (a.state == kq::ARM_DOWN) continue;
+        Vector3 R = a.root;
+        R.y = oc.Height(R.x, R.z) - 2.0f;
+        Vector2 o2 = Vector2Normalize({R.x - body.x, R.z - body.z});
+        Vector3 out = {o2.x, 0.0f, o2.y}, side = {o2.y, 0.0f, -o2.x};
+        float sway = sinf(now * 0.9f + k * 1.7f), sway2 = cosf(now * 0.7f + k * 2.3f);
+        float h = 44.0f;
+        if (a.state == kq::ARM_RISING) h *= Clamp(a.t / 2.5f, 0.05f, 1.0f);
+        if (a.state == kq::ARM_SINKING) h *= Clamp(1.0f - a.t / 2.0f, 0.05f, 1.0f);
+        h *= 1.0f - 0.8f * limp;
+        auto P = [&](float o, float y, float sd) { return Vector3Add(R, Vector3Add(Vector3Scale(out, o), Vector3Add({0.0f, y, 0.0f}, Vector3Scale(side, sd)))); };
+        std::vector<Vector3> ctrl = {P(0, -6, 0), P(3 + sway * 2, h * 0.35f, sway2 * 3), P(6 + sway * 4, h * 0.7f, sway2 * 6),
+                                     P(9 + sway * 5, h * 0.95f, sway * 5), P(13 + sway2 * 4, h * 0.82f, sway * 8)};
+        Vector3 d3 = {a.dir.x, 0.0f, a.dir.y};
+        if (a.state == kq::ARM_WINDUP) {  // reared back over her, away from the line it's about to come down on
+            float w = Clamp(a.t / 0.6f, 0.0f, 1.0f);
+            std::vector<Vector3> back = {Vector3Add(R, {0, -6, 0}), Vector3Add(R, Vector3Add(Vector3Scale(d3, -4.0f), {0, 22, 0})),
+                                         Vector3Add(R, Vector3Add(Vector3Scale(d3, -10.0f), {0, 42, 0})),
+                                         Vector3Add(R, Vector3Add(Vector3Scale(d3, -14.0f), {0, 55, 0})),
+                                         Vector3Add(R, Vector3Add(Vector3Scale(d3, -6.0f), {0, 62 + 2 * sway, 0}))};
+            for (size_t i = 0; i < ctrl.size(); ++i) ctrl[i] = Vector3Lerp(ctrl[i], back[i], w);
+        } else if (a.state == kq::ARM_SLAM) {  // down along the line, flat on the sea
+            std::vector<Vector3> flat;
+            for (float f : {0.0f, 0.22f, 0.48f, 0.74f, 1.0f}) {
+                Vector3 q = Vector3Add(R, Vector3Scale(d3, a.len * f));
+                q.y = oc.Height(q.x, q.z) + (f == 0.0f ? -2.0f : 2.0f + 2.5f * (1.0f - f));
+                flat.push_back(q);
+            }
+            float w = Clamp(a.t / 0.18f, 0.0f, 1.0f);
+            for (size_t i = 0; i < ctrl.size(); ++i) ctrl[i] = Vector3Lerp(ctrl[i], flat[i], w);
+        } else if (a.state == kq::ARM_GRAB && a.target >= 0 && a.target < NumShips() && view[a.target].present) {  // round a ship
+            const NetShip& s = view[a.target].s;
+            Vector3 S = s.pos, toS = Vector3Subtract(S, R);
+            Vector2 t2 = Vector2Normalize({toS.x, toS.z});
+            Vector3 far = {t2.x, 0.0f, t2.y};
+            float sq = 0.5f + 0.5f * sinf(now * 2.2f + k);
+            ctrl = {Vector3Add(R, {0, -6, 0}), Vector3Add(Vector3Lerp(R, S, 0.35f), {0, 30, 0}), Vector3Add(S, {0, 20 + 2 * sq, 0}),
+                    Vector3Add(S, Vector3Add(Vector3Scale(far, 9.0f), {0, 6, 0})), Vector3Add(S, Vector3Add(Vector3Scale(far, 8.0f), {0, -5, 0}))};
+        }
+        float r0 = 4.6f, r1 = 0.8f;
+        monArt.DrawQueenArm(renderer, k, ctrl, r0, r1, body, now, armHurt[k]);
+        // the sea where it comes up out of it
+        if (Rnd(0.0f, 1.0f) < dt * 3.0f) AddFoam(R, 2.0f, Rnd(5, 9), 2.5f, 0.6f);
+    }
+    for (float& h : armHurt) h = fmaxf(0.0f, h - dt * 4.0f);
+    // her whirlpool (phase 2 on): foam streaming round and in
+    if (bossView.bossPhase >= 2 && bossView.bossState == 1) {
+        for (int i = 0; i < 4; ++i) {
+            float r = Rnd(60.0f, 480.0f), a = now * 0.9f * (300.0f / r) + Rnd(0.0f, 2.0f * PI);
+            Vector3 p = {body.x + sinf(a) * r, 0.0f, body.z + cosf(a) * r};
+            p.y = oc.Height(p.x, p.z);
+            AddFoam(p, 1.0f, Rnd(3, 6), 2.0f, 0.5f);
+        }
+    }
 }

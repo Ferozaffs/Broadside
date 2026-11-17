@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 24;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode
+constexpr uint16_t PROTOCOL_VERSION = 25;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -209,6 +209,14 @@ struct NetMonster {  // a sea monster (the voyage)
     Vector3 pos{};
 };
 
+struct NetBossPart {  // a piece of a boss (the Kraken Queen's arms...)
+    uint8_t state = 0;
+    float hp = 1.0f, len = 0.0f, t = 0.0f;
+    Vector3 root{}, pos{};
+    Vector2 dir{};
+    int16_t target = -1;
+};
+
 struct Snapshot {
     double time = 0;
     uint32_t tick = 0;
@@ -219,6 +227,11 @@ struct Snapshot {
     std::vector<NetCrew> crew;
     std::vector<NetLeak> leaks;
     std::vector<NetMonster> monsters;
+    bool hasBoss = false;  // boss mode: which, its phase and state, its hull (0..1), where, its parts
+    uint8_t bossKind = 0, bossPhase = 0, bossState = 0;
+    float bossHp = 1.0f, bossHeading = 0.0f, bossT = 0.0f;
+    Vector3 bossPos{};
+    std::vector<NetBossPart> bossParts;
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
     uint8_t raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
@@ -377,6 +390,29 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((int16_t)Clamp(m.speed * 100.0f, -32000.f, 32000.f));
         w.PutVec3(m.pos);
     }
+    w.Put((uint8_t)(world.mode == MODE_BOSS && world.bossId >= 0 ? 1 : 0));
+    if (world.mode == MODE_BOSS && world.bossId >= 0) {
+        w.Put(world.bossKind);
+        w.Put((uint8_t)world.bossPhase);
+        w.Put(world.bossState);
+        w.Put((uint16_t)(Clamp(world.bossHpNow / fmaxf(world.bossHpMax, 1.0f), 0.0f, 1.0f) * 65535.0f));
+        w.PutVec3(world.bossPos);
+        w.Put((int16_t)(remainderf(world.bossHeading, 2.0f * PI) * 5000.0f));
+        w.Put((uint16_t)Clamp(world.bossT * 10.0f, 0.0f, 65000.0f));
+        uint8_t np = (uint8_t)std::min<size_t>(world.bossParts.size(), 32);
+        w.Put(np);
+        for (uint8_t i = 0; i < np; ++i) {
+            const BossPart& p = world.bossParts[i];
+            w.Put(p.state);
+            w.PutU8f(p.hp / fmaxf(p.maxHp, 1.0f));
+            w.PutVec3(p.root);
+            w.PutVec3(p.pos);
+            w.Put((int16_t)(atan2f(p.dir.x, p.dir.y) * 5000.0f));
+            w.Put((uint16_t)Clamp(p.len * 10.0f, 0.0f, 65000.0f));
+            w.Put((uint16_t)Clamp(p.t * 100.0f, 0.0f, 65000.0f));
+            w.Put(p.target);
+        }
+    }
 }
 
 inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
@@ -501,6 +537,29 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         m.t = r.Get<uint16_t>() / 100.0f;
         m.speed = r.Get<int16_t>() / 100.0f;
         m.pos = r.GetVec3();
+    }
+    s.hasBoss = r.Get<uint8_t>() != 0;
+    if (s.hasBoss && r.ok) {
+        s.bossKind = r.Get<uint8_t>();
+        s.bossPhase = r.Get<uint8_t>();
+        s.bossState = r.Get<uint8_t>();
+        s.bossHp = r.Get<uint16_t>() / 65535.0f;
+        s.bossPos = r.GetVec3();
+        s.bossHeading = r.Get<int16_t>() / 5000.0f;
+        s.bossT = r.Get<uint16_t>() / 10.0f;
+        uint8_t np = r.Get<uint8_t>();
+        s.bossParts.resize(r.ok ? np : 0);
+        for (auto& p : s.bossParts) {
+            p.state = r.Get<uint8_t>();
+            p.hp = r.GetU8f();
+            p.root = r.GetVec3();
+            p.pos = r.GetVec3();
+            float a = r.Get<int16_t>() / 5000.0f;
+            p.dir = {sinf(a), cosf(a)};
+            p.len = r.Get<uint16_t>() / 10.0f;
+            p.t = r.Get<uint16_t>() / 100.0f;
+            p.target = r.Get<int16_t>();
+        }
     }
     return r.ok;
 }

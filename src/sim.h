@@ -198,7 +198,35 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 
 // ---- game modes and harbours -----------------------------------------------------
 enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_BOSS = 6, MODE_COUNT = 7 };
-// (boss: co-op against one huge ship, the Leviathan, that fills the bay with shot in patterns, bullet-hell style)
+// (boss: co-op against one of the bosses below, picked by the host or at random each round)
+enum BossKind : uint8_t {
+    BOSS_LEVIATHAN = 0,  // a man-o'-war three times over, firing patterns of shot
+    BOSS_KRAKEN = 1,     // the Kraken Queen: arms to shoot off, slams, grabs, a whirlpool, ink
+    BOSS_DUTCHMAN = 2, BOSS_SERPENT = 3, BOSS_FORTRESS = 4, BOSS_ARMADA = 5, BOSS_IRONCLAD = 6, BOSS_STORM = 7,
+    BOSS_KINDS = 8
+};
+constexpr uint8_t BOSS_RANDOM = 255;
+inline const char* const kBossNames[BOSS_KINDS] = {"The Leviathan", "The Kraken Queen", "The Flying Dutchman", "The Sea Serpent",
+                                                   "The Sea Fortress", "The Admiral's Armada", "The Ironclad", "The Storm Caller"};
+// a piece of a boss that's hit on its own (the Kraken Queen's arms, the fortress's towers, ...)
+struct BossPart {
+    uint8_t state = 0;
+    float hp = 0.0f, maxHp = 1.0f;
+    Vector3 root{}, pos{};   // where it stands, and its business end (an arm's tip)
+    Vector2 dir{};           // the way it's striking
+    float len = 0.0f, t = 0.0f, timer = 0.0f;
+    int16_t target = -1;     // a ship it has hold of
+};
+namespace kq {  // the Kraken Queen
+enum ArmState : uint8_t { ARM_DOWN = 0, ARM_RISING = 1, ARM_UP = 2, ARM_WINDUP = 3, ARM_SLAM = 4, ARM_GRAB = 5, ARM_SINKING = 6 };
+constexpr int arms = 6;
+constexpr float ring = 80.0f;       // m from her to the arms' roots
+constexpr float bodyR = 26.0f;      // her body's hit radius
+constexpr float reach = 130.0f;     // an arm grabs a ship this far from its root
+constexpr float slamLen = 240.0f;   // an arm's slam: this long a line along the water
+constexpr float slamHalf = 13.0f;   // ...this wide either side
+constexpr float shield = 0.5f;      // what her body takes with all six arms up (more with each one down)
+}  // namespace kq
 // (raid: the voyage reversed. The players are the pirates (team 1); an AI convoy (team 0) sails the passage for the far
 // port, and they must sink enough of it before the rest gets in.)
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
@@ -548,6 +576,11 @@ enum class EventType : uint8_t {
     RaceFinish = 24, // a = ship, b = place, value = time (s)
     Monster = 25,    // flags = MonsterEvent, a = ship (or NO_SHIP), b = MonsterType, value = damage
     Escaped = 26,    // raid: a = the merchant that made port
+    BossHit = 29,    // a = the shooter, b = the part hit (NO_SHIP: its body), pos, dir, value = damage
+    BossPart = 30,   // b = a part, flags 1 = shot off / 2 = back, pos
+    BossTell = 31,   // a strike coming: pos = from, dir = along (x its length), value = s until it lands
+    BossSlam = 32,   // it landed: pos = from, dir = along x length
+    BossInk = 33,    // an ink cloud: pos, value = its radius
     BossMortar = 27, // a = the boss, pos = where a shell will land, value = s until it does (the clients mark the spot)
     BossPhase = 28,  // a = the boss, b = its phase (1 when it appears, then 2, 3 as its hull goes)
 };
@@ -635,6 +668,14 @@ public:
     int bossPhase = 0, bossPat = 0;  // its phase (1..3) and the pattern it's firing (0: none)
     float bossTimer = 0.0f, bossPatT = 0.0f, bossRot = 0.0f, bossStep = 0.0f, bossWait = 0.0f;
     int bossShots = 0;
+    uint8_t bossChoice = BOSS_LEVIATHAN;  // host: which boss (or BOSS_RANDOM: a new one every round)
+    uint8_t bossKind = BOSS_LEVIATHAN;    // the one we're fighting
+    float bossHpNow = 0.0f, bossHpMax = 1.0f;  // its hull (the Leviathan: its ship's; the others keep their own)
+    Vector3 bossPos{};                    // where it is
+    float bossHeading = 0.0f, bossT = 0.0f;
+    uint8_t bossState = 0;                // 0 arriving, 1 fighting, 2 going down
+    std::vector<BossPart> bossParts;
+    float bossInk = 0.0f, bossSpit = 0.0f;
     float bossStep2 = 0.0f;  // to its next grapeshot at whoever's close
     bool Voyaging() const { return mode == MODE_VOYAGE || mode == MODE_RAID; }  // the passage modes (route, convoy, monsters)
     int PlayerTeam() const { return mode == MODE_RAID ? 1 : 0; }  // the side the captains sail on (voyage: the convoy; raid: the pirates)
@@ -720,6 +761,13 @@ private:
     void UpdateRaid(float dt);
     void UpdateBoss(float dt);
     void SpawnBoss();
+    int BossProxy(const char* name);  // a ship that isn't there (stowed), for a boss that isn't a ship: owns its shot, sinks ours
+    void SpawnKrakenQueen();
+    void UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*>& prey);
+    bool BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at);
+    void BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 dir);
+    Vector3 ArmBase(int k) const;
+    bool BossAimFor(Vector3 from, Vector3& at) const;
     void BossThink(Ship& s, float dt);
     void BossBall(Ship& s, Vector3 from, Vector3 vel, float dmg, float splash = 0.0f);
     void SpawnConvoy();

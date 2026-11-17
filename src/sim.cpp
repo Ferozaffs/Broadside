@@ -1720,6 +1720,8 @@ static const float kSlide = EnvF("BS_SLIDE", tune::slideCarry), kAirLevel = EnvF
 static const bool kOldDrag = getenv("BS_OLDDRAG") != nullptr;
 static const float kHeel = EnvF("BS_HEEL", tune::heel), kRollDamp = EnvF("BS_ROLLDAMP", tune::rollDamp), kRollRight = EnvF("BS_ROLLRIGHT", tune::rollRight);
 
+static Vector2 QueenCurrent(Vector3 queen, Vector3 p);  // (the Kraken Queen's whirlpool: below)
+
 void World::StepShip(Ship& s, float dt) {
     const ShipPhys& P = Phys(s.cls);
     const ShipClass& C = ClassOf(s.cls);
@@ -1731,6 +1733,11 @@ void World::StepShip(Ship& s, float dt) {
         float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
         float k = Clamp((maelstrom::eye * 1.4f - r) / (maelstrom::eye * 0.8f), 0.0f, 1.0f);
         targetBuoy *= 1.0f - 0.7f * k;
+    }
+    if (mode == MODE_BOSS && bossKind == BOSS_KRAKEN && bossPhase >= 2 && bossHpNow > 0.0f && s.team == 0) {  // her whirlpool
+        Vector2 c = QueenCurrent(bossPos, s.pos);
+        s.vel.x += c.x * 0.45f * dt;
+        s.vel.z += c.y * 0.45f * dt;
     }
     if (s.held > 0.0f) {  // in a kraken's arms: dragged low in the water, and going nowhere
         targetBuoy *= 1.0f - 0.3f * s.held;
@@ -2296,6 +2303,13 @@ void World::UpdateBalls(float dt) {
         }
         int mk;
         Vector3 mAt;
+        int bp;
+        Vector3 bAt;
+        if (!dead && mode == MODE_BOSS && bossKind != BOSS_LEVIATHAN && BallHitsBoss(b, prev, bp, bAt)) {  // a boss that isn't a ship
+            float speedF = Clamp(Vector3Length(b.vel) / 95.0f, 0.2f, 1.3f);
+            BossDamage(tune::ballDamage * speedF * b.dmgMul * (b.inWater ? 0.6f : 1.0f), bp, b.owner, bAt, Vector3Normalize(b.vel));
+            dead = true;
+        }
         if (!dead && Voyaging() && BallHitsMonster(b, prev, mk, mAt)) {  // a sea monster
             Monster& m = monsters[mk];
             float speedF = Clamp(Vector3Length(b.vel) / 95.0f, 0.2f, 1.3f);
@@ -2570,16 +2584,40 @@ void World::BotThink(Ship& s, float dt) {
         // the Leviathan: round it at a couple of cables, broadside on (in close its grapeshot is murder); a gunboat
         // right on top of us comes first
         Ship& B = ships[bossId];
+        const Vector3 C = bossPos;  // (the Leviathan's ship, or where a boss that isn't a ship is)
         if (!(target && target != &B && best < 160.0f)) {
-            Vector2 away = Vector2Normalize({s.pos.x - B.pos.x, s.pos.z - B.pos.z});
-            float r = 210.0f + (float)(s.id % 3) * 30.0f, a = atan2f(away.x, away.y) + 0.45f;
-            goal = {B.pos.x + sinf(a) * r, 0.0f, B.pos.z + cosf(a) * r};
-            if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = B.pos;
+            Vector2 away = Vector2Normalize({s.pos.x - C.x, s.pos.z - C.z});
+            float r = (bossKind == BOSS_KRAKEN ? 230.0f : 210.0f) + (float)(s.id % 3) * 30.0f, a = atan2f(away.x, away.y) + 0.45f;
+            goal = {C.x + sinf(a) * r, 0.0f, C.z + cosf(a) * r};
+            if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = C;
             haveGoal = true;
             fight = false;
             target = &B;
-            best = Vector3Distance(B.pos, s.pos);
-            if (best < 380.0f) in.sail = 0.65f;  // (steady in the orbit: the guns bear longer)
+            best = Vector3Distance(C, s.pos);
+            if (best < 420.0f) in.sail = 0.65f;  // (steady in the orbit: the guns bear longer)
+        }
+        // dodge: out of a slam's line before it comes down, and from under a shell about to land on us
+        Vector2 me = {s.pos.x, s.pos.z}, flee = {0.0f, 0.0f};
+        if (bossKind == BOSS_KRAKEN)
+            for (const BossPart& a : bossParts) {
+                if (a.state != kq::ARM_WINDUP) continue;
+                Vector2 r0 = {a.root.x, a.root.z};
+                float along = Vector2DotProduct(Vector2Subtract(me, r0), a.dir);
+                float side = (me.x - r0.x) * a.dir.y - (me.y - r0.y) * a.dir.x;
+                if (along > -20.0f && along < a.len + 20.0f && fabsf(side) < kq::slamHalf + 30.0f)
+                    flee = Vector2Add(flee, Vector2Scale({a.dir.y, -a.dir.x}, side >= 0.0f ? 1.0f : -1.0f));
+            }
+        for (const Ball& bl : balls) {
+            if (bl.splash <= 0.0f || bl.inWater) continue;
+            float t = (bl.vel.y + sqrtf(fmaxf(0.0f, bl.vel.y * bl.vel.y + 2.0f * tune::gravity * bl.pos.y))) / tune::gravity;
+            Vector2 land = {bl.pos.x + bl.vel.x * t, bl.pos.z + bl.vel.z * t};
+            if (t < 4.0f && Vector2Distance(land, me) < bl.splash + 22.0f) flee = Vector2Add(flee, Vector2Normalize(Vector2Subtract(me, land)));
+        }
+        if (Vector2Length(flee) > 0.01f) {
+            flee = Vector2Normalize(flee);
+            goal = {s.pos.x + flee.x * 90.0f, 0.0f, s.pos.z + flee.y * 90.0f};
+            haveGoal = true;
+            in.sail = 1.0f;
         }
     }
 
@@ -2643,6 +2681,14 @@ void World::BotThink(Ship& s, float dt) {
                                             : Vector3{sinf(m.heading) * m.speed, 0.0f, cosf(m.heading) * m.speed};
             }
         }
+    if (mode == MODE_BOSS && bossKind != BOSS_LEVIATHAN && s.team == 0 && bossId >= 0 && target == &ships[bossId]) {  // a boss that isn't a ship
+        Vector3 p;
+        if (BossAimFor(s.pos, p)) {
+            tPos = p;
+            tVel = {0.0f, 0.0f, 0.0f};
+            tDist = Vector3Distance(p, s.pos);
+        }
+    }
     if (tDist < (MC.muzzleSpeed < 90.0f ? 460.0f : 520.0f)) {
         const float best = tDist;
         float flight = best / MC.muzzleSpeed;
@@ -3299,6 +3345,9 @@ void World::StartRound() {
         bossId = -1;
         bossPhase = bossPat = 0;
         bossWait = 20.0f;  // (everyone's aboard already)
+        bossParts.clear();
+        bossHpNow = 0.0f;
+        bossState = 0;
         teamScore[0] = 0;
     }
     for (Ship& s : ships)
@@ -4276,6 +4325,24 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 2) % 2);  // (random: among the ones there are so far)
+    if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
+    bossParts.clear();
+    if (bossKind == BOSS_KRAKEN) {
+        SpawnKrakenQueen();
+        int captains = 0;
+        for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
+        bossPhase = 1;
+        teamScore[0] = StartReserve(captains);
+        GameEvent e{EventType::BossPhase};
+        e.a = (uint16_t)(bossId >= 0 ? bossId : NO_SHIP);
+        e.b = 1;
+        e.flags = bossKind;
+        e.pos = bossPos;
+        events.push_back(e);
+        return;
+    }
+    bossKind = BOSS_LEVIATHAN;
     int j = NewShipSlot();
     if (j < 0) return;
     Ship& b = ships[j];
@@ -4301,10 +4368,13 @@ void World::SpawnBoss() {
     bossPhase = 1;
     bossPat = 0;
     bossTimer = 4.0f;  // (a moment to take it in)
+    bossHpMax = bossHpNow = b.hp;
+    bossPos = b.pos;
     teamScore[0] = StartReserve(captains);
     GameEvent e{EventType::BossPhase};
     e.a = b.id;
     e.b = 1;
+    e.flags = BOSS_LEVIATHAN;
     e.pos = b.pos;
     events.push_back(e);
 }
@@ -4358,25 +4428,34 @@ void World::UpdateBoss(float dt) {
     }
     if (bossId >= ShipCount() || !ships[bossId].active) return;
     Ship& B = ships[bossId];
+    const bool ship = bossKind == BOSS_LEVIATHAN;  // (the Leviathan is a ship; the others keep their own hull)
+    if (ship) {
+        bossHpNow = B.alive ? B.hp : 0.0f;
+        bossHpMax = B.maxHp;
+        bossPos = B.pos;
+        bossHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, B.rot).x, Vector3RotateByQuaternion({0, 0, 1}, B.rot).z);
+    }
     // won: it's going down; lost: none of us afloat or coming back
     bool anyone = false;
     for (const Ship& s : ships) anyone |= s.active && s.leader < 0 && s.team == 0 && (s.alive || !s.lost);
-    if (!B.alive || !anyone) {
-        voyageWinner = !B.alive ? 0 : 1;
+    if (bossHpNow <= 0.0f || !anyone) {
+        voyageWinner = bossHpNow <= 0.0f ? 0 : 1;
+        if (bossHpNow <= 0.0f) bossState = 2;
         EndRound(true);
         return;
     }
     // the phase, by its hull
-    const float frac = B.hp / fmaxf(B.maxHp, 1.0f);
+    const float frac = bossHpNow / fmaxf(bossHpMax, 1.0f);
     int phase = frac > 0.66f ? 1 : frac > 0.33f ? 2 : 3;
     if (phase > bossPhase) {
         bossPhase = phase;
         GameEvent e{EventType::BossPhase};
         e.a = B.id;
         e.b = (uint16_t)phase;
-        e.pos = B.pos;
+        e.flags = bossKind;
+        e.pos = bossPos;
         events.push_back(e);
-        if (phase == 3) {  // its gunboats come out
+        if (phase == 3 && ship) {  // its gunboats come out
             int captains = 0;
             for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
             int n = 2 + captains / 2;
@@ -4391,6 +4470,10 @@ void World::UpdateBoss(float dt) {
     std::vector<const Ship*> prey;
     for (const Ship& s : ships)
         if (s.active && s.alive && !s.stowed && s.team == 0) prey.push_back(&s);
+    if (bossKind == BOSS_KRAKEN) {
+        UpdateKrakenQueen(dt, phase, prey);
+        return;
+    }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
     const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.3f : 1.65f);
     const float dmg = 0.75f;  // (x ballDamage: lots of shot, each not so much)
@@ -4544,4 +4627,344 @@ void World::UpdateBoss(float dt) {
         bossPat = 0;
         bossTimer = (phase == 1 ? 2.6f : phase == 2 ? 2.0f : 1.4f) * (0.8f + 0.4f * RandF());
     }
+}
+
+// ---- the Kraken Queen ---------------------------------------------------------------------
+// She rises in the middle of the bay with six arms on a ring round her. While three or more are up her body takes
+// a quarter of the shot; shoot the arms off (they grow back) and she's open. An arm rears up, the water along its
+// line goes red, and it slams down along it; or it grabs a ship near it and drags her in until the arm is shot off.
+// From two thirds down she churns the bay into a whirlpool (StepShip) and clouds the water with ink; from a third
+// she spits ink bombs and her arms grow back faster.
+int World::BossProxy(const char* name) {
+    int j = NewShipSlot();
+    if (j < 0) return -1;
+    Ship& b = ships[j];
+    b = Ship{};
+    b.active = true;
+    b.id = (uint16_t)j;
+    b.isBot = true;
+    b.boss = true;
+    b.stowed = true;  // (not in the sea, not in the snapshot: a name to own the shot and the sinkings)
+    b.fixedCls = true;
+    b.team = 1;
+    b.cls = b.nextCls = SC_BOSS;
+    b.name = name;
+    b.alive = true;
+    b.maxHp = b.hp = 1.0f;
+    return j;
+}
+
+Vector3 World::ArmBase(int k) const {
+    float a = 2.0f * PI * k / kq::arms + 0.3f;
+    float x = bossPos.x + sinf(a) * kq::ring, z = bossPos.z + cosf(a) * kq::ring;
+    return {x, ocean.Height(x, z) - 1.0f, z};
+}
+
+void World::SpawnKrakenQueen() {
+    bossId = BossProxy(kBossNames[BOSS_KRAKEN]);
+    if (bossId < 0) return;
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
+    bossPos = {0.0f, 0.0f, 0.0f};
+    bossHpMax = bossHpNow = (1600.0f + 700.0f * std::max(captains, 1)) * Diff().bossHp;
+    if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
+    bossState = 0;
+    bossT = 0.0f;
+    bossInk = 8.0f;
+    bossSpit = 4.0f;
+    bossParts.assign(kq::arms, BossPart{});
+    const float armHp = (110.0f + 40.0f * std::max(captains, 1)) * Diff().bossHp;
+    for (int k = 0; k < kq::arms; ++k) {
+        BossPart& a = bossParts[k];
+        a.root = ArmBase(k);
+        a.pos = a.root;
+        a.maxHp = a.hp = armHp;
+        a.state = kq::ARM_DOWN;
+        a.timer = 2.0f + 0.4f * k;  // (they come up one after another as she rises)
+    }
+}
+
+// the sea's current round her (phase 2 on): the same for the server and our own ship's prediction
+static Vector2 QueenCurrent(Vector3 queen, Vector3 p) {
+    Vector2 d = {p.x - queen.x, p.z - queen.z};
+    float r = Vector2Length(d);
+    if (r < 1.0f || r > 520.0f) return {0, 0};
+    Vector2 in = Vector2Scale(d, -1.0f / r), tang = {-in.y, in.x};
+    float k = 1.0f - r / 520.0f;
+    return Vector2Add(Vector2Scale(tang, 9.0f * k), Vector2Scale(in, 3.5f * k));
+}
+
+void World::UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& P = ships[bossId];
+    bossT += dt;
+    if (bossState == 0 && bossT > 4.0f) bossState = 1;
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    const float windup = 1.8f / sqrtf(rate);
+    int up = 0, grabs = 0, winding = 0;
+    for (const BossPart& a : bossParts) {
+        up += a.state >= kq::ARM_UP && a.state <= kq::ARM_GRAB;
+        grabs += a.state == kq::ARM_GRAB;
+        winding += a.state == kq::ARM_WINDUP;
+    }
+    for (int k = 0; k < (int)bossParts.size(); ++k) {
+        BossPart& a = bossParts[k];
+        a.root = ArmBase(k);
+        a.t += dt;
+        a.timer -= dt * rate;
+        Ship* held = a.target >= 0 && a.target < ShipCount() && ships[a.target].active && ships[a.target].alive ? &ships[a.target] : nullptr;
+        switch (a.state) {
+            case kq::ARM_DOWN:
+                a.pos = a.root;
+                if (a.timer <= 0.0f) {
+                    a.state = kq::ARM_RISING;
+                    a.t = 0.0f;
+                    a.hp = a.maxHp;
+                    GameEvent e{EventType::BossPart};
+                    e.b = (uint16_t)k;
+                    e.flags = 2;
+                    e.pos = a.root;
+                    events.push_back(e);
+                }
+                break;
+            case kq::ARM_RISING:
+                a.pos = Vector3Add(a.root, {0.0f, 40.0f * Clamp(a.t / 2.5f, 0.0f, 1.0f), 0.0f});
+                if (a.t > 2.5f) { a.state = kq::ARM_UP; a.t = 0.0f; a.timer = 1.0f + RandF() * 3.0f; }
+                break;
+            case kq::ARM_UP: {
+                a.pos = Vector3Add(a.root, {0.0f, 42.0f, 0.0f});
+                if (a.timer > 0.0f || bossState != 1) break;
+                // a ship in reach: grab her (two at once at most, one before she's angry); else slam the nearest
+                const Ship* near = nullptr;
+                float nd = 1e9f;
+                for (const Ship* s : prey) {
+                    float d = Vector2Distance({s->pos.x, s->pos.z}, {a.root.x, a.root.z});
+                    if (d < nd) { nd = d; near = s; }
+                }
+                bool alreadyHeld = false;
+                if (near)
+                    for (const BossPart& o : bossParts) alreadyHeld |= o.state == kq::ARM_GRAB && o.target == near->id;
+                if (near && nd < kq::reach && !alreadyHeld && grabs < (phase == 1 ? 1 : 2) && RandF() < 0.25f) {
+                    a.state = kq::ARM_GRAB;
+                    a.t = 0.0f;
+                    a.target = (int16_t)near->id;
+                    grabs++;
+                    GameEvent e{EventType::BossPart};
+                    e.a = near->id;
+                    e.b = (uint16_t)k;
+                    e.flags = 3;  // (got hold of one)
+                    e.pos = near->pos;
+                    events.push_back(e);
+                } else if (near && nd < kq::slamLen + 40.0f && winding < (phase == 1 ? 1 : 2)) {  // (one slam coming at a time, two when she's angry)
+                    winding++;
+                    Vector3 lead = Vector3Add(near->pos, Vector3Scale(near->vel, windup * 0.6f));
+                    a.dir = Vector2Normalize({lead.x - a.root.x, lead.z - a.root.z});
+                    a.len = kq::slamLen;
+                    a.state = kq::ARM_WINDUP;
+                    a.t = 0.0f;
+                    GameEvent e{EventType::BossTell};
+                    e.a = P.id;
+                    e.b = (uint16_t)k;
+                    e.pos = a.root;
+                    e.dir = {a.dir.x * a.len, 0.0f, a.dir.y * a.len};
+                    e.value = windup;
+                    events.push_back(e);
+                } else a.timer = 1.5f;
+                break;
+            }
+            case kq::ARM_WINDUP:
+                a.pos = Vector3Add(a.root, {-a.dir.x * 14.0f, 52.0f, -a.dir.y * 14.0f});
+                if (a.t >= windup) {
+                    a.state = kq::ARM_SLAM;
+                    a.t = 0.0f;
+                    // everything along the line takes it
+                    Vector2 r0 = {a.root.x, a.root.z};
+                    for (Ship& s : ships) {
+                        if (!s.active || !s.alive || s.stowed || s.team == 1) continue;
+                        Vector2 p = {s.pos.x, s.pos.z};
+                        float along = Vector2DotProduct(Vector2Subtract(p, r0), a.dir);
+                        if (along < 0.0f || along > a.len) continue;
+                        float side = fabsf((p.x - r0.x) * a.dir.y - (p.y - r0.y) * a.dir.x);
+                        if (side > kq::slamHalf + hull::maxHalfBeam * ClassOf(s.cls).scale) continue;
+                        float dmg = 14.0f * Diff().monster;
+                        ApplyImpulse(s, {0.0f, -tune::ballKnockback * 1.2f, 0.0f}, Vector3Add(s.pos, {0.0f, 4.0f, 0.0f}), {tune::hitPitch, 0.3f, 1.0f});
+                        GameEvent h{EventType::Hit};
+                        h.a = P.id;
+                        h.b = s.id;
+                        h.flags = EF_PLUNGING;
+                        h.pos = Vector3Add(s.pos, {0.0f, 4.0f, 0.0f});
+                        h.dir = {0, -1, 0};
+                        h.value = dmg;
+                        events.push_back(h);
+                        Damage(s, dmg, P.id);
+                    }
+                    GameEvent e{EventType::BossSlam};
+                    e.a = P.id;
+                    e.b = (uint16_t)k;
+                    e.pos = a.root;
+                    e.dir = {a.dir.x * a.len, 0.0f, a.dir.y * a.len};
+                    events.push_back(e);
+                }
+                break;
+            case kq::ARM_SLAM:
+                a.pos = {a.root.x + a.dir.x * a.len, a.root.y + 2.0f, a.root.z + a.dir.y * a.len};
+                if (a.t > 0.9f) { a.state = kq::ARM_UP; a.t = 0.0f; a.timer = 8.0f + RandF() * 5.0f; }
+                break;
+            case kq::ARM_GRAB:
+                if (!held || a.t > 9.0f) {  // she sank, or it's had her long enough
+                    a.state = kq::ARM_UP;
+                    a.t = 0.0f;
+                    a.target = -1;
+                    a.timer = 3.0f;
+                    break;
+                }
+                a.pos = Vector3Add(held->pos, {0.0f, 6.0f, 0.0f});
+                held->held = 1.0f;
+                {  // drawn in towards her
+                    Vector2 in = Vector2Normalize({bossPos.x - held->pos.x, bossPos.z - held->pos.z});
+                    float far = Vector2Distance({bossPos.x, bossPos.z}, {held->pos.x, held->pos.z});
+                    if (far > 60.0f) {
+                        held->vel.x += in.x * 6.0f * dt;
+                        held->vel.z += in.y * 6.0f * dt;
+                    }
+                }
+                Damage(*held, held->maxHp * 0.016f * Diff().monster * dt, P.id);
+                break;
+            case kq::ARM_SINKING:
+                a.pos = Vector3Add(a.root, {0.0f, 40.0f * Clamp(1.0f - a.t / 2.0f, 0.0f, 1.0f), 0.0f});
+                if (a.t > 2.0f) {
+                    a.state = kq::ARM_DOWN;
+                    a.t = 0.0f;
+                    a.timer = phase == 3 ? 20.0f : 32.0f;
+                }
+                break;
+        }
+    }
+    (void)up;
+    // ink in the water (phase 2 on)
+    if (phase >= 2) {
+        bossInk -= dt;
+        if (bossInk <= 0.0f) {
+            bossInk = 9.0f / rate;
+            float a = RandF() * 2.0f * PI, r = 120.0f + RandF() * 280.0f;
+            GameEvent e{EventType::BossInk};
+            e.pos = {bossPos.x + sinf(a) * r, 0.0f, bossPos.z + cosf(a) * r};
+            e.pos.y = ocean.Height(e.pos.x, e.pos.z);
+            e.value = 45.0f + RandF() * 30.0f;
+            events.push_back(e);
+        }
+    }
+    // ink bombs (phase 3): lobbed at each of us, the spots marked
+    if (phase >= 3) {
+        bossSpit -= dt * rate;
+        if (bossSpit <= 0.0f) {
+            bossSpit = 6.0f;
+            const Vector3 mouth = Vector3Add(bossPos, {0.0f, 14.0f, 0.0f});
+            for (const Ship* t : prey)
+                for (int k = 0; k < 2; ++k) {
+                    Vector3 aim = Vector3Add(t->pos, Vector3Scale(t->vel, 2.0f));
+                    aim.x += (RandF() - 0.5f) * 60.0f;
+                    aim.z += (RandF() - 0.5f) * 60.0f;
+                    Vector2 d = {aim.x - mouth.x, aim.z - mouth.z};
+                    float rng = Clamp(Vector2Length(d), 40.0f, 520.0f);
+                    Vector2 dn = Vector2Normalize(d);
+                    float sn = Clamp(tune::gravity * rng / (70.0f * 70.0f), 0.0f, 1.0f), e = PI * 0.5f - 0.5f * asinf(sn);
+                    Vector3 v = {dn.x * 70.0f * cosf(e), 70.0f * sinf(e), dn.y * 70.0f * cosf(e)};
+                    BossBall(P, mouth, v, 2.0f, 18.0f);
+                    GameEvent m{EventType::BossMortar};
+                    m.a = P.id;
+                    m.pos = {mouth.x + dn.x * rng, 0.0f, mouth.z + dn.y * rng};
+                    m.pos.y = ocean.Height(m.pos.x, m.pos.z);
+                    m.value = 2.0f * v.y / tune::gravity;
+                    events.push_back(m);
+                }
+        }
+    }
+}
+
+// what of a non-ship boss a ball has hit: an arm (part), or its body (-1)
+bool World::BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at) {
+    if (bossId < 0 || bossHpNow <= 0.0f || b.owner == bossId) return false;
+    if (b.owner < ShipCount() && ships[b.owner].team == 1) return false;
+    if (bossKind == BOSS_KRAKEN) {
+        for (int k = 0; k < (int)bossParts.size(); ++k) {
+            const BossPart& a = bossParts[k];
+            if (a.state == kq::ARM_DOWN || a.state == kq::ARM_SINKING) continue;
+            float s;
+            Vector3 base = a.root, tip = a.pos;
+            if (a.state == kq::ARM_SLAM) base = Vector3Add(a.root, {0.0f, 3.0f, 0.0f});
+            if (SegSegDist(prev, b.pos, base, tip, s) < 5.0f) {
+                part = k;
+                at = Vector3Lerp(prev, b.pos, s);
+                return true;
+            }
+        }
+        float s;
+        Vector3 c = Vector3Add(bossPos, {0.0f, 10.0f, 0.0f});
+        if (bossState >= 1 && SegSegDist(prev, b.pos, c, c, s) < kq::bodyR) {
+            part = -1;
+            at = Vector3Lerp(prev, b.pos, s);
+            return true;
+        }
+    }
+    return false;
+}
+
+void World::BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 dir) {
+    GameEvent e{EventType::BossHit};
+    e.a = (uint16_t)(attacker >= 0 ? attacker : NO_SHIP);
+    e.b = part >= 0 ? (uint16_t)part : NO_SHIP;
+    e.pos = at;
+    e.dir = dir;
+    if (part >= 0 && part < (int)bossParts.size()) {
+        BossPart& a = bossParts[part];
+        a.hp -= dmg;
+        e.value = dmg;
+        if (a.hp <= 0.0f && a.state != kq::ARM_SINKING && a.state != kq::ARM_DOWN) {
+            a.hp = 0.0f;
+            a.state = kq::ARM_SINKING;
+            a.t = 0.0f;
+            a.target = -1;
+            GameEvent d{EventType::BossPart};
+            d.a = e.a;
+            d.b = (uint16_t)part;
+            d.flags = 1;
+            d.pos = a.pos;
+            events.push_back(d);
+        }
+    } else {
+        int up = 0;
+        for (const BossPart& a : bossParts) up += a.state >= kq::ARM_RISING && a.state <= kq::ARM_GRAB;
+        // her arms shield her: all six up, she takes 0.3 of it; each one down opens her more; three or fewer, all of it
+        float k = bossKind == BOSS_KRAKEN && up >= 4 ? kq::shield + 0.15f * (6 - up) : 1.0f;
+        bossHpNow = fmaxf(0.0f, bossHpNow - dmg * k);
+        e.value = dmg * k;
+    }
+    if (attacker >= 0 && attacker < ShipCount() && ships[attacker].active) ships[CaptainOf(attacker)].statDamage += e.value;
+    events.push_back(e);
+}
+
+// where an ally aims at a boss that isn't a ship: the Kraken Queen's arm with a ship in it first, then (while her
+// arms shield her) the nearest arm, else her body
+bool World::BossAimFor(Vector3 from, Vector3& at) const {
+    if (bossKind == BOSS_KRAKEN) {
+        int up = 0;
+        for (const BossPart& a : bossParts) up += a.state >= kq::ARM_RISING && a.state <= kq::ARM_GRAB;
+        float bestD = 1e9f;
+        bool found = false;
+        for (const BossPart& a : bossParts) {
+            if (a.state < kq::ARM_RISING || a.state > kq::ARM_GRAB) continue;
+            Vector3 p = Vector3Lerp(a.root, a.pos, 0.45f);
+            float d = Vector3Distance(p, from) * (a.state == kq::ARM_GRAB ? 0.4f : 1.0f);
+            if (d < bestD) { bestD = d; at = p; found = true; }
+        }
+        Vector3 body = Vector3Add(bossPos, {0.0f, 10.0f, 0.0f});
+        if (up < 6 || !found) {  // an arm down and she's opening up: her body (unless an arm has hold of one of us)
+            bool grabbing = false;
+            for (const BossPart& a : bossParts) grabbing |= a.state == kq::ARM_GRAB;
+            if (!grabbing || !found) at = body;
+            found = true;
+        }
+        return found;
+    }
+    return false;
 }

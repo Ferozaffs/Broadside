@@ -495,6 +495,25 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   the chosen mode's settings, then "Host game - open to friends" and "Practice" (offline). Esc goes back.
   BS_MENUPAGE=1 opens on the host page (screenshots).
 - Protocol 24.
+
+## More bosses (2026-11-17, user: "We should add more bosses" -> "Make all of them, start from the top")
+Plan, in order: Kraken Queen, Flying Dutchman, Sea Serpent, Sea Fortress, Admiral's Armada, Ironclad, Storm Caller.
+Framework (done): BossKind / kBossNames (sim.h), World::bossChoice (host: --boss, the menu's picker under the co-op cards;
+BOSS_RANDOM = a new one each round, SpawnBoss picks among the ones built so far), bossKind, bossHpNow/Max (the bar),
+bossPos/Heading/State/T, bossParts (BossPart: hittable pieces). Bosses that aren't ships get a stowed proxy ship
+(BossProxy: owns their shot, sinks ours, never in the sea or the snapshot). Balls into them: BallHitsBoss -> BossDamage
+(EventType::BossHit / BossPart). Snapshot: a boss block (kind, phase, state, hull 0..1, pos, heading, t, parts) -> client
+bossView; pred gets bossKind/Phase/Pos for currents. Tells: EventType::BossTell (a strike line, red on the water,
+DrawTells), BossSlam, BossInk. Allied bots: BossAimFor (where to shoot), dodge tells and shells about to land.
+Protocol 25.
+- [x] Kraken Queen (BOSS_KRAKEN): body in the middle of the bay (3.4x a kraken), 6 arms on an 80 m ring (BossPart:
+  DOWN, RISING, UP, WINDUP, SLAM, GRAB, SINKING). Arms shield her (6 up: half damage, full with 3 or fewer). Slam: rears
+  back (tell 1.8 s), comes down along a 240 m line (14 dmg + shove); one at a time (two later), 8-13 s apart per arm.
+  Grab (25%, within 130 m of its root): holds a ship (Ship::held, also predicted), drags her in, 1.6% hull/s, 9 s, until
+  the arm is shot off (arm hull 110 + 40 per captain). Phase 2: whirlpool current round her (QueenCurrent in StepShip,
+  predicted too) and ink clouds; phase 3: ink bombs (mortars) and arms regrow in 20 s not 32. Body hull 1600 + 700 per
+  captain. Bot runs (3 captains, Normal): she wins at ~60% hull in phase 2 after ~7 min.
+- [ ] Flying Dutchman  - [ ] Sea Serpent  - [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

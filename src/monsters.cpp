@@ -174,6 +174,7 @@ void MonsterArt::Init(Shader lit) {
     pupil = GenMeshSphere(1.0f, 10, 14);
     tooth = GenMeshCone(0.5f, 1.0f, 6);
     for (Dyn& d : arms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
+    for (Dyn& d : queenArms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
     MakeDyn(shark, kSharkRings * kSharkSides + 1 + kSharkFinVerts, (kSharkRings - 1) * kSharkSides * 2 + kSharkSides + kSharkFinTris);
     ready = true;
 }
@@ -423,5 +424,62 @@ void MonsterArt::DrawShark(Renderer& r, const SharkPose& s) {
                 }
     }
     mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r.SetLitParams(0.0f, 0.0f);
+}
+
+void MonsterArt::DrawQueenBody(Renderer& r, Vector3 body, float heading, float size, float hurt, float limp, float time) {
+    if (!ready) return;
+    const Vector3 fwd = {sinf(heading), 0.0f, cosf(heading)}, up = {0, 1, 0}, right = Vector3CrossProduct(up, fwd);
+    const float tilt = 0.18f + 0.35f * limp;
+    const Vector3 top = Vector3Normalize(Vector3Subtract(Vector3Scale(up, cosf(tilt)), Vector3Scale(fwd, sinf(tilt))));
+    const Vector3 front = Vector3CrossProduct(right, top);
+    r.SetLitParams(hurt * 0.5f, 0.0f);
+    float breathe = 1.0f + 0.04f * sinf(time * 1.1f) * (1.0f - limp), b = breathe * size;
+    Matrix basis = {right.x * b, top.x * size, front.x * b, body.x,
+                    right.y * b, top.y * size, front.y * b, body.y,
+                    right.z * b, top.z * size, front.z * b, body.z, 0, 0, 0, 1};
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = {255, 236, 236, 255};
+    DrawMesh(mantle, mat, basis);
+    auto at = [&](Vector3 l) {
+        l = Vector3Scale(l, size);
+        return Vector3Add(body, Vector3Add(Vector3Scale(right, l.x), Vector3Add(Vector3Scale(top, l.y), Vector3Scale(front, l.z))));
+    };
+    for (int s = -1; s <= 1; s += 2) {  // her eyes: two great gold ones, and a crown of small ones over them
+        for (int k = 0; k < 3; ++k) {
+            const bool big = k == 0;
+            Vector3 c = big ? at({s * 4.4f, 2.4f, 2.4f}) : at({s * (2.2f + 1.4f * k), 5.6f + 1.2f * k, 3.4f - 0.6f * k});
+            Vector3 out = Vector3Normalize(Vector3Add(Vector3Scale(right, s * (big ? 0.9f : 0.5f)), Vector3Scale(front, big ? 0.5f : 0.9f)));
+            Vector3 side = Vector3Normalize(Vector3CrossProduct(top, out));
+            float sc = size * (big ? 1.3f : 0.55f);
+            auto place = [&](Vector3 p, Vector3 v) {
+                return Matrix{side.x * v.x, top.x * v.y, out.x * v.z, p.x, side.y * v.x, top.y * v.y, out.y * v.z, p.y,
+                              side.z * v.x, top.z * v.y, out.z * v.z, p.z, 0, 0, 0, 1};
+            };
+            r.SetLitParams(hurt * 0.5f, 0.5f * (1.0f - limp));
+            mat.maps[MATERIAL_MAP_DIFFUSE].color = big ? Color{240, 170, 40, 255} : Color{220, 60, 40, 255};
+            DrawMesh(eye, mat, place(c, {sc, sc * 0.92f, sc * 0.8f}));
+            r.SetLitParams(hurt * 0.5f, 0.0f);
+            mat.maps[MATERIAL_MAP_DIFFUSE].color = {10, 6, 6, 255};
+            DrawMesh(pupil, mat, place(Vector3Add(c, Vector3Scale(out, 0.62f * sc)), {0.75f * sc, (0.14f + 0.5f * limp) * sc, 0.4f * sc}));
+        }
+    }
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r.SetLitParams(0.0f, 0.0f);
+}
+
+void MonsterArt::DrawQueenArm(Renderer& r, int slot, const std::vector<Vector3>& ctrl, float r0, float r1, Vector3 inner, float time, float hurt) {
+    if (!ready || slot < 0 || slot >= 8 || ctrl.size() < 2) return;
+    std::vector<Vector3> pts(kArmRings);
+    std::vector<float> rad(kArmRings);
+    for (int i = 0; i < kArmRings; ++i) {
+        float u = (float)i / (kArmRings - 1);
+        pts[i] = Spline(ctrl, u);
+        rad[i] = Lerp(r0, r1, powf(u, 0.75f)) * (1.0f + 0.1f * sinf(time * 3.5f + slot * 1.7f - u * 8.0f));
+    }
+    rad[kArmRings - 1] *= 0.4f;
+    r.SetLitParams(hurt * 0.6f, 0.0f);
+    Tube(queenArms[slot], pts, rad, inner, 1.0f, time);
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    DrawMesh(queenArms[slot].mesh, mat, MatrixIdentity());
     r.SetLitParams(0.0f, 0.0f);
 }
