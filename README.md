@@ -100,23 +100,24 @@ The host picks the game in the menu:
   harbour at the other, while pirates hunt it all the way. The Passage is its own sea, about 9 km long and 3 km wide
   (some twelve times the Isles): high coast all round, an archipelago of islands, islets and sea stacks in between,
   and a haven with shipwrights halfway up one side. A dotted sea lane on the water shows a way through, and the safe
-  harbour is marked all the way. The menu's bot count becomes your **allies**: bot captains who sail in the convoy,
-  keep with the human ships and fight off whatever comes close. The pirates (black sails) turn up out of the haze in
+  harbour is marked all the way. The menu's bot count becomes your **allies**: bot captains who sail in formation
+  either side of the human ships, at their pace, firing at whatever their guns bear on without turning aside to
+  fight. The pirates (black sails) turn up out of the haze in
   bands, mostly astern or abeam, sometimes lying in wait ahead; "PIRATES SIGHTED" tells you where. There are more of
   them, and bigger ships, the further you get, and they sail faster while they're out of range. They keep clear of
-  the haven and the safe harbour (the forts' guns). Sunk ships rejoin the convoy, astern of whoever is furthest on,
-  while the convoy has ships in **reserve** (two per captain who sets out, one more for each who joins under way);
-  with none left a sunk ship is out until the next voyage. Every human captain afloat in the safe harbour (and
-  nobody waiting to rejoin) wins it; every ship sunk loses it. Takes about 6-10 minutes in Arcade, half an hour in
+  the haven and the safe harbour (the forts' guns). Nobody respawns: a convoy ship whose hull is gone is
+  **disabled**, dead in the water, and a friend who stays alongside her for 10 seconds brings her back with a quarter
+  of her hull (the bots go back for you too). Every human captain afloat in the safe harbour (and nobody disabled)
+  wins it; every convoy ship disabled at once loses it. Takes about 6-10 minutes in Arcade, half an hour in
   Realistic. Works with fleets, skills, crew, friendly fire and both handlings.
   The host picks a **difficulty**:
 
-  | | Pirates | Reserve per captain | First pirates |
-  |---|---|---|---|
-  | **Easy** | 60% as many, less speed to catch up, smaller ships, their gunners miss more | 3 (at least 5) | after 50 s |
-  | **Normal** | as above | 2 (at least 3) | after 35 s |
-  | **Hard** | 35% more, faster to catch up, bigger ships, bands come sooner | 1 (at least 2) | after 25 s |
-  | **Deadly** | 70% more, faster still, mostly frigates and ships of the line | none: sunk is out | after 15 s |
+  | | Pirates | First pirates |
+  |---|---|---|
+  | **Easy** | 60% as many, less speed to catch up, smaller ships, their gunners miss more | after 50 s |
+  | **Normal** | as above | after 35 s |
+  | **Hard** | 35% more, faster to catch up, bigger ships, bands come sooner | after 25 s |
+  | **Deadly** | 70% more, faster still, mostly frigates and ships of the line | after 15 s |
 
   **Sea monsters.** Not every voyage meets them (the harder the voyage, the likelier):
   - **The kraken** (rare: 8% of voyages on Easy, 15% Normal, 22% Hard, 35% Deadly). The sea goes dark under a convoy
@@ -133,10 +134,10 @@ The host picks the game in the menu:
   Slaying one counts as a kill. They roar, bite, ink and bleed; a banner and the feed tell everyone where they are.
 - **Raid** (co-op): the voyage the other way round. Everyone sails as a **pirate** (black sails; the menu's bot count
   becomes your fellow pirates) and an AI **convoy** of merchantmen sails the Passage for the far port, down the sea
-  lane, laden and slow, keeping together and firing back at whatever comes close. Sink enough of it before the rest
-  gets in: the difficulty sets the convoy's size (three ships and two more for every pirate captain, x0.8 on Easy up
-  to x1.5 on Deadly, bigger ships the harder it is) and the share you must sink (half on Easy, 60% Normal, 70% Hard,
-  80% Deadly). Every merchant that makes port is one that got away; once too many have, the raid is lost. You start
+  lane, laden and slow, in formation (three columns, at the pace of its slowest ship), never turning aside to fight
+  but firing at whatever its guns bear on. It's **four merchantmen for every pirate captain**, and you must sink
+  **every one**: if a single ship makes port, the raid has failed. The difficulty sets how stout they are (hulls x1.3
+  on Easy, x1.6 Normal, x2 Hard, x2.4 Deadly) and how many are ships of the line. You start
   lying in wait a couple of kilometres up the lane and come back from a sinking within a kilometre of the convoy. The
   haven is your cove (repairs). The sea monsters come for the pirates here.
 - **Boss** (co-op): everyone (and the bots, your allies) against one huge enemy, bullet-hell style. The host picks

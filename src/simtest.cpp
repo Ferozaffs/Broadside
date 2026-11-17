@@ -289,11 +289,13 @@ static int VoyageTest() {
                 if (g.ships[e.b].raider) piratesSunk++;
                 else if (g.ships[e.b].leader < 0) {
                     convoyLost++;
-                    printf("   t=%4.0f %s sunk at s %.0f by %s (reserve now %d)\n", g.time, g.ships[e.b].name.c_str(), g.RouteS(e.pos.x, e.pos.z),
+                    printf("   t=%4.0f %s disabled at s %.0f by %s\n", g.time, g.ships[e.b].name.c_str(), g.RouteS(e.pos.x, e.pos.z),
                            e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : e.a == KILLER_MONSTER + MON_KRAKEN ? "THE KRAKEN"
-                                                 : e.a == KILLER_MONSTER + MON_MEGALODON ? "THE MEGALODON" : "the rocks", g.teamScore[0]);
+                                                 : e.a == KILLER_MONSTER + MON_MEGALODON ? "THE MEGALODON" : "the rocks");
                 }
             }
+            if (e.type == EventType::Revive && e.a < g.ShipCount())
+                printf("   t=%4.0f %s brought round by %s\n", g.time, g.ships[e.a].name.c_str(), e.b < g.ShipCount() ? g.ships[e.b].name.c_str() : "several");
             if (e.type == EventType::Monster) {  // the sea monsters: everything but the hits, which are counted
                 static const char* kWhat[] = {"", "closing on", "RISES under", "strikes", "hit", "SLAIN by", "dives away from"};
                 const Monster& m = g.monsters[e.b < MON_TYPES ? e.b : 0];
@@ -329,9 +331,15 @@ static int VoyageTest() {
                 if (x.active && x.alive && x.leader < 0) trail.push_back({x.pos.x, x.pos.z});
         if (i % (60 * 60) == 0) {
             int afloat = 0;
-            for (const Ship& x : g.ships) afloat += x.active && x.alive && x.leader < 0 && !x.raider;
-            printf("   t=%4.0f best s %5.0f / %.0f, convoy afloat %d, pirates %d, reserve %d, pirates sunk %d, tick avg %.2f ms\n", g.time, g.voyageBest,
-                   g.RouteLength(), afloat, pir, g.teamScore[0], g.teamScore[1], sum / ticks * 1000.0);
+            float sMin = 1e9f, sMax = -1e9f;
+            for (const Ship& x : g.ships)
+                if (x.active && x.alive && x.leader < 0 && !x.raider) {
+                    afloat++;
+                    sMin = fminf(sMin, g.RouteS(x.pos.x, x.pos.z));
+                    sMax = fmaxf(sMax, g.RouteS(x.pos.x, x.pos.z));
+                }
+            printf("   t=%4.0f best s %5.0f / %.0f, convoy afloat %d (spread %.0f m), pirates %d, pirates sunk %d, tick avg %.2f ms\n", g.time, g.voyageBest,
+                   g.RouteLength(), afloat, afloat ? sMax - sMin : 0.0f, pir, g.teamScore[1], sum / ticks * 1000.0);
         }
         if (result >= 0) break;
     }
@@ -423,9 +431,17 @@ static int RaidTest() {
         g.events.clear();
         if (i % (60 * 60) == 0 && g.raidTotal > 0) {
             int afloat = 0;
-            for (const Ship& x : g.ships) afloat += x.active && x.alive && x.merchant;
-            printf("   t=%4.0f convoy at s %5.0f / %.0f, %d afloat, sunk %d, in port %d, pirates sunk %d\n", g.time, g.voyageBest, g.RouteLength(), afloat,
-                   g.teamScore[1], g.teamScore[0], pirSunk);
+            float sMin = 1e9f, sMax = -1e9f, spd = 0.0f;
+            for (const Ship& x : g.ships)
+                if (x.active && x.alive && x.merchant) {
+                    afloat++;
+                    const float sx = g.RouteS(x.pos.x, x.pos.z);
+                    sMin = fminf(sMin, sx);
+                    sMax = fmaxf(sMax, sx);
+                    spd += Vector3Length(x.vel);
+                }
+            printf("   t=%4.0f convoy at s %5.0f / %.0f, %d afloat (spread %.0f m along the lane, %.1f m/s), sunk %d, in port %d, pirates sunk %d\n", g.time,
+                   g.voyageBest, g.RouteLength(), afloat, afloat ? sMax - sMin : 0.0f, afloat ? spd / afloat : 0.0f, g.teamScore[1], g.teamScore[0], pirSunk);
             for (const Ship& x : g.ships)
                 if (x.active && x.team == 1 && x.leader < 0)
                     printf("      %s at %.0f %.0f (s %.0f, inside %.0f m), %.1f m/s, %s, damage dealt %.0f, %s\n", x.name.c_str(), x.pos.x, x.pos.z, g.RouteS(x.pos.x, x.pos.z),

@@ -308,7 +308,6 @@ constexpr float despawn = 2700.0f;      // a pirate this far from every convoy s
 // how hard the host makes it (World::difficulty)
 enum Difficulty : uint8_t { EASY, NORMAL, HARD, DEADLY, DIFFICULTIES };
 struct Level {
-    int reservePer, reserveMin, joiner;  // ships in reserve: per captain who sets out, at least, and one more per captain joining under way
     float pirates;                       // how many hunt the convoy at once (x the normal number)
     float gap;                           // x the time between bands
     float grace;                         // s after leaving before the first pirates show up
@@ -317,14 +316,14 @@ struct Level {
     float aimErr;                        // rad of scatter in the pirates' aim
     float kraken, megalodon;             // chance a voyage meets each sea monster
     float monster;                       // how tough and how savage the monsters are (x)
-    float raidShips, raidNeed;           // raid: the convoy's size (x 3 + 2 per pirate captain), and the share of it to sink
+    float raidHull;                      // raid: the merchantmen's hulls (x) - four of them to every pirate, and every one must go down
     float bossHp, bossRate;              // boss: how much hull the Leviathan has (x), and how fast its patterns come (x)
 };
 inline constexpr Level kLevels[DIFFICULTIES] = {
-    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f, 0.8f, 0.5f, 0.55f, 0.65f},   // easy: fewer, slower, worse gunners, three ships each in reserve
-    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f, 1.0f, 0.6f, 1.0f, 1.0f},      // normal
-    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f, 1.25f, 0.7f, 1.3f, 1.25f},    // hard: one ship each in reserve, more and bigger pirates
-    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f, 1.5f, 0.8f, 1.6f, 1.5f},    // deadly: no reserve at all, sunk is out
+    {0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f, 1.3f, 0.55f, 0.65f},   // easy: fewer, slower, worse gunners
+    {1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f, 1.6f, 1.0f, 1.0f},      // normal
+    {1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f, 2.0f, 1.3f, 1.25f},    // hard: more and bigger pirates
+    {1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f, 2.4f, 1.6f, 1.5f},    // deadly
 };
 inline const char* const kDifficultyNames[DIFFICULTIES] = {"Easy", "Normal", "Hard", "Deadly"};
 }  // namespace voyage
@@ -763,7 +762,6 @@ public:
     bool realistic = false;          // host: real ship handling (speeds, turning, no jumps); the wind still blows where it likes
     uint8_t difficulty = voyage::NORMAL;  // host: the voyage's (voyage::kLevels)
     const voyage::Level& Diff() const { return voyage::kLevels[difficulty < voyage::DIFFICULTIES ? difficulty : voyage::NORMAL]; }
-    int StartReserve(int captains) const { return Diff().reservePer * captains > Diff().reserveMin ? Diff().reservePer * captains : Diff().reserveMin; }
     bool Real() const { return realistic; }  // (any mode, any arena, skills or not: the host's call)
     void UpdateHooks(float dt);
     bool predicting = false;

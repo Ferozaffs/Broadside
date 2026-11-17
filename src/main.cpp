@@ -989,14 +989,12 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             DisableCursor();
             if (curMode == MODE_VOYAGE) {
                 Feed("Welcome aboard. Take the convoy to the far harbour: pirates hunt it all the way.", ui::kText);
-                if (curDifficulty == voyage::DEADLY) Feed("Deadly: no ships in reserve. Sunk is out until the next voyage.", ui::kRed);
-                else Feed("Follow the dotted sea lane. Sunk ships rejoin the convoy while there are ships in reserve.", ui::kDim);
+                Feed("Follow the dotted sea lane. A disabled ship comes back when a friend lies alongside her for 10 s.", ui::kDim);
             } else if (curMode == MODE_BOSS) {
                 Feed("Welcome aboard. Something huge is coming round the islands: sink the Leviathan together!", ui::kText);
                 Feed("Its shot comes in patterns. Watch for the red rings on the water: that's where its mortars fall.", ui::kDim);
             } else if (curMode == MODE_RAID) {
-                Feed(TextFormat("Welcome aboard, pirate. A convoy sails for the far port: sink %d%% of it before the rest gets in!",
-                                (int)roundf(voyage::kLevels[curDifficulty].raidNeed * 100.0f)), ui::kText);
+                Feed("Welcome aboard, pirate. A convoy sails for the far port: sink every ship of it. If one gets in, the raid has failed!", ui::kText);
                 Feed("It follows the dotted sea lane. Lie in wait along it. The haven is your cove: repairs.", ui::kDim);
             } else
             Feed(curMode == MODE_TEAMS ? "Welcome aboard. Sink the other side!"
@@ -1598,7 +1596,7 @@ void Game::DrawResults(float W, float H) {
     } else if (curMode == MODE_RAID) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
         if (winTeam == 1) { title = "THE CONVOY IS TAKEN"; sub = TextFormat("%d of %d sunk   \xC2\xB7   %d got away   \xC2\xB7   %s", teamScore[1], raidTotal, teamScore[0], lvl); }
-        else if (winTeam == 0) { title = "THE CONVOY GOT AWAY"; tc = kRed; sub = TextFormat("%d of %d sunk (%d needed)   \xC2\xB7   %d made port   \xC2\xB7   %s", teamScore[1], raidTotal, raidNeed, teamScore[0], lvl); }
+        else if (winTeam == 0) { title = "THE CONVOY GOT AWAY"; tc = kRed; sub = TextFormat("%d of %d sunk   \xC2\xB7   one made port   \xC2\xB7   %s", teamScore[1], raidTotal, lvl); }
         else { title = "BECALMED"; tc = kText; sub = "the raid took too long"; }
     } else if (curMode == MODE_TEAMS) {
         if (winTeam < 0) { title = "A DRAW"; tc = kText; }
@@ -4465,8 +4463,8 @@ void Game::DrawHUD() {
         int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
         std::string t = raidTotal == 0
             ? std::string(TextFormat("RAID   \xC2\xB7   %s   \xC2\xB7   THE CONVOY IS MAKING READY TO SAIL", TextToUpper(voyage::kDifficultyNames[curDifficulty])))
-            : std::string(TextFormat("RAID   \xC2\xB7   %s   \xC2\xB7   CONVOY %d AFLOAT   \xC2\xB7   SUNK %d / %d   \xC2\xB7   IN PORT %d   \xC2\xB7   LEADER %.1f km OUT   \xC2\xB7   %d:%02d",
-                                     TextToUpper(voyage::kDifficultyNames[curDifficulty]), afloat, teamScore[1], raidNeed, teamScore[0],
+            : std::string(TextFormat("RAID   \xC2\xB7   %s   \xC2\xB7   CONVOY %d AFLOAT   \xC2\xB7   SUNK %d / %d   \xC2\xB7   NONE MAY MAKE PORT   \xC2\xB7   LEADER %.1f km OUT   \xC2\xB7   %d:%02d",
+                                     TextToUpper(voyage::kDifficultyNames[curDifficulty]), afloat, teamScore[1], raidNeed,
                                      fmaxf(0.0f, pred.RouteLength() - lead) / 1000.0f, el / 60, el % 60));
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
@@ -4483,10 +4481,15 @@ void Game::DrawHUD() {
             pirates += view[id].present && view[id].s.team == 1 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0;
         float togo = fmaxf(0.0f, pred.RouteLength() - sMe);
         int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
-        const bool noReserve = curDifficulty == voyage::DEADLY;  // (Deadly: none at all, sunk is out)
+        int afloat = 0, convoy = 0;
+        for (int id = 0; id < NumShips(); ++id) {
+            if (!view[id].present || view[id].s.team != 0 || view[id].s.leader >= 0) continue;
+            ++convoy;
+            afloat += (view[id].s.flags & SF_ALIVE) != 0;
+        }
         std::string t = TextFormat("%s   \xC2\xB7   SAFE HARBOUR %.1f km   \xC2\xB7   %s   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d   \xC2\xB7   %d:%02d",
                                    TextToUpper(voyage::kDifficultyNames[curDifficulty]), togo / 1000.0f,
-                                   noReserve ? "NO RESERVE" : TextFormat("RESERVE %d", teamScore[0]), pirates, teamScore[1], el / 60, el % 60);
+                                   TextFormat("AFLOAT %d / %d", afloat, convoy), pirates, teamScore[1], el / 60, el % 60);
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
@@ -4811,7 +4814,8 @@ void Game::DrawHUD() {
         } else
             Text(TextFormat("Dead in the water: a friend alongside for %d s brings you back with a quarter of your hull", (int)tune::reviveTime), W * 0.5f,
                  H * 0.5f - 72, 22, kText, false, Center);
-        Text("If every ship is disabled at once, the fight is lost", W * 0.5f, H * 0.5f - 18, 16, kDim, false, Center);
+        Text(curMode == MODE_VOYAGE ? "If every ship of the convoy is disabled at once, the voyage is lost" : "If every ship is disabled at once, the fight is lost",
+             W * 0.5f, H * 0.5f - 18, 16, kDim, false, Center);
     } else if (me && !alive) {
         Text("SUNK", W * 0.5f, H * 0.5f - 150, 72, kRed, true, Center);
         if (curMode == MODE_VOYAGE && (me->flags & SF_LOST))

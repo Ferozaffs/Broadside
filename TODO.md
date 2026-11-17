@@ -589,6 +589,26 @@ Protocol 25.
   card, and on the harbour marker. BS_HARBOURTEST=1 --simtest checks it.
 - Read "Repair should take 10 seconds" as the revive (a friend alongside for 10 s); harbour repair keeps its rate.
 
+## Voyage revives, convoy AI, a harder raid (2026-11-17, user: "Revive mechanic should be present in voyage mode as
+## well. The AI in voyage and raid must be smarter as well so they keep moving and trying to avoid combat and stay with
+## the formation. For raid the voyage should be 4x the number of ships than pirates and have more health ... only a
+## single boat have to reach port for pirates to lose")
+- [x] Voyage: the convoy's captains are disabled, not sunk (Damage: down for MODE_VOYAGE too), UpdateRevives runs
+  there, no reserve (Level lost reservePer / reserveMin / joiner, World::StartReserve gone). Lost: every convoy captain
+  disabled at once; made it: every human afloat in the far harbour and nobody disabled. Banner: AFLOAT n / m.
+- [x] Convoy helm (BotThink, voyage and raid): no turning to fight (fight = false; the guns still fire at whatever
+  bears). A formation down the lane: raid 3 columns 55 m apart round the merchants' mean route-s, at 0.85 x the
+  slowest one's top speed; voyage 2 columns 60 m either side of the humans' mean s (+30 m), at their speed along the
+  lane. Rows 75 m apart; sail = (pace + 0.12 x how far off station) / own top. A pirate inside 170 m edges the station
+  up to 35 m away from her side. The last 700 m: full sail; berthing as before. Voyage bots go back to revive (aid,
+  worked out at the top of BotThink now, shared with boss mode). The monster circling is gone (they still shoot them).
+- [x] Raid: 4 merchants per pirate captain (4..40), hulls x Level::raidHull (1.3 / 1.6 / 2.0 / 2.4), raidNeed = all of
+  them, one in port ends it (pirates lost).
+- Bot runs. Raid (3 bot pirates, Normal): 12 merchants, formation spread ~230 m along the lane the whole way at
+  15-18 m/s, 3 sunk, the first made port at 615 s (bots alone can't take it now; humans should). Voyage (4 bot
+  captains, no humans): 6 revives, lost at s 5100 of 9790 to 6 pirates and the megalodon (with nobody fighting back
+  only 2 pirates sunk).
+
 ## Playtest list (2026-11-17, user: "add friendly fire so bots play less chaotic, also red team spawn in the wrong directions.
 ## Respawns should be close to harbor. Realistic mode could need a little better turn rate. Escort should have less hp so a
 ## full salvo from a cutter kills on ... crew should have way higher fire rate like 5-10x ... climb up an be lookout.

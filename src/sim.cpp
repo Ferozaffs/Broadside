@@ -1273,7 +1273,6 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     voyageBest = 0.0f;
     voyageWinner = -1;
     for (Monster& m : monsters) m = Monster{};  // (the next voyage rolls its own)
-    if (mode == MODE_VOYAGE) teamScore[0] = StartReserve(1);
     raidTotal = raidNeed = 0;
     bossId = -1;
     bossPhase = bossPat = 0;
@@ -1368,7 +1367,6 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         }
         if (mode == MODE_VOYAGE) {
             ships[i].team = 0;  // (the convoy; the pirates come later, see UpdateVoyage)
-            if (voyageClock >= 5.0f && !bot) teamScore[0] += Diff().joiner;  // a captain joining under way brings a ship (not on Deadly)
         }
         if (mode == MODE_RAID) ships[i].team = 1;  // (everyone sails with the pirates; the convoy is the server's, SpawnConvoy)
         if (mode == MODE_BOSS) {
@@ -1560,20 +1558,15 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (mode == MODE_TEAMS && ships[killer].team >= 0) teamScore[ships[killer].team]++;
         }
         if (mode == MODE_RAID && v.merchant) teamScore[1]++;  // a prize sunk
-        const bool down = mode == MODE_BOSS && v.team == 0 && v.leader < 0;  // one of us: disabled, afloat, until a friend comes alongside
+        // one of us (boss mode, the voyage's convoy): disabled, afloat, until a friend comes alongside
+        const bool down = (mode == MODE_BOSS || mode == MODE_VOYAGE) && v.team == 0 && v.leader < 0 && !v.raider;
         if (down) {
             v.downed = true;
             v.reviveT = 0.0f;
             v.held = 0.0f;
             v.hooked = -1;
         }
-        if (mode == MODE_VOYAGE) {
-            if (v.raider) teamScore[1]++;  // pirates sunk (by anyone, the rocks included)
-            else if (v.leader < 0) {       // a convoy ship: back with the others while there are ships in reserve
-                if (teamScore[0] > 0) teamScore[0]--;
-                else v.lost = true;
-            }
-        }
+        if (mode == MODE_VOYAGE && v.raider) teamScore[1]++;  // pirates sunk (by anyone, the rocks included)
         GameEvent e{EventType::Kill};
         e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
         e.b = v.id;
@@ -2411,6 +2404,23 @@ void World::BotThink(Ship& s, float dt) {
     float wallLimit = 600.0f;  // how far out this ship may sail before it turns for the middle
     Vector3 goal{};
     const Ship* cap = s.leader >= 0 && ships[s.leader].active ? &ships[s.leader] : nullptr;
+    // boss mode, the voyage's convoy: a friend disabled - the nearest bot goes and lies alongside her (unless
+    // somebody's there already), whatever else is going on (the Armada's line included)
+    const Ship* aid = nullptr;
+    float aidDist = 900.0f;
+    if ((mode == MODE_BOSS || mode == MODE_VOYAGE) && s.team == 0 && s.leader < 0 && !s.raider)
+        for (const Ship& d : ships) {
+            if (!d.active || d.alive || !d.downed || d.id == s.id) continue;
+            const float dd = Vector2Distance({s.pos.x, s.pos.z}, {d.pos.x, d.pos.z});
+            if (dd >= aidDist) continue;
+            bool covered = false;
+            for (const Ship& o : ships) {
+                if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
+                const float od = Vector2Distance({o.pos.x, o.pos.z}, {d.pos.x, d.pos.z});
+                if (od < tune::reviveRadius || (o.isBot && o.leader < 0 && od < dd)) { covered = true; break; }
+            }
+            if (!covered) { aid = &d; aidDist = dd; }
+        }
     if (mode == MODE_RACE && s.leader < 0 && !raceLine.empty()) {  // racing: down the strait, dashing on the straights
         fight = false;
         haveGoal = true;
@@ -2516,46 +2526,73 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
         }
     } else if (Voyaging() && s.leader < 0 && s.team == 0 && !route.empty()) {
-        // the convoy: down the sea lane for the far harbour, each in a lane of its own, keeping with the human ships
-        // (never far ahead of the hindmost), and turning to fight only what comes close
+        // The convoy: down the sea lane for the far harbour in formation, at one pace, keeping station instead of
+        // turning aside to fight - the guns fire at whatever bears as it sails by (below). Raid: the merchants keep
+        // together, three columns, at the pace of the slowest of them. Voyage: the bots sail in two columns either
+        // side of the players' ships, at the players' pace, and go back for a friend who's been disabled.
         const float sNow = RouteS(s.pos.x, s.pos.z), spd = Vector2Length({s.vel.x, s.vel.z});
-        float rear = 1e9f;
-        for (const Ship& o : ships)
-            if (o.active && o.alive && o.leader < 0 && o.team == 0 && (mode == MODE_RAID || !o.isBot)) rear = fminf(rear, RouteS(o.pos.x, o.pos.z));
-        const float keep = mode == MODE_RAID ? 250.0f : 300.0f;  // (raid: the merchants keep together, the stragglers are the prizes)
-        const float look = Clamp(90.0f + spd * 3.0f, 100.0f, 200.0f), lane = (float)((s.id * 7) % 5) - 2.0f;
-        Vector2 p = RouteAt(sNow + look), d = Vector2Normalize(Vector2Subtract(RouteAt(sNow + look + 15.0f), RouteAt(sNow + look - 15.0f)));
-        goal = {p.x + d.y * lane * 22.0f, 0.0f, p.y - d.x * lane * 22.0f};
+        auto topOf = [&](const Ship& o) {
+            return ClassOf(o.cls).topSpeed * (o.merchant ? 0.72f : 1.0f) * (Real() ? tune::realSpeed : 1.0f) * (o.trimmed ? tune::trimSpeed : 1.0f);
+        };
+        auto routeDir = [&](float at) { return Vector2Normalize(Vector2Subtract(RouteAt(at + 15.0f), RouteAt(fmaxf(0.0f, at - 15.0f)))); };
+        int slot = 0, members = 0, nRef = 0, nAll = 0;
+        float sumS = 0.0f, sumV = 0.0f, allS = 0.0f, slowest = 1e9f;
+        for (const Ship& o : ships) {
+            if (!o.active || !o.alive || o.stowed || o.leader >= 0 || o.team != 0 || o.raider) continue;
+            const float so = RouteS(o.pos.x, o.pos.z);
+            ++nAll;
+            allS += so;
+            slowest = fminf(slowest, topOf(o));
+            if (o.isBot) {
+                ++members;
+                if (o.id < s.id) ++slot;
+            }
+            if (mode == MODE_RAID || !o.isBot) {  // (the voyage: the players set the pace and the place)
+                const Vector2 rd = routeDir(so);
+                ++nRef;
+                sumS += so;
+                sumV += o.vel.x * rd.x + o.vel.z * rd.y;
+            }
+        }
+        const bool raid = mode == MODE_RAID;
+        const int cols = raid ? 3 : 2, rows = (members + cols - 1) / cols, row = slot / cols, col = slot % cols;
+        const float anchorS = nRef ? sumS / nRef : nAll ? allS / nAll : sNow;
+        float vRef = raid ? slowest * 0.85f : (nRef ? fmaxf(0.0f, sumV / nRef) : slowest * 0.85f);
+        if (!raid && nRef == 0) vRef = slowest * 0.85f;
+        const float stationS = anchorS + ((rows - 1) * 0.5f - row) * 75.0f + (raid ? 0.0f : 30.0f);
+        float lateral = raid ? (col - 1) * 55.0f : (col == 0 ? -60.0f : 60.0f);
+        // a pirate close aboard: edge the station away from her side (keep going, give her less to shoot at)
+        if (target && best < 170.0f) {
+            const Vector2 rd = routeDir(sNow), rel = {target->pos.x - s.pos.x, target->pos.z - s.pos.z};
+            lateral += (rel.x * rd.y - rel.y * rd.x > 0.0f ? -1.0f : 1.0f) * 35.0f * (1.0f - best / 170.0f);
+        }
+        const float look = Clamp(90.0f + spd * 3.0f, 100.0f, 200.0f);
+        Vector2 p = RouteAt(sNow + look), d = routeDir(sNow + look);
+        goal = {p.x + d.y * lateral, 0.0f, p.y - d.x * lateral};
         if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = {p.x, 0.0f, p.y};
         haveGoal = true;
+        fight = false;
+        // the pace: the convoy's, plus whatever closes on the station (the drive is a speed controller: sail =
+        // wanted speed / top speed); never so slow she loses steerage
+        const float err = stationS - sNow;
+        in.sail = Clamp((vRef + err * 0.12f) / fmaxf(topOf(s), 1.0f), raid ? 0.25f : 0.15f, 1.0f);
         const Harbour& dest = harbours[voyage::endHarbour];
-        const bool last = sNow > RouteLength() - 700.0f;  // the last stretch: straight in, no stopping to fight
-        if (voyageClock < 3.0f) in.sail = 0.0f;              // (all together: nobody sails before the convoy does)
+        const bool last = sNow > RouteLength() - 700.0f;  // the last stretch: straight in
+        if (last) in.sail = 1.0f;
+        if (voyageClock < 3.0f) in.sail = 0.0f;  // (all together: nobody sails before the convoy does)
         const bool berthing = sNow > RouteLength() - 350.0f;
         if (berthing) {  // in to the harbour at the end, each to a berth of its own (all for one spot, they pile up on the rocks)
-            int slot = 0;
+            int b = 0;
             for (const Ship& o : ships)
-                if (o.active && o.leader < 0 && !o.raider && o.id < s.id) ++slot;
+                if (o.active && o.leader < 0 && !o.raider && o.id < s.id) ++b;
             Vector2 inw = {-cosf(dest.ang), -sinf(dest.ang)}, side = {-inw.y, inw.x};
-            float back = 15.0f + (float)((slot % 6) / 3) * 40.0f, across = (float)(slot % 3 - 1) * 42.0f;
+            float back = 15.0f + (float)((b % 6) / 3) * 40.0f, across = (float)(b % 3 - 1) * 42.0f;
             goal = {dest.x + inw.x * back + side.x * across, 0.0f, dest.z + inw.y * back + side.y * across};
+            if (flat(goal, s.pos) < 25.0f) in.sail = 0.0f;  // made it: heave to
         }
-        if (rear < 1e8f && sNow > rear + keep && !last) in.sail = Clamp(1.0f - (sNow - rear - keep) / 200.0f, 0.25f, 1.0f);  // wait for them
-        if (berthing && flat(goal, s.pos) < 25.0f) in.sail = 0.0f;  // made it: heave to
-        fight = target && best < (mode == MODE_RAID ? 230.0f : 300.0f) && !last;
-        if (fight) haveGoal = false;
-        for (const Monster& m : monsters) {  // a sea monster at one of ours: round it at a cable or so, guns bearing
-            if (mode == MODE_RAID || !MonsterShootable(m) || m.state == MS_DEAD || last || (m.type == MON_KRAKEN && m.target == s.id)) continue;
-            float dm = flat(m.pos, s.pos);
-            if (dm > 750.0f || (target && best < 150.0f)) continue;
-            Vector2 away = Vector2Normalize({s.pos.x - m.pos.x, s.pos.z - m.pos.z});
-            float r = m.type == MON_KRAKEN ? 85.0f : 110.0f, a = atan2f(away.x, away.y) + 0.55f;
-            goal = {m.pos.x + sinf(a) * r, 0.0f, m.pos.z + cosf(a) * r};
-            if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = m.pos;
-            haveGoal = true;
-            fight = false;
-            in.sail = 1.0f;
-            break;
+        if (aid && !berthing) {  // a friend disabled: go and lie alongside her
+            goal = aid->pos;
+            in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
         }
     } else if (s.pirate) {  // carrying the treasure: run for the cove, shooting on the way
         if (!harbours.empty()) {
@@ -2620,23 +2657,6 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
         }
     }
-    // boss mode: a friend disabled - the nearest bot goes and lies alongside her (unless somebody's there already),
-    // whatever else is going on (the Armada's line included)
-    const Ship* aid = nullptr;
-    float aidDist = 900.0f;
-    if (mode == MODE_BOSS && s.team == 0 && s.leader < 0)
-        for (const Ship& d : ships) {
-            if (!d.active || d.alive || !d.downed || d.id == s.id) continue;
-            const float dd = Vector2Distance({s.pos.x, s.pos.z}, {d.pos.x, d.pos.z});
-            if (dd >= aidDist) continue;
-            bool covered = false;
-            for (const Ship& o : ships) {
-                if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
-                const float od = Vector2Distance({o.pos.x, o.pos.z}, {d.pos.x, d.pos.z});
-                if (od < tune::reviveRadius || (o.isBot && o.leader < 0 && od < dd)) { covered = true; break; }
-            }
-            if (!covered) { aid = &d; aidDist = dd; }
-        }
     bool lineStands = false;
     if (mode == MODE_BOSS && bossKind == BOSS_ARMADA)
         for (const Ship& l : ships) lineStands |= l.active && l.alive && (l.formation >= 0 || l.fireship);
@@ -3411,7 +3431,7 @@ void World::StartRound() {
         voyageBest = 0.0f;
         voyageWinner = -1;
         for (Monster& m : monsters) m = Monster{};  // (the next voyage rolls its own)
-        teamScore[0] = mode == MODE_VOYAGE ? StartReserve(1) : 0;
+        teamScore[0] = 0;
         for (Crate& c : crates) {
             c.active = false;
             c.timer = 0.5f + 0.4f * c.id;
@@ -3724,7 +3744,7 @@ void World::Step() {
     if (mode == MODE_VOYAGE && matchState == 0) UpdateVoyage(dt);
     if (mode == MODE_RAID && matchState == 0) UpdateRaid(dt);
     if (mode == MODE_BOSS && matchState == 0) UpdateBoss(dt);
-    if (mode == MODE_BOSS && matchState == 0) UpdateRevives(dt);
+    if ((mode == MODE_BOSS || mode == MODE_VOYAGE) && matchState == 0) UpdateRevives(dt);
     if (Voyaging() && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
 }
@@ -3835,21 +3855,20 @@ void World::UpdateVoyage(float dt) {
         if (!s.active || s.leader >= 0 || s.raider) continue;
         ++convoy;
         humans |= !s.isBot;
-        alive |= s.alive || !s.lost;
+        alive |= s.alive;  // (every one of us disabled at once: the voyage is lost)
         if (s.alive) {
             afloat.push_back(&s);
             voyageBest = fmaxf(voyageBest, RouteS(s.pos.x, s.pos.z));
         }
     }
     if (!convoy) return;
-    if (voyageClock < 5.0f) teamScore[0] = StartReserve(convoy);  // (so many per captain who sails from the start)
     // made it: every (human) convoy ship afloat is in the far harbour, and none is waiting to rejoin
     const Harbour& dest = harbours[voyage::endHarbour];
     bool home = !afloat.empty();
     for (const Ship& s : ships) {
         if (!s.active || s.leader >= 0 || s.raider || (humans && s.isBot)) continue;
-        if (!s.alive) {
-            if (!s.lost) home = false;
+        if (!s.alive) {  // (disabled: she must be brought round and brought in)
+            home = false;
             continue;
         }
         if (Vector2Distance({s.pos.x, s.pos.z}, {dest.x, dest.z}) > tune::harbourRadius) home = false;
@@ -4347,9 +4366,9 @@ static const char* kMerchantNames[] = {"Providence", "Endeavour", "Good Hope", "
 void World::SpawnConvoy() {
     int pirates = 0;
     for (const Ship& s : ships) pirates += s.active && s.leader < 0 && s.team == 1;
-    int n = (int)roundf((3.0f + 2.0f * std::max(pirates, 1)) * Diff().raidShips);
+    int n = 4 * std::max(pirates, 1);
     if (const char* e = getenv("BS_RAIDSHIPS")) n = atoi(e);  // (tests)
-    n = std::max(3, std::min(n, 30));
+    n = std::max(4, std::min(n, 40));
     raidTotal = 0;
     for (int k = 0; k < n; ++k) {
         int j = NewShipSlot();
@@ -4366,11 +4385,11 @@ void World::SpawnConvoy() {
         m.cls = m.nextCls = (uint8_t)(v < 0.35f - 0.25f * big ? SC_CUTTER : v < 0.85f - 0.3f * big ? SC_FRIGATE : SC_LINE);
         m.name = k < 24 ? std::string(kMerchantNames[k]) : std::string(kMerchantNames[k % 24]) + " " + std::to_string(k / 24 + 1);
         PlaceInHarbour(m, voyage::startHarbour, k);
-        m.maxHp = m.hp = MaxHpOf(m);
+        m.maxHp = m.hp = MaxHpOf(m) * Diff().raidHull;  // (stout merchantmen, deep-laden)
         m.alive = true;
         raidTotal++;
     }
-    raidNeed = std::max(1, std::min(raidTotal, (int)ceilf(raidTotal * Diff().raidNeed)));
+    raidNeed = raidTotal;  // (all of them: one in port and the raid has failed)
 }
 
 // A pirate into the fight. Before the convoy has sailed: lying in wait a few kilometres up the lane, off to one side.
@@ -4439,8 +4458,8 @@ void World::UpdateRaid(float dt) {
             RemoveShip(m.id);
         }
     }
-    // taken (enough of it sunk), or got away (too many in port for that ever to happen)
-    if (raidTotal > 0 && (teamScore[1] >= raidNeed || raidTotal - teamScore[0] < raidNeed)) {
+    // taken (every one of them sunk), or one got away: the raid has failed
+    if (raidTotal > 0 && (teamScore[1] >= raidNeed || teamScore[0] > 0)) {
         voyageWinner = teamScore[1] >= raidNeed ? 1 : 0;
         EndRound(true);
     }
