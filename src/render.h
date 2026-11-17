@@ -40,6 +40,7 @@ public:
     bool shadowsReady[2] = {false, false};
     Texture2D noiseTex{};  // tiling fractal noise (4 channels) for procedural surfaces
     unsigned int shoreTex = 0;  // calm-water map (R8), uploaded per match
+    int shoreTexN = 0;
     float shoreExtent = 0.0f;
     void SetShoreDamp(const std::vector<unsigned char>& grid, int n, float extent);
     // Wake map: the whole arena seen from above, redrawn every frame (r = foam, g = churned water,

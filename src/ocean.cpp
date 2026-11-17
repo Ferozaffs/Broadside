@@ -276,8 +276,8 @@ void OceanCPU::Update(double time) {
 
 float OceanCPU::DampAt(float x, float z) const {
     if (damp.empty()) return 1.0f;
-    const int N = DAMP_N;
-    float u = (x / (2.0f * DAMP_EXTENT) + 0.5f) * N - 0.5f, v = (z / (2.0f * DAMP_EXTENT) + 0.5f) * N - 0.5f;
+    const int N = dampN;
+    float u = (x / (2.0f * dampExtent) + 0.5f) * N - 0.5f, v = (z / (2.0f * dampExtent) + 0.5f) * N - 0.5f;
     u = fminf(fmaxf(u, 0.0f), N - 1.001f);
     v = fminf(fmaxf(v, 0.0f), N - 1.001f);
     int i = (int)u, j = (int)v;

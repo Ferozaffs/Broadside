@@ -28,6 +28,7 @@ public:
 private:
     struct Island {
         Mesh mesh{};
+        Mesh far{};  // a coarse copy for a long way off (a third of the rings and segments, a third of the trees)
         Vector3 centre{};
         float radius = 0;
     };
@@ -39,7 +40,8 @@ private:
     struct Port {
         Vector3 dock{}, lamp{};
         Vector2 out{};  // unit vector from the centre towards the island
-        float pierFrom = 0, pierTo = 0;  // radii
+        Vector2 base{}; // where the centre would be if the harbour sat 730 m out from it (the Isles: the centre)
+        float pierFrom = 0, pierTo = 0;  // distances out from base
         float ang = 0;
         Mesh mesh{};       // everything that doesn't move: pier, pilings, pier head, lighthouse, sheds
         bool hasMesh = false;

@@ -79,7 +79,7 @@ They are escorts only, not a ship you can pick.
 The host picks the game in the menu:
 
 - **Free-for-all**: everyone against everyone. First to 12 sinkings.
-- **Teams**: red against blue. No friendly fire; each side has a home harbour. First side to 20 sinkings.
+- **Teams**: red against blue; each side has a home harbour. First side to 20 sinkings.
 - **Pirate**: one treasure chest surfaces somewhere out on the bay and everyone races for it. Whoever hauls it
   aboard turns pirate (black sails, a slightly tougher hull and a faster reload, but much slower, no Fair Wind and
   no repairs) and has to sail it to the harbour flying the black flag - always far away, and a different one for
@@ -96,6 +96,19 @@ The host picks the game in the menu:
   and a tall stack off its point for exactly that). Guns run out 5 seconds after the start.
   Sunk means crippled: you're patched up on the spot but sail at 40% for 4 seconds (and can't be crippled again
   meanwhile). Every match gets a new layout: the order of the narrows, island, stacks and dogleg changes.
+- **Voyage** (co-op): everyone sails together as one convoy from a harbour at one end of **the Passage** to a safe
+  harbour at the other, while pirates hunt it all the way. The Passage is its own sea, about 9 km long and 3 km wide
+  (some twelve times the Isles): high coast all round, an archipelago of islands, islets and sea stacks in between,
+  and a haven with shipwrights halfway up one side. A dotted sea lane on the water shows a way through, and the safe
+  harbour is marked all the way. The menu's bot count becomes your **allies**: bot captains who sail in the convoy,
+  keep with the human ships and fight off whatever comes close. The pirates (black sails) turn up out of the haze in
+  bands, mostly astern or abeam, sometimes lying in wait ahead; "PIRATES SIGHTED" tells you where. There are more of
+  them, and bigger ships, the further you get, and they sail faster while they're out of range. They keep clear of
+  the haven and the safe harbour (the forts' guns). Sunk ships rejoin the convoy, astern of whoever is furthest on,
+  while the convoy has ships in **reserve** (two per captain who sets out, one more for each who joins under way);
+  with none left a sunk ship is out until the next voyage. Every human captain afloat in the safe harbour (and
+  nobody waiting to rejoin) wins it; every ship sunk loses it. Takes about 6-10 minutes in Arcade, half an hour in
+  Realistic. Works with fleets, skills, crew, friendly fire and both handlings.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
@@ -167,7 +180,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
+(also `--mode voyage`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

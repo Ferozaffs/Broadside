@@ -61,10 +61,17 @@ public:
     const OceanParams& Params() const { return params; }
     // Calm water near land: a grid of wave-height multipliers (0..255 = 0..1) over [-extent, extent]^2,
     // sampled bilinearly at texel centres exactly like the GPU does with the same texture.
+    // (the ring arenas use DAMP_N cells over DAMP_EXTENT; the voyage's long sea a bigger grid)
     static constexpr int DAMP_N = 256;
     static constexpr float DAMP_EXTENT = 1300.0f;
-    void SetDamp(const std::vector<unsigned char>& grid) { damp = grid; }
+    void SetDamp(const std::vector<unsigned char>& grid, int n = DAMP_N, float extent = DAMP_EXTENT) {
+        damp = grid;
+        dampN = n;
+        dampExtent = extent;
+    }
     const std::vector<unsigned char>& Damp() const { return damp; }
+    int DampN() const { return dampN; }
+    float DampExtent() const { return dampExtent; }
     float DampAt(float x, float z) const;
     bool Ready() const { return ready; }
     // the maelstrom arena: a whirlpool's funnel and current on top of the waves (see maelstrom.h)
@@ -83,5 +90,7 @@ private:
     // spatial fields: dx, dz, h, ht, dxt, dzt (6 floats per cell)
     std::vector<float> field;
     std::vector<unsigned char> damp;
+    int dampN = DAMP_N;
+    float dampExtent = DAMP_EXTENT;
     bool vortex = false;
 };

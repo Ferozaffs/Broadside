@@ -90,7 +90,7 @@ constexpr float gunTraverse = 0.6f;        // rad the carriages swing either sid
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
-constexpr int scoreLimit[4] = {12, 20, 5, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race: none)
+constexpr int scoreLimit[5] = {12, 20, 5, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage: none)
 // race: a sprint from one harbour to the far one through gates; sunk = crippled (slowed a while), not out
 constexpr float raceLength = 180.0f;       // s before a race is called off
 constexpr float raceCountdown = 4.0f;      // s held on the start line (3, 2, 1, go)
@@ -117,6 +117,7 @@ constexpr float rapidReload = 0.4f;        // reload time multiplier
 constexpr float speedBoost = 1.4f;         // top speed / acceleration multiplier
 constexpr int barrageBalls = 3;            // balls per gun with the barrage power-up
 constexpr float respawnTime = 7.0f;
+constexpr float voyageLength = 3600.0f;    // s: the voyage's time limit (it ends when the convoy makes harbour or is sunk)
 // fleets, harbours and game modes
 constexpr int fleetSize = 3;               // AI escorts per captain when fleets are on
 constexpr float escortHp = 14.0f;         // (the gunboat class's hull: one full cutter broadside, every ball home, sinks one)
@@ -194,7 +195,7 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
 
 // ---- game modes and harbours -----------------------------------------------------
-enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_COUNT = 4 };
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_COUNT = 5 };
 // arenas (host option): the island ring, or the same ring with a maelstrom in the middle (maelstrom.h).
 // The race courses (race mode always sails one of them, nothing else does): a long channel between cliffs, start at
 // one end, finish at the other. The strait runs straight down the z axis; the serpent is an S of two sweeping bends,
@@ -202,11 +203,12 @@ enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RA
 enum Arena : uint8_t {
     ARENA_ISLES = 0, ARENA_MAELSTROM = 1,
     ARENA_STRAIT = 2, ARENA_SERPENT = 3, ARENA_HAIRPIN = 4, ARENA_ZIGZAG = 5,
-    ARENA_COUNT = 6
+    ARENA_PASSAGE = 6,  // the voyage (co-op): a long sea between two harbours, an archipelago in between
+    ARENA_COUNT = 7
 };
 constexpr uint8_t ARENA_RACE_ANY = 255;  // host option for a race: a different course every round
-constexpr int RACE_COURSES = ARENA_COUNT - ARENA_STRAIT;
-inline bool RaceArena(int a) { return a >= ARENA_STRAIT && a < ARENA_COUNT; }
+constexpr int RACE_COURSES = ARENA_ZIGZAG - ARENA_STRAIT + 1;
+inline bool RaceArena(int a) { return a >= ARENA_STRAIT && a <= ARENA_ZIGZAG; }
 inline const char* RaceCourseName(int a) {
     static const char* const n[RACE_COURSES] = {"the Strait", "the Serpent", "the Hairpin", "the Zigzag"};
     return RaceArena(a) ? n[a - ARENA_STRAIT] : "the course";
@@ -217,11 +219,25 @@ constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind 
 constexpr float finishZ = 1000.0f;  // the finish line, right across the channel
 constexpr float endZ = 1260.0f;     // the cliffs that close off each end
 }  // namespace strait
+// The voyage's sea (ARENA_PASSAGE): a rounded oblong of coast, about passageA across either side of the middle and
+// passageB from the middle to either end, its long way along z. The convoy leaves harbour 0 at the south end (-z) for
+// harbour 1 at the north end; harbour 2, halfway along one side, is a haven on the way.
+namespace voyage {
+constexpr float passageA = 1550.0f, passageB = 4900.0f;  // m: the coastline's half width and half length
+constexpr float exponent = 4.0f;                         // its shape: |x/A|^n + |z/B|^n = 1 (4: an oblong with round corners)
+constexpr int startHarbour = 0, endHarbour = 1, haven = 2;
+constexpr int reserve = 3;              // ships the convoy can lose and still rejoin (shared; at least this, two per captain)
+constexpr float fortRange = 550.0f;     // m round the haven and the far harbour the pirates won't come
+constexpr float graceTime = 35.0f;      // s after leaving before the first pirates show up
+constexpr float spawnMin = 1050.0f;     // m from the nearest convoy ship a pirate turns up (out of sight in the haze)
+constexpr float despawn = 2700.0f;      // a pirate this far from every convoy ship for a while gives up the chase
+constexpr float pirateCatchUp = 0.35f;  // pirates far from their prey sail this much faster (they know these waters)
+}  // namespace voyage
 struct Harbour {
     float x, z;  // where ships tie up (the pier runs from here to the island behind it)
-    float ang;   // bearing from the arena centre
+    float ang;   // the way out to the pier and the island behind it (on the Isles: the bearing from the arena centre)
 };
-std::vector<Harbour> MakeHarbours(uint32_t seed);
+std::vector<Harbour> MakeHarbours(uint32_t seed, uint8_t arena = ARENA_ISLES);
 // Who may use harbour i: -1 anyone, else that team (in pirate mode team 1 is the pirate, harbour 0 his cove)
 int HarbourOwner(int mode, int i);
 
@@ -265,7 +281,10 @@ constexpr float raceLineStep = 10.0f;
 bool RockHookOk(const std::vector<Rock>& rocks, Vector3 p);
 constexpr int16_t HOOK_ROCK = 32766;  // PlayerInput::hookTarget / Ship::hooked: a line made fast to the rocks at hookAnchor
 // Wave-height multipliers for OceanCPU::SetDamp: full sea in open water, calm in the lee of the land
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false, float calmDist = tune::shoreCalmDist);
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool maelstrom = false, float calmDist = tune::shoreCalmDist,
+                                         int n = 256, float extent = 1300.0f);
+// the voyage's sea: how far inside its coastline's oblong a point is (m, negative outside), and the way in
+float PassageInside(float x, float z, Vector2* in = nullptr);
 float RockCoast(const Rock& k, float ang);       // coastline radius at a bearing from the centre
 float RockHeight(const Rock& k, float x, float z);  // surface height (below 0 = seabed slope)
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z);  // max over all rocks (-1e9 if none near)
@@ -379,6 +398,9 @@ struct Ship {
     float raceTime = 0.0f;  // s from the start to the finish line
     float raceSide = 0.0f;  // which side of the next gate we were on last tick (along its way through)
     float slowTimer = 0.0f; // crippled: s left at reduced speed
+    bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
+    bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
+    float raiderIdle = 0.0f;  // voyage: s this pirate has been far from every convoy ship
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
     int booty = 0;        // pirate: chests aboard
@@ -517,6 +539,23 @@ public:
     Vector2 raceStart{}, raceStartDir{0, 1};
     float raceClock = 0.0f;  // s since the round started (the first raceCountdown of it on the start line)
     int raceFinished = 0;
+    // voyage: the sea lane from the start harbour to the destination (every raceLineStep m; the bots follow it, the
+    // HUD shows it), how far along it a point is, and the point s m along it
+    std::vector<Vector2> route;
+    float RouteS(float x, float z) const;
+    Vector2 RouteAt(float s) const;
+    float RouteLength() const { return route.size() > 1 ? (route.size() - 1) * raceLineStep : 0.0f; }
+    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE; }
+    // how far beyond the open water a point is (0 inside; voyage: beyond the oblong, elsewhere beyond the ring),
+    // and which way is back in
+    float OutOfBounds(float x, float z, Vector2* home = nullptr) const;
+    float voyageClock = 0.0f;   // s since the convoy sailed
+    float voyageSpawn = 0.0f;   // s to the next pirate sighting
+    float voyageWait = 0.0f;    // s the convoy has waited in harbour for someone to come aboard
+    int voyagePirates = 0;      // pirates that have turned up this voyage (for their names)
+    float voyageBest = 0.0f;    // furthest any convoy ship has got along the route (m)
+    float havenS = 0.0f;        // how far along the route the haven lies
+    int voyageWinner = -1;      // (for EndRound) 0 the convoy made it, 1 the pirates took it
     bool RaceHeld() const { return mode == MODE_RACE && matchState == 0 && raceClock < tune::raceCountdown; }
     float DashCooldown() const { return mode == MODE_RACE ? tune::raceDashCooldown : tune::dashCooldown; }
     float HookCooldown() const { return mode == MODE_RACE ? tune::raceHookCooldown : tune::hookCooldown; }
@@ -576,6 +615,10 @@ private:
     Vector3 SlotPos(const Ship& captain, int slot) const;
     void UpdateHarbours(float dt);
     void UpdateRace(float dt);
+    void UpdateVoyage(float dt);
+    void SpawnRaider(Vector2 at, float heading, int cls);
+    bool PlaceInConvoy(Ship& s);  // voyage respawn: astern of the convoy ship furthest along (false: none afloat)
+    void PlaceInHarbour(Ship& s, int h, int slot);
     void PlaceOnGrid(Ship& s);
     uint32_t seedUsed = 0;
     void UpdateChests(float dt);

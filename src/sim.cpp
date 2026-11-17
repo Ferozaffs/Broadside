@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
+#include <queue>
 
 // ============================================================================
 // Hull shape
@@ -51,7 +53,315 @@ struct Lcg {
 };
 }  // namespace
 
-std::vector<Harbour> MakeHarbours(uint32_t seed) {
+// ---- the voyage's sea ------------------------------------------------------------------
+// A rounded oblong of coast (overlapping islands, like the ring), the start harbour in the south end, the destination in
+// the north end and a haven halfway up one side; an archipelago and sea stacks scattered over the water between.
+namespace {
+float PassageLevel(float x, float z) {  // 1 on the coastline's oblong, less inside
+    const float n = voyage::exponent;
+    return powf(powf(fabsf(x) / voyage::passageA, n) + powf(fabsf(z) / voyage::passageB, n), 1.0f / n);
+}
+Vector2 PassageCoast(float t) {
+    float c = cosf(t), s = sinf(t), e = 2.0f / voyage::exponent;
+    return {voyage::passageA * copysignf(powf(fabsf(c), e), c), voyage::passageB * copysignf(powf(fabsf(s), e), s)};
+}
+}  // namespace
+
+float PassageInside(float x, float z, Vector2* in) {
+    const float e = 5.0f;
+    float l = PassageLevel(x, z);
+    float gx = (PassageLevel(x + e, z) - PassageLevel(x - e, z)) / (2 * e), gz = (PassageLevel(x, z + e) - PassageLevel(x, z - e)) / (2 * e);
+    float g = sqrtf(gx * gx + gz * gz);
+    if (g < 1e-7f) {
+        if (in) *in = {0.0f, z > 0.0f ? -1.0f : 1.0f};
+        return voyage::passageA;
+    }
+    if (in) *in = {-gx / g, -gz / g};
+    return (1.0f - l) / g;
+}
+
+static void MakePassage(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour>& ports) {
+    out.clear();
+    ports.clear();
+    Lcg g{seed * 2891336453u + 1181783497u};
+    g.F();
+    auto add = [&](float x, float z, float r, float h, bool stack) {
+        Rock k;
+        k.x = x; k.z = z; k.r = r; k.h = h; k.stack = stack;
+        k.p = stack ? g.R(5.0f, 8.0f) : g.R(2.8f, 5.0f);
+        k.q = stack ? g.R(0.2f, 0.35f) : g.R(0.45f, 0.8f);
+        for (float& a : k.ph) a = g.R(0.0f, 2.0f * PI);
+        k.seed = (uint32_t)(g.F() * 4.0e9f);
+        out.push_back(k);
+    };
+    const float A = voyage::passageA, B = voyage::passageB;
+    // the three harbour mouths: where each meets the coast, and the way out to it
+    const float havenZ = g.R(-600.0f, 600.0f), havenSide = g.F() < 0.5f ? -1.0f : 1.0f;
+    const float havenX = havenSide * A * powf(1.0f - powf(fabsf(havenZ) / B, voyage::exponent), 1.0f / voyage::exponent);
+    const Vector2 mouth[3] = {{0.0f, -B}, {0.0f, B}, {havenX, havenZ}};
+    const Vector2 outDir[3] = {{0.0f, -1.0f}, {0.0f, 1.0f}, {havenSide, 0.0f}};
+    auto nearMouth = [&](float x, float z) {
+        float d = 1e9f;
+        for (const Vector2& m : mouth) d = fminf(d, Vector2Distance(m, {x, z}));
+        return d;
+    };
+    // the coast: overlapping islands right round the oblong. Big, tall ones (cliffs a long way off); small ones by
+    // the harbours, so each harbour's island sits where its pier can reach it.
+    {
+        const int steps = 40000;
+        float t = 0.0f, r = g.R(150.0f, 280.0f), travelled = 0.0f, need = 0.0f;
+        Vector2 prev = PassageCoast(0.0f);
+        for (int i = 0; i <= steps; ++i) {
+            float tt = 2.0f * PI * i / steps;
+            Vector2 p = PassageCoast(tt);
+            travelled += Vector2Distance(p, prev);
+            prev = p;
+            if (i > 0 && travelled < need) continue;
+            if (i > 0 && tt > 2.0f * PI - 0.004f) break;
+            t = tt;
+            // normal (outward) from the level's gradient
+            Vector2 in;
+            PassageInside(p.x, p.y, &in);
+            float m = nearMouth(p.x, p.y);
+            bool small = m < 380.0f;
+            float rr = small ? g.R(55.0f, 100.0f) : r;
+            float push = small ? 0.35f : 0.45f;
+            float cx = p.x - in.x * (rr * push + g.R(-10.0f, 30.0f)), cz = p.y - in.y * (rr * push + g.R(-10.0f, 30.0f));
+            float hh = small ? g.R(0.3f, 0.75f) * rr : fminf(g.R(0.3f, 0.7f) * rr, 150.0f);
+            add(cx, cz, rr, hh, false);
+            float rn = g.R(150.0f, 280.0f);
+            float rnext = nearMouth(p.x, p.y) < 520.0f ? g.R(55.0f, 100.0f) : rn;
+            need = travelled + (rr + rnext) * (small ? 0.62f : 0.6f);
+            r = rn;
+        }
+        (void)t;
+    }
+    // a backdrop of high land behind the coast, so the sea looks hemmed in by country rather than a ring of islets
+    for (int i = 0; i < 44; ++i) {
+        float tt = 2.0f * PI * (i + g.R(-0.3f, 0.3f)) / 44.0f;
+        Vector2 p = PassageCoast(tt), in;
+        PassageInside(p.x, p.y, &in);
+        if (nearMouth(p.x, p.y) < 650.0f) continue;
+        float rr = g.R(320.0f, 460.0f);
+        add(p.x - in.x * (rr * 0.95f + 120.0f), p.y - in.y * (rr * 0.95f + 120.0f), rr, fminf(rr * g.R(0.35f, 0.55f), 230.0f), false);
+    }
+    // the harbours: walk in from each mouth until the water is open, and tie up a little inside the coast
+    for (int h = 0; h < 3; ++h) {
+        Vector2 in = {-outDir[h].x, -outDir[h].y};
+        float d = 0.0f;
+        for (; d < 700.0f; d += 4.0f)
+            if (RocksHeight(out, mouth[h].x + in.x * d, mouth[h].y + in.y * d) < -1.5f) break;
+        d += 75.0f;
+        ports.push_back({mouth[h].x + in.x * d, mouth[h].y + in.y * d, atan2f(outDir[h].y, outDir[h].x)});
+    }
+    auto clearOfPorts = [&](float x, float z, float r) {
+        for (const Harbour& hb : ports)
+            if (Vector2Distance({hb.x, hb.z}, {x, z}) < r) return false;
+        return true;
+    };
+    // the archipelago: islands with wide channels between them, clear of the coast and of the harbour approaches
+    std::vector<Vector3> isles;  // x, z, r
+    for (int tries = 0; tries < 900 && isles.size() < 34; ++tries) {
+        float u = g.F();
+        float r = 55.0f + 150.0f * u * u;
+        float x = g.R(-A, A), z = g.R(-B + 800.0f, B - 800.0f);
+        if (PassageInside(x, z) < r * 1.3f + 300.0f) continue;
+        if (!clearOfPorts(x, z, 750.0f + r)) continue;
+        bool ok = true;
+        for (const Vector3& o : isles)
+            if (Vector2Distance({o.x, o.y}, {x, z}) < o.z * 1.3f + r * 1.3f + 230.0f) { ok = false; break; }
+        if (!ok) continue;
+        isles.push_back({x, z, r});
+        add(x, z, r, g.R(0.35f, 0.8f) * r, false);
+        // the odd islet off its shore
+        if (g.F() < 0.4f) {
+            float a = g.R(0.0f, 2.0f * PI), rr = g.R(18.0f, 35.0f), dd = r * 1.25f + rr + g.R(10.0f, 40.0f);
+            add(x + cosf(a) * dd, z + sinf(a) * dd, rr, g.R(0.3f, 0.7f) * rr, false);
+        }
+    }
+    // sea stacks out in the open: cover, and something to grapple
+    for (int tries = 0, n = 0; tries < 400 && n < 26; ++tries) {
+        float x = g.R(-A, A), z = g.R(-B + 600.0f, B - 600.0f);
+        if (PassageInside(x, z) < 260.0f || !clearOfPorts(x, z, 520.0f)) continue;
+        bool ok = true;
+        for (const Vector3& o : isles)
+            if (Vector2Distance({o.x, o.y}, {x, z}) < o.z * 1.3f + 90.0f) { ok = false; break; }
+        if (!ok) continue;
+        ++n;
+        add(x, z, g.R(8.0f, 16.0f), g.R(22.0f, 50.0f), true);
+        int kids = (int)g.R(0.0f, 3.0f);
+        for (int j = 0; j < kids; ++j) add(x + g.R(-30.0f, 30.0f), z + g.R(-30.0f, 30.0f), g.R(3.0f, 6.0f), g.R(5.0f, 14.0f), true);
+    }
+}
+
+// The sea lane from the start harbour to the destination: the cheapest way over a grid that keeps well off the land,
+// pulled straight where the water allows, then rounded off and laid out every raceLineStep m.
+static std::vector<Vector2> MakeRoute(const std::vector<Rock>& rocks, Vector2 from, Vector2 to) {
+    const float C = 25.0f, X0 = -voyage::passageA - 200.0f, Z0 = -voyage::passageB - 300.0f;
+    const int NX = (int)(2.0f * (voyage::passageA + 200.0f) / C), NZ = (int)(2.0f * (voyage::passageB + 300.0f) / C);
+    std::vector<float> clr(NX * NZ, 1e9f);
+    for (const Rock& k : rocks) {  // land (or shoal) under a cell
+        float lim = k.r * 1.25f + 20.0f;
+        int i0 = std::max(0, (int)((k.x - lim - X0) / C)), i1 = std::min(NX - 1, (int)((k.x + lim - X0) / C));
+        int j0 = std::max(0, (int)((k.z - lim - Z0) / C)), j1 = std::min(NZ - 1, (int)((k.z + lim - Z0) / C));
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i)
+                if (RockHeight(k, X0 + (i + 0.5f) * C, Z0 + (j + 0.5f) * C) > -8.0f) clr[j * NX + i] = 0.0f;
+    }
+    for (int j = 0; j < NZ; ++j)  // and outside the coast
+        for (int i = 0; i < NX; ++i)
+            if (PassageInside(X0 + (i + 0.5f) * C, Z0 + (j + 0.5f) * C) < 0.0f) clr[j * NX + i] = 0.0f;
+    const float a = C, b = C * 1.41421f;
+    for (int j = 0; j < NZ; ++j)
+        for (int i = 0; i < NX; ++i) {
+            float& v = clr[j * NX + i];
+            if (i > 0) v = fminf(v, clr[j * NX + i - 1] + a);
+            if (j > 0) {
+                v = fminf(v, clr[(j - 1) * NX + i] + a);
+                if (i > 0) v = fminf(v, clr[(j - 1) * NX + i - 1] + b);
+                if (i + 1 < NX) v = fminf(v, clr[(j - 1) * NX + i + 1] + b);
+            }
+        }
+    for (int j = NZ - 1; j >= 0; --j)
+        for (int i = NX - 1; i >= 0; --i) {
+            float& v = clr[j * NX + i];
+            if (i + 1 < NX) v = fminf(v, clr[j * NX + i + 1] + a);
+            if (j + 1 < NZ) {
+                v = fminf(v, clr[(j + 1) * NX + i] + a);
+                if (i + 1 < NX) v = fminf(v, clr[(j + 1) * NX + i + 1] + b);
+                if (i > 0) v = fminf(v, clr[(j + 1) * NX + i - 1] + b);
+            }
+        }
+    auto cellOf = [&](Vector2 p) {
+        int i = std::max(0, std::min(NX - 1, (int)((p.x - X0) / C))), j = std::max(0, std::min(NZ - 1, (int)((p.y - Z0) / C)));
+        return j * NX + i;
+    };
+    auto centre = [&](int c) { return Vector2{X0 + (c % NX + 0.5f) * C, Z0 + (c / NX + 0.5f) * C}; };
+    const int S = cellOf(from), T = cellOf(to);
+    std::vector<float> dist(NX * NZ, 1e30f);
+    std::vector<int> prev(NX * NZ, -1);
+    using QE = std::pair<float, int>;
+    std::priority_queue<QE, std::vector<QE>, std::greater<QE>> q;
+    dist[S] = 0.0f;
+    q.push({0.0f, S});
+    while (!q.empty()) {
+        auto [d, c] = q.top();
+        q.pop();
+        if (d > dist[c]) continue;
+        if (c == T) break;
+        int ci = c % NX, cj = c / NX;
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di) {
+                if (!di && !dj) continue;
+                int ni = ci + di, nj = cj + dj;
+                if (ni < 0 || nj < 0 || ni >= NX || nj >= NZ) continue;
+                int n = nj * NX + ni;
+                Vector2 pc = centre(n);
+                bool port = Vector2Distance(pc, from) < 160.0f || Vector2Distance(pc, to) < 160.0f;
+                if (clr[n] < 45.0f && !port) continue;
+                float step = (di && dj) ? b : a;
+                float cost = step * (1.0f + 5.0f * fmaxf(0.0f, 1.0f - clr[n] / 220.0f));
+                if (d + cost < dist[n]) {
+                    dist[n] = d + cost;
+                    prev[n] = c;
+                    q.push({dist[n], n});
+                }
+            }
+    }
+    std::vector<Vector2> path;
+    if (prev[T] < 0 && T != S) {  // (no way through: straight there)
+        path = {from, to};
+    } else {
+        for (int c = T; c >= 0; c = prev[c]) path.push_back(centre(c));
+        std::reverse(path.begin(), path.end());
+        path.front() = from;
+        path.back() = to;
+    }
+    // pull it straight: from each point on, the furthest one still reachable over open water
+    auto open = [&](Vector2 p, Vector2 q2) {
+        float L = Vector2Distance(p, q2);
+        for (float t = 0.0f; t <= L; t += 10.0f) {
+            Vector2 m = Vector2Lerp(p, q2, L > 0.0f ? t / L : 0.0f);
+            if (clr[cellOf(m)] < 80.0f && Vector2Distance(m, from) > 200.0f && Vector2Distance(m, to) > 200.0f) return false;
+        }
+        return true;
+    };
+    std::vector<Vector2> pulled = {path.front()};
+    for (size_t i = 0; i + 1 < path.size();) {
+        size_t j = path.size() - 1;
+        while (j > i + 1 && !open(path[i], path[j])) --j;
+        pulled.push_back(path[j]);
+        i = j;
+    }
+    // round the corners (Chaikin), keeping the ends
+    for (int pass = 0; pass < 3; ++pass) {
+        if (pulled.size() < 3) break;
+        std::vector<Vector2> r = {pulled.front()};
+        for (size_t i = 0; i + 1 < pulled.size(); ++i) {
+            r.push_back(Vector2Lerp(pulled[i], pulled[i + 1], 0.25f));
+            r.push_back(Vector2Lerp(pulled[i], pulled[i + 1], 0.75f));
+        }
+        r.push_back(pulled.back());
+        pulled = r;
+    }
+    // evenly spaced
+    std::vector<Vector2> outp = {pulled.front()};
+    float carry = 0.0f;
+    for (size_t i = 0; i + 1 < pulled.size(); ++i) {
+        Vector2 p = pulled[i], q2 = pulled[i + 1];
+        float L = Vector2Distance(p, q2);
+        float t = raceLineStep - carry;
+        while (t <= L) {
+            outp.push_back(Vector2Lerp(p, q2, t / L));
+            t += raceLineStep;
+        }
+        carry = L - (t - raceLineStep);
+    }
+    if (Vector2Distance(outp.back(), pulled.back()) > 1.0f) outp.push_back(pulled.back());
+    return outp;
+}
+
+float World::RouteS(float x, float z) const {
+    if (route.size() < 2) return 0.0f;
+    float best = 1e30f, bs = 0.0f;
+    for (size_t i = 0; i + 1 < route.size(); ++i) {
+        Vector2 a = route[i], d = Vector2Subtract(route[i + 1], a);
+        float L2 = d.x * d.x + d.y * d.y;
+        float t = L2 > 0.0f ? Clamp(((x - a.x) * d.x + (z - a.y) * d.y) / L2, 0.0f, 1.0f) : 0.0f;
+        float dx = a.x + d.x * t - x, dz = a.y + d.y * t - z;
+        float dd = dx * dx + dz * dz;
+        if (dd < best) { best = dd; bs = ((float)i + t) * raceLineStep; }
+    }
+    return bs;
+}
+
+Vector2 World::RouteAt(float s) const {
+    if (route.empty()) return {0.0f, 0.0f};
+    float u = Clamp(s / raceLineStep, 0.0f, (float)route.size() - 1.001f);
+    int i = (int)u;
+    if (i + 1 >= (int)route.size()) return route.back();
+    return Vector2Lerp(route[i], route[i + 1], u - i);
+}
+
+float World::OutOfBounds(float x, float z, Vector2* home) const {
+    if (arena == ARENA_PASSAGE) {
+        Vector2 in;
+        float d = PassageInside(x, z, &in);
+        if (home) *home = in;
+        return fmaxf(0.0f, -d - 150.0f);  // (past the coast and its islands)
+    }
+    float r = sqrtf(x * x + z * z);
+    if (home) *home = r > 1e-3f ? Vector2{-x / r, -z / r} : Vector2{0.0f, 1.0f};
+    return fmaxf(0.0f, r - tune::arenaRadius);
+}
+
+std::vector<Harbour> MakeHarbours(uint32_t seed, uint8_t arena) {
+    if (arena == ARENA_PASSAGE) {
+        std::vector<Rock> r;
+        std::vector<Harbour> h;
+        MakePassage(seed, r, h);
+        return h;
+    }
     std::vector<Harbour> out;
     Lcg g{seed * 2654435761u + 977u};
     g.F();
@@ -507,19 +817,22 @@ float World::RaceS(float x, float z) const {
 
 int HarbourOwner(int mode, int i) {
     if (mode == MODE_TEAMS) return i == 0 ? 0 : i == 2 ? 1 : -1;
+    if (mode == MODE_VOYAGE) return 0;  // (the convoy's; no pirate puts in to them)
     return -1;
 }
 
-std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vortex, float calmDist) {
-    const int N = OceanCPU::DAMP_N;
-    const float E = OceanCPU::DAMP_EXTENT, cell = 2.0f * E / N;
+std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vortex, float calmDist, int N, float E) {
+    const float cell = 2.0f * E / N;
     // distance to land on the grid (two-pass chamfer), land = anything near or above the waterline
     std::vector<float> d(N * N, 1e9f);
-    for (int j = 0; j < N; ++j)
-        for (int i = 0; i < N; ++i) {
-            float x = (i + 0.5f) * cell - E, z = (j + 0.5f) * cell - E;
-            if (RocksHeight(rocks, x, z) > -1.5f) d[j * N + i] = 0.0f;
-        }
+    for (const Rock& k : rocks) {  // (each rock over the cells it can reach)
+        float lim = k.r * 1.25f + 50.0f;
+        int i0 = std::max(0, (int)((k.x - lim + E) / cell)), i1 = std::min(N - 1, (int)((k.x + lim + E) / cell));
+        int j0 = std::max(0, (int)((k.z - lim + E) / cell)), j1 = std::min(N - 1, (int)((k.z + lim + E) / cell));
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i)
+                if (RockHeight(k, (i + 0.5f) * cell - E, (j + 0.5f) * cell - E) > -1.5f) d[j * N + i] = 0.0f;
+    }
     const float a = cell, b = cell * 1.41421f;
     for (int j = 0; j < N; ++j)
         for (int i = 0; i < N; ++i) {
@@ -557,6 +870,12 @@ std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vo
 
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena) {
     if (RaceArena(arena)) return MakeStraitRocks(seed, arena);
+    if (arena == ARENA_PASSAGE) {
+        std::vector<Rock> r;
+        std::vector<Harbour> h;
+        MakePassage(seed, r, h);
+        return r;
+    }
     std::vector<Rock> out;
     const std::vector<Harbour> ports = MakeHarbours(seed);
     auto nearPort = [&](float x, float z, float r) {
@@ -903,7 +1222,9 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     if (mode_ == MODE_RACE) {  // a race is always down one of the courses...
         raceRotate = !RaceArena(arena);  // ("any": a different one every round)
         if (raceRotate) arena = (uint8_t)(ARENA_STRAIT + seed % RACE_COURSES);
-    } else if (arena >= ARENA_COUNT || RaceArena(arena)) {
+    } else if (mode_ == MODE_VOYAGE) {
+        arena = ARENA_PASSAGE;  // (the voyage has its own sea)
+    } else if (arena >= ARENA_COUNT || RaceArena(arena) || arena == ARENA_PASSAGE) {
         arena = ARENA_ISLES;  // ...and nothing else is
     }
     timeOfDay = timeOfDay_;
@@ -929,9 +1250,18 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     if (mode == MODE_RACE) {
         fleets = false;
         roundLength = matchClock = tune::raceLength;
-    } else if (roundLength == tune::raceLength) {
+    } else if (mode == MODE_VOYAGE) {
+        roundLength = matchClock = tune::voyageLength;
+    } else if (roundLength == tune::raceLength || roundLength == tune::voyageLength) {
         roundLength = matchClock = tune::matchLength;  // (a world reused after a race)
     }
+    voyageClock = 0.0f;
+    voyageSpawn = 0.0f;  // (the first band as soon as the grace is up)
+    voyageWait = 0.0f;
+    voyagePirates = 0;
+    voyageBest = 0.0f;
+    voyageWinner = -1;
+    if (mode == MODE_VOYAGE) teamScore[0] = voyage::reserve;
     BuildArena();
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
@@ -949,7 +1279,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
 void World::BuildArena() {
     const bool race = RaceArena(arena);
     rocks = MakeRocks(seedUsed, arena);
-    harbours = race ? std::vector<Harbour>{} : MakeHarbours(seedUsed);
+    harbours = race ? std::vector<Harbour>{} : MakeHarbours(seedUsed, arena);
     course.clear();
     raceLine.clear();
     raceMid.clear();
@@ -961,7 +1291,20 @@ void World::BuildArena() {
         raceMid = std::move(tr.mid);
         raceDir = std::move(tr.dir);
     }
-    ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM, race ? 90.0f : tune::shoreCalmDist));  // (a course: the sea runs right up the middle)
+    route.clear();
+    havenS = 0.0f;
+    if (arena == ARENA_PASSAGE) {  // the voyage: a far bigger sea, so a bigger grid; and the sea lane through it
+        const int n = 1024;
+        const float ext = voyage::passageB + 500.0f;
+        ocean.SetDamp(MakeShoreDamp(rocks, false, tune::shoreCalmDist, n, ext), n, ext);
+        if (harbours.size() > (size_t)voyage::endHarbour) {
+            const Harbour &a = harbours[voyage::startHarbour], &b = harbours[voyage::endHarbour];
+            route = MakeRoute(rocks, {a.x, a.z}, {b.x, b.z});
+        }
+        if (harbours.size() > (size_t)voyage::haven) havenS = RouteS(harbours[voyage::haven].x, harbours[voyage::haven].z);
+    } else {
+        ocean.SetDamp(MakeShoreDamp(rocks, arena == ARENA_MAELSTROM, race ? 90.0f : tune::shoreCalmDist));  // (a course: the sea runs right up the middle)
+    }
     rockInner = 1e9f;
     for (const Rock& k : rocks) rockInner = fminf(rockInner, sqrtf(k.x * k.x + k.z * k.z) - k.r * 1.25f - 50.0f);
 }
@@ -1007,6 +1350,10 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
                 if (o.active && o.leader < 0 && o.id != i && o.team >= 0) n[o.team]++;
             ships[i].team = (int8_t)(n[1] < n[0] ? 1 : 0);
         }
+        if (mode == MODE_VOYAGE) {
+            ships[i].team = 0;  // (the convoy; the pirates come later, see UpdateVoyage)
+            if (voyageClock >= 5.0f && !bot) teamScore[0]++;  // a captain joining under way brings a ship
+        }
         ships[i].maxHp = MaxHpOf(ships[i]);
         Respawn(ships[i]);
         if (fleets) SpawnFleet(ships[i]);
@@ -1035,11 +1382,28 @@ void World::Respawn(Ship& s) {
     }
     s.nextCls = (uint8_t)AllowedClass(s.nextCls);
     s.cls = s.nextCls;
+    float voyageHeading = 1e9f;
+    if (mode == MODE_VOYAGE && !s.raider) {
+        // the convoy: back with the others (astern of whoever is furthest on), or at the start, or (all sunk at once)
+        // at the last harbour passed
+        s.team = 0;
+        if (!(voyageBest > 400.0f && PlaceInConvoy(s))) {
+            int slot = 0;
+            for (const Ship& o : ships)
+                if (o.active && o.leader < 0 && !o.raider && o.id < s.id) ++slot;
+            int h = voyageBest > havenS + 50.0f && havenS > 0.0f && harbours.size() > (size_t)voyage::haven ? voyage::haven : voyage::startHarbour;
+            PlaceInHarbour(s, h, slot);
+        }
+        voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
+    }
     float ang = RandF() * 2 * PI;
     const bool whirl = arena == ARENA_MAELSTROM;  // (start well clear of the funnel)
     float r = whirl ? maelstrom::spawnMin + RandF() * 200.0f : 220.0f + RandF() * 200.0f;
     float x = cosf(ang) * r, z = sinf(ang) * r;
-    if (!harbours.empty() && mode != MODE_RACE) {
+    if (voyageHeading < 1e8f) {
+        x = s.pos.x;
+        z = s.pos.z;
+    } else if (!harbours.empty() && mode != MODE_RACE) {
         // Back to sea from a harbour: your own side's in teams, any you may use otherwise. Just inside its mouth (the
         // stacks either side are left standing), spread across the approach, clear of rocks and of other ships.
         std::vector<int> ok;
@@ -1083,14 +1447,14 @@ void World::Respawn(Ship& s) {
         x = cosf(ang) * r;
         z = sinf(ang) * r;
     }
-    if (!s.isBot && getenv("BS_SPAWNR")) {  // (testing: put the player this far out)
+    if (!s.isBot && getenv("BS_SPAWNR") && voyageHeading > 1e8f) {  // (testing: put the player this far out)
         float rr = (float)atof(getenv("BS_SPAWNR")), a = atan2f(z, x);
         x = cosf(a) * rr;
         z = sinf(a) * rr;
     }
     s.pos = {x, ocean.Height(x, z) + 1.0f, z};
     // face into the bay, towards the fight
-    float heading = atan2f(-x, -z);
+    float heading = voyageHeading < 1e8f ? voyageHeading : atan2f(-x, -z);
     s.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
     s.vel = {0, 0, 0};
     s.angVel = {0, 0, 0};
@@ -1098,6 +1462,7 @@ void World::Respawn(Ship& s) {
     s.hp = s.maxHp;
     s.alive = true;
     s.stowed = false;
+    s.lost = false;
     s.booty = 0;
     s.deadTimer = 0;
     s.buoyMul = 1.0f;
@@ -1159,6 +1524,13 @@ void World::Damage(Ship& v, float amount, int attacker) {
         if (byEnemy) {
             ships[CaptainOf(killer)].kills++;  // escorts' kills go to their captain
             if (mode == MODE_TEAMS && ships[killer].team >= 0) teamScore[ships[killer].team]++;
+        }
+        if (mode == MODE_VOYAGE) {
+            if (v.raider) teamScore[1]++;  // pirates sunk (by anyone, the rocks included)
+            else if (v.leader < 0) {       // a convoy ship: back with the others while there are ships in reserve
+                if (teamScore[0] > 0) teamScore[0]--;
+                else v.lost = true;
+            }
         }
         GameEvent e{EventType::Kill};
         e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
@@ -1446,6 +1818,7 @@ void World::StepShip(Ship& s, float dt) {
         if (s.leader >= 0 && ships[s.leader].active)  // escorts pace their captain, whatever he sails
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
+        if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
         if (s.slowTimer > 0.0f) top *= tune::raceSlow;  // crippled in a race
         if (real) top *= tune::realSpeed;
         float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
@@ -1577,11 +1950,12 @@ void World::StepShip(Ship& s, float dt) {
                 if (over > 0.0f && lat < 450.0f) F = Vector3Add(F, {-d.x * over * 0.08f * P.mass, 0.0f, -d.y * over * 0.08f * P.mass});
             }
         }
-    } else if (dist > tune::arenaRadius) {
-        Vector2 n = Vector2Scale(hp, 1.0f / dist);
-        float push = (dist - tune::arenaRadius) * 0.08f * P.mass;
-        F = Vector3Add(F, {-n.x * push, 0, -n.y * push});
+    } else {
+        Vector2 home;
+        float over = OutOfBounds(hp.x, hp.y, &home);
+        if (over > 0.0f) F = Vector3Add(F, {home.x * over * 0.08f * P.mass, 0, home.y * over * 0.08f * P.mass});
     }
+    (void)dist;
 
     s.vel = Vector3Add(s.vel, Vector3Scale(F, dt / P.mass));
     s.angVel = Vector3Add(s.angVel, Vector3Scale(alpha, dt));
@@ -1715,6 +2089,16 @@ void World::PlaceCrate(Crate& c) {
             c.z = p.y;
             break;
         }
+        if (mode == MODE_VOYAGE && !route.empty()) {  // the voyage: on the way ahead of the convoy
+            float s0 = voyageBest + 200.0f + RandF() * 900.0f;
+            Vector2 p = RouteAt(s0), d = Vector2Normalize(Vector2Subtract(RouteAt(s0 + 20.0f), RouteAt(s0 - 20.0f)));
+            float across = (RandF() * 2.0f - 1.0f) * 260.0f;
+            p = {p.x + d.y * across, p.y - d.x * across};
+            if (RocksHeight(rocks, p.x, p.y) > -8.0f) continue;
+            c.x = p.x;
+            c.z = p.y;
+            break;
+        }
         float ang = RandF() * 2.0f * PI;
         float r = arena == ARENA_MAELSTROM ? 130.0f + RandF() * 490.0f
                   : RandF() < tune::crateMiddle ? 40.0f + RandF() * 240.0f
@@ -1744,6 +2128,10 @@ void World::UpdateCrates(float dt) {
         if (!c.active) {
             c.timer -= dt;
             if (c.timer <= 0.0f) PlaceCrate(c);
+            continue;
+        }
+        if (mode == MODE_VOYAGE && !route.empty() && RouteS(c.x, c.z) < voyageBest - 900.0f) {  // left far astern: float it on ahead
+            PlaceCrate(c);
             continue;
         }
         Vector3 cp = {c.x, ocean.Height(c.x, c.z), c.z};
@@ -1939,15 +2327,17 @@ void World::BotThink(Ship& s, float dt) {
         float gr = sqrtf(goal.x * goal.x + goal.z * goal.z);
         // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
         wallLimit = Clamp(sqrtf(cap->pos.x * cap->pos.x + cap->pos.z * cap->pos.z) + 20.0f, 600.0f, 650.0f);
-        if (gr > wallLimit) goal = Vector3Scale(goal, wallLimit / gr);
+        if (gr > wallLimit && arena != ARENA_PASSAGE) goal = Vector3Scale(goal, wallLimit / gr);
         // the captain going into a harbour: follow him in line astern down the middle of the mouth
-        // (abreast, the outer slots are among the stacks either side of it)
+        // (abreast, the outer slots are among the stacks either side of it). Measured as if the harbour sat 730 m
+        // out from the middle of the Isles, whichever sea it's on.
         for (const Harbour& h : harbours) {
-            Vector2 axis = {h.x / 730.0f, h.z / 730.0f};
-            float rad = cap->pos.x * axis.x + cap->pos.z * axis.y, lat = fabsf(cap->pos.x * axis.y - cap->pos.z * axis.x);
+            Vector2 axis = {cosf(h.ang), sinf(h.ang)};
+            Vector2 rel = {cap->pos.x - h.x, cap->pos.z - h.z};
+            float rad = rel.x * axis.x + rel.y * axis.y + 730.0f, lat = fabsf(rel.x * axis.y - rel.y * axis.x);
             if (rad < 520.0f || lat > 90.0f) continue;
-            float back = rad - 55.0f * (float)(s.slot + 1);
-            goal = {axis.x * back, 0.0f, axis.y * back};
+            float back = rad - 55.0f * (float)(s.slot + 1) - 730.0f;
+            goal = {h.x + axis.x * back, 0.0f, h.z + axis.y * back};
             wallLimit = fmaxf(wallLimit, rad + 20.0f);
             break;
         }
@@ -1990,6 +2380,34 @@ void World::BotThink(Ship& s, float dt) {
             haveGoal = true;
             fight = false;
         }
+    } else if (mode == MODE_VOYAGE && s.leader < 0 && !s.raider && !route.empty()) {
+        // the convoy: down the sea lane for the far harbour, each in a lane of its own, keeping with the human ships
+        // (never far ahead of the hindmost), and turning to fight only what comes close
+        const float sNow = RouteS(s.pos.x, s.pos.z), spd = Vector2Length({s.vel.x, s.vel.z});
+        float rear = 1e9f;
+        for (const Ship& o : ships)
+            if (o.active && o.alive && !o.isBot && o.leader < 0 && !o.raider) rear = fminf(rear, RouteS(o.pos.x, o.pos.z));
+        const float look = Clamp(90.0f + spd * 3.0f, 100.0f, 200.0f), lane = (float)((s.id * 7) % 5) - 2.0f;
+        Vector2 p = RouteAt(sNow + look), d = Vector2Normalize(Vector2Subtract(RouteAt(sNow + look + 15.0f), RouteAt(sNow + look - 15.0f)));
+        goal = {p.x + d.y * lane * 22.0f, 0.0f, p.y - d.x * lane * 22.0f};
+        if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = {p.x, 0.0f, p.y};
+        haveGoal = true;
+        const Harbour& dest = harbours[voyage::endHarbour];
+        const bool last = sNow > RouteLength() - 700.0f;  // the last stretch: straight in, no stopping to fight
+        if (voyageClock < 3.0f) in.sail = 0.0f;              // (all together: nobody sails before the convoy does)
+        const bool berthing = sNow > RouteLength() - 350.0f;
+        if (berthing) {  // in to the harbour at the end, each to a berth of its own (all for one spot, they pile up on the rocks)
+            int slot = 0;
+            for (const Ship& o : ships)
+                if (o.active && o.leader < 0 && !o.raider && o.id < s.id) ++slot;
+            Vector2 inw = {-cosf(dest.ang), -sinf(dest.ang)}, side = {-inw.y, inw.x};
+            float back = 15.0f + (float)((slot % 6) / 3) * 40.0f, across = (float)(slot % 3 - 1) * 42.0f;
+            goal = {dest.x + inw.x * back + side.x * across, 0.0f, dest.z + inw.y * back + side.y * across};
+        }
+        if (rear < 1e8f && sNow > rear + 300.0f && !last) in.sail = Clamp(1.0f - (sNow - rear - 300.0f) / 200.0f, 0.25f, 1.0f);  // wait for them
+        if (berthing && flat(goal, s.pos) < 25.0f) in.sail = 0.0f;  // made it: heave to
+        fight = target && best < 300.0f && !last;
+        if (fight) haveGoal = false;
     } else if (s.pirate) {  // carrying the treasure: run for the cove, shooting on the way
         if (!harbours.empty()) {
             goal = {harbours[cove].x, 0, harbours[cove].z};
@@ -2059,16 +2477,19 @@ void World::BotThink(Ship& s, float dt) {
         // Bound for a harbour: the stacks either side of its mouth are left standing, so line up on it from the
         // open water inside first and come in straight, instead of cutting the corner along the rim.
         Vector3 aim = goal;
+        bool forHarbour = false;
         for (const Harbour& h : harbours) {
-            if (Vector2Distance({h.x, h.z}, {goal.x, goal.z}) > 40.0f) continue;
-            Vector2 axis = {h.x / 730.0f, h.z / 730.0f};  // (harbours sit 730 m out)
-            float rad = s.pos.x * axis.x + s.pos.z * axis.y, lat = fabsf(s.pos.x * axis.y - s.pos.z * axis.x);
-            if (lat > 45.0f + fmaxf(0.0f, 600.0f - rad) * 0.6f) aim = {axis.x * 540.0f, 0.0f, axis.y * 540.0f};
+            if (Vector2Distance({h.x, h.z}, {goal.x, goal.z}) > (arena == ARENA_PASSAGE ? tune::harbourRadius : 40.0f)) continue;
+            forHarbour = true;
+            Vector2 axis = {cosf(h.ang), sinf(h.ang)};  // (measured as if it sat 730 m out on the Isles)
+            Vector2 rel = {s.pos.x - h.x, s.pos.z - h.z};
+            float rad = rel.x * axis.x + rel.y * axis.y + 730.0f, lat = fabsf(rel.x * axis.y - rel.y * axis.x);
+            if (lat > 45.0f + fmaxf(0.0f, 600.0f - rad) * 0.6f) aim = {h.x - axis.x * 190.0f, 0.0f, h.z - axis.y * 190.0f};
             break;
         }
         desired = atan2f(aim.x - s.pos.x, aim.z - s.pos.z);
         goalDist = flat(goal, s.pos);
-        bool nearWall = !RaceArena(arena) && sqrtf(goal.x * goal.x + goal.z * goal.z) > 650.0f;
+        bool nearWall = !RaceArena(arena) && (arena == ARENA_PASSAGE ? forHarbour : sqrtf(goal.x * goal.x + goal.z * goal.z) > 650.0f);
         if (s.leader < 0 && nearWall) in.sail = fminf(in.sail, Clamp(goalDist / 160.0f, 0.15f, 1.0f));  // ease into harbour
     } else if (fight && target) {
         Vector3 to = Vector3Subtract(target->pos, s.pos);
@@ -2087,6 +2508,9 @@ void World::BotThink(Ship& s, float dt) {
             desired = bearing + (s.botSide == 0 ? -PI * 0.5f : PI * 0.5f);  // present the broadside
             if (best < 120.0f) desired += (s.botSide == 0 ? -0.5f : 0.5f);  // open the range
         }
+    } else if (!cap && arena == ARENA_PASSAGE && !route.empty()) {  // nothing to chase: back to the sea lane, northward
+        Vector2 p = RouteAt(RouteS(s.pos.x, s.pos.z) + 250.0f);
+        desired = atan2f(p.x - s.pos.x, p.y - s.pos.z);
     } else if (!cap) {
         float wide = arena == ARENA_MAELSTROM && s.pos.x * s.pos.x + s.pos.z * s.pos.z < 300.0f * 300.0f ? 1.9f : 1.2f;  // (out of the deep part)
         desired = atan2f(-s.pos.x, -s.pos.z) + wide;  // circle the arena
@@ -2119,7 +2543,7 @@ void World::BotThink(Ship& s, float dt) {
         if (clear && yawOff < MC.traverse - 0.05f && s.reload[side] <= 0.0f && RandF() < keen) in.fireSeq++;
     }
     // nothing to shoot nearby: go for a power-up crate (captains only; escorts keep station)
-    if (!haveGoal && !cap && !s.pirate && (!target || best > 320.0f)) {
+    if (!haveGoal && !cap && !s.pirate && !s.raider && (!target || best > 320.0f)) {
         float cb = 450.0f;
         for (const Crate& c : crates) {
             float d = Vector2Distance({c.x, c.z}, {s.pos.x, s.pos.z});
@@ -2179,11 +2603,37 @@ void World::BotThink(Ship& s, float dt) {
     float home = atan2f(-s.pos.x, -s.pos.z);
     // (escorts always have a goal, their slot, but only a captain heading for a harbour may go near the wall)
     bool harbourRun = haveGoal && !cap;
-    const bool inStrait = RaceArena(arena);  // (a course: no ring to keep inside, just the rocks ahead)
+    const bool inStrait = RaceArena(arena) || arena == ARENA_PASSAGE;  // (no ring to keep inside, just the rocks ahead)
     float k = inStrait ? 0.0f : Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
+    if (arena == ARENA_PASSAGE) {  // the voyage's sea: keep off the coast (unless bound for a harbour in it)
+        Vector2 in;
+        float pd = PassageInside(s.pos.x, s.pos.z, &in);
+        k = harbourRun && goalDist < 700.0f ? 0.0f : Clamp((380.0f - pd) / 140.0f, 0.0f, 1.0f);
+        home = atan2f(in.x, in.y);
+        // the pirates keep clear of the haven and the far harbour (the forts' guns): a ship that gets in is safe
+        if (s.raider)
+            for (int h = voyage::endHarbour; h < (int)harbours.size(); ++h) {
+                float dh = Vector2Distance({harbours[h].x, harbours[h].z}, {s.pos.x, s.pos.z});
+                float kh = Clamp((voyage::fortRange + 150.0f - dh) / 200.0f, 0.0f, 1.0f);
+                if (kh > k) {
+                    k = kh;
+                    home = atan2f(s.pos.x - harbours[h].x, s.pos.z - harbours[h].z);
+                }
+            }
+    }
+    const float kWall = k;
     Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
     Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
     bool rockAhead = RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f;
+    if (arena == ARENA_PASSAGE && !rockAhead && !(harbourRun && goalDist < 200.0f)) {
+        // the voyage's islands come up fast at full speed: look further ahead the faster we go (and along the way we're
+        // actually moving, which a broadside turn swings away from the bow)
+        const float spd = Vector2Length({s.vel.x, s.vel.z}), L = Clamp(spd * 4.5f, 90.0f, 170.0f);
+        Vector2 mv = spd > 3.0f ? Vector2{s.vel.x / spd, s.vel.z / spd} : Vector2{fwd.x, fwd.z};
+        for (float t : {L * 0.6f, L})
+            if (RocksHeight(rocks, s.pos.x + fwd.x * t, s.pos.z + fwd.z * t) > -6.0f || RocksHeight(rocks, s.pos.x + mv.x * t, s.pos.z + mv.y * t) > -6.0f)
+                rockAhead = true;
+    }
     if (ocean.Vortex() && !rockAhead)  // in a maelstrom the current sets us sideways: look where we're actually going too
         for (float t : {1.5f, 3.0f, 4.5f}) {
             Vector3 q = Vector3Add(s.pos, Vector3Scale({s.vel.x, 0.0f, s.vel.z}, t));
@@ -2201,6 +2651,7 @@ void World::BotThink(Ship& s, float dt) {
         // a stack out in the maelstrom: "turn for the middle" would be into the whirlpool and back onto the rock.
         // Turn away from the rock instead, leaning out of the funnel.
         if (inStrait) {
+            if (arena == ARENA_PASSAGE) desired = heading + wrap(desired - heading) * (1.0f - kWall) + wrap(home - heading) * kWall;  // (mind the coast)
             // no middle to turn for: the clear heading nearest the one we want
             float bestErr = 1e9f, bestH = heading + PI * 0.5f;
             for (float dA : {0.3f, -0.3f, 0.6f, -0.6f, 0.9f, -0.9f, 1.3f, -1.3f, 1.8f, -1.8f}) {
@@ -2225,6 +2676,9 @@ void World::BotThink(Ship& s, float dt) {
             }
         }
     }
+    if (getenv("BS_VOYDBG") && !s.isBot && tick % 60 == 0)
+        printf("[voydbg] t=%.0f pos %.0f %.0f hdg %.2f desired %.2f home %.2f k %.2f rockAhead %d haveGoal %d fight %d goal %.0f %.0f sail %.2f\n", time, s.pos.x,
+               s.pos.z, heading, desired, home, k, (int)rockAhead, (int)haveGoal, (int)fight, goal.x, goal.z, in.sail);
     desired = heading + wrap(desired - heading) * (1.0f - k) + wrap(home - heading) * k;
     float err = wrap(desired - heading);
     in.rudder = Clamp(-err * 2.0f, -1.0f, 1.0f);  // positive rudder turns to starboard (-x)
@@ -2237,7 +2691,7 @@ static const char* kEscortNames[] = {"Resolute", "Swiftsure", "Defiance", "Valia
 
 bool World::Enemies(const Ship& a, const Ship& b) const {
     if (a.id == b.id) return false;
-    if (mode != MODE_TEAMS) return CaptainOf(a.id) != CaptainOf(b.id);
+    if (!TeamMode()) return CaptainOf(a.id) != CaptainOf(b.id);
     return a.team != b.team;
 }
 
@@ -2408,7 +2862,7 @@ void World::UpdateMaelstrom(float dt) {
 int World::PickCrewShip() const {
     int best = -1, bestN = 1 << 20;
     for (const Ship& s : ships) {
-        if (!s.active || s.leader >= 0) continue;
+        if (!s.active || s.leader >= 0 || s.raider) continue;  // (nobody signs on with the pirates)
         int n = s.crewCount * 2 + (s.isBot ? 1 : 0);
         if (n < bestN) { bestN = n; best = s.id; }
     }
@@ -2597,7 +3051,7 @@ void World::UpdateMatch(float dt) {
                 events.push_back(e);
             }
         bool limit = false;
-        if (mode == MODE_RACE) {
+        if (mode == MODE_RACE || mode == MODE_VOYAGE) {
         } else if (mode == MODE_TEAMS) limit = teamScore[0] >= ScoreLimit() || teamScore[1] >= ScoreLimit();
         else
             for (const Ship& s : ships)
@@ -2626,6 +3080,9 @@ void World::EndRound(bool byLimit) {
     if (mode == MODE_TEAMS) {
         e.a = NO_SHIP;
         e.b = teamScore[0] == teamScore[1] ? NO_SHIP : (teamScore[0] > teamScore[1] ? 0 : 1);
+    } else if (mode == MODE_VOYAGE) {  // b = 0: the convoy made harbour, 1: the pirates took it (255: time ran out)
+        e.a = NO_SHIP;
+        e.b = voyageWinner >= 0 ? (uint16_t)voyageWinner : NO_SHIP;
     } else {
         e.a = (uint16_t)(best >= 0 && ScoreOf(ships[best]) > 0 ? best : NO_SHIP);
         e.b = NO_SHIP;
@@ -2636,7 +3093,7 @@ void World::EndRound(bool byLimit) {
         int pick = -1;
         float pv = 0;
         for (const Ship& s : ships) {
-            if (!s.active || s.leader >= 0) continue;
+            if (!s.active || s.leader >= 0 || s.raider) continue;  // (the voyage's pirates win nothing)
             float v = key(s);
             if (pick < 0 || (lowest ? v < pv : v > pv)) { pick = s.id; pv = v; }
         }
@@ -2654,7 +3111,7 @@ void World::EndRound(bool byLimit) {
     if (mode == MODE_PIRATE) award(4, [](const Ship& s) { return (float)s.banked; });
     award(5, [](const Ship& s) { return (float)s.statGround; });
     bool anySunk = false;
-    for (const Ship& s : ships) anySunk |= s.active && s.leader < 0 && s.deaths > 0;
+    for (const Ship& s : ships) anySunk |= s.active && s.leader < 0 && !s.raider && s.deaths > 0;
     if (anySunk) award(6, [](const Ship& s) { return (float)s.deaths - s.kills * 0.01f; }, true);
 }
 
@@ -2665,12 +3122,28 @@ void World::StartRound() {
     raceFinished = 0;
     round++;
     teamScore[0] = teamScore[1] = 0;
+    if (mode == MODE_VOYAGE) {  // a fresh convoy in the start harbour, and the pirates gone home
+        for (Ship& s : ships)
+            if (s.active && s.raider) RemoveShip(s.id);
+        voyageClock = 0.0f;
+        voyageWait = 0.0f;
+        voyageSpawn = 0.0f;
+        voyagePirates = 0;
+        voyageBest = 0.0f;
+        voyageWinner = -1;
+        teamScore[0] = voyage::reserve;
+        for (Crate& c : crates) {
+            c.active = false;
+            c.timer = 0.5f + 0.4f * c.id;
+        }
+    }
     for (Ship& s : ships) {
         if (!s.active) continue;
         s.kills = s.deaths = s.banked = s.booty = 0;
         s.statDamage = s.statAir = 0;
         s.statSpin = s.statGround = 0;
         s.pirate = false;
+        s.lost = false;
     }
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i].active = false;
@@ -2909,6 +3382,11 @@ void World::Step() {
             s.deadTimer -= dt;
             if (s.deadTimer <= 0) {
                 if (s.leader >= 0) s.stowed = true;  // lost escorts wait for their captain
+                else if (s.raider) {  // (a pirate goes down for good; its slot isn't handed straight on)
+                    RemoveShip(s.id);
+                    voyageSpawn = fmaxf(voyageSpawn, 0.5f);
+                }
+                else if (s.lost) s.deadTimer = 0.5f;  // (voyage: no ship left in reserve; out until the next one)
                 else Respawn(s);
             }
         }
@@ -2922,11 +3400,207 @@ void World::Step() {
     UpdateHarbours(dt);
     if (mode == MODE_PIRATE && matchState == 0) UpdateChests(dt);
     if (mode == MODE_RACE && matchState == 0) UpdateRace(dt);
+    if (mode == MODE_VOYAGE && matchState == 0) UpdateVoyage(dt);
     if (rounds) UpdateMatch(dt);
 }
 
 // ---- race -------------------------------------------------------------------------
 // The start: four abreast in the start harbour's mouth, rows behind, all facing the way to the first gate.
+// ---- the voyage --------------------------------------------------------------------
+static const char* kPirateNames[] = {"Cpt. Bones", "Cpt. Scurvy", "Cpt. Gallows", "Cpt. Grim", "Cpt. Mako", "Cpt. Rook",
+                                     "Cpt. Hatchet", "Cpt. Bilge", "Cpt. Cutlass", "Cpt. Crow", "Cpt. Nails", "Cpt. Brine",
+                                     "Cpt. Kraken", "Cpt. Rattle", "Cpt. Shank", "Cpt. Gull"};
+
+void World::PlaceInHarbour(Ship& s, int h, int slot) {
+    if (h < 0 || h >= (int)harbours.size()) h = 0;
+    if (harbours.empty()) return;
+    const Harbour& hb = harbours[h];
+    Vector2 in = {-cosf(hb.ang), -sinf(hb.ang)}, side = {-in.y, in.x};
+    int row = slot / 4, col = slot % 4;
+    float x = hb.x, z = hb.z;
+    for (int tries = 0; tries < 12; ++tries) {
+        float back = 30.0f + (row + tries) * 65.0f, across = (col - 1.5f) * 46.0f;
+        x = hb.x + in.x * back + side.x * across;
+        z = hb.z + in.y * back + side.y * across;
+        if (RocksHeight(rocks, x, z) < -15.0f) break;
+    }
+    s.pos = {x, ocean.Height(x, z) + 1.0f, z};
+    s.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(in.x, in.y));
+}
+
+bool World::PlaceInConvoy(Ship& s) {
+    const Ship* lead = nullptr;
+    float ls = -1.0f;
+    for (const Ship& o : ships) {
+        if (!o.active || !o.alive || o.leader >= 0 || o.raider || o.id == s.id) continue;
+        float so = RouteS(o.pos.x, o.pos.z) + (o.isBot ? 0.0f : 400.0f);  // (with a human ship if there is one)
+        if (so > ls) { ls = so; lead = &o; }
+    }
+    if (!lead || route.empty()) return false;
+    float s0 = fmaxf(0.0f, RouteS(lead->pos.x, lead->pos.z) - 220.0f);
+    Vector2 d = Vector2Normalize(Vector2Subtract(RouteAt(s0 + 20.0f), RouteAt(fmaxf(0.0f, s0 - 20.0f))));
+    Vector2 best = RouteAt(s0);
+    float bestScore = -1e9f;
+    for (float back : {0.0f, 80.0f, 160.0f})
+        for (float across : {0.0f, 70.0f, -70.0f, 140.0f, -140.0f}) {
+            Vector2 p = RouteAt(fmaxf(0.0f, s0 - back));
+            p = {p.x + d.y * across, p.y - d.x * across};
+            if (RocksHeight(rocks, p.x, p.y) > -20.0f) continue;
+            float nearShip = 1e9f, nearPirate = 1e9f;
+            for (const Ship& o : ships) {
+                if (!o.active || !o.alive || o.id == s.id) continue;
+                float dd = Vector2Distance({o.pos.x, o.pos.z}, p);
+                nearShip = fminf(nearShip, dd);
+                if (o.raider) nearPirate = fminf(nearPirate, dd);
+            }
+            float sc = fminf(nearShip, 70.0f) + fminf(nearPirate, 400.0f) * 0.5f - fabsf(across) * 0.05f - back * 0.1f;
+            if (sc > bestScore) { bestScore = sc; best = p; }
+        }
+    s.pos = {best.x, ocean.Height(best.x, best.y) + 1.0f, best.y};
+    s.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(d.x, d.y));
+    return true;
+}
+
+void World::SpawnRaider(Vector2 at, float heading, int cls) {
+    int j = NewShipSlot();
+    if (j < 0) return;
+    Ship& p = ships[j];
+    p = Ship{};
+    p.active = true;
+    p.id = (uint16_t)j;
+    p.isBot = true;
+    p.raider = true;
+    p.fixedCls = true;
+    p.team = 1;
+    p.cls = p.nextCls = (uint8_t)cls;
+    int n = voyagePirates++;
+    char nm[48];
+    snprintf(nm, sizeof nm, "%s %d", kPirateNames[n % 16], n / 16 + 1);
+    p.name = n < 16 ? std::string(kPirateNames[n]) : std::string(nm);
+    p.pos = {at.x, ocean.Height(at.x, at.y) + 1.0f, at.y};
+    p.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
+    p.maxHp = p.hp = MaxHpOf(p);
+    p.alive = true;
+    p.sail = 1.0f;
+    GameEvent e{EventType::Respawn};
+    e.a = p.id;
+    e.flags = 1;  // (a pirate turning up: the clients sound the alarm)
+    e.pos = p.pos;
+    events.push_back(e);
+}
+
+// The voyage: has the convoy made the far harbour, or been sunk to the last ship? And the pirates: they find the convoy
+// in bands, out of sight astern or abeam (now and then lying in wait ahead), more of them and bigger ships the further
+// it gets, and they give up on a convoy that has left them far behind.
+void World::UpdateVoyage(float dt) {
+    if (route.empty() || harbours.size() <= (size_t)voyage::endHarbour) return;
+    if (voyageClock <= 0.0f) {  // the convoy waits in harbour until someone is aboard (the host's game starts a moment before they are)
+        bool aboard = false;
+        for (const Ship& s : ships) aboard |= s.active && !s.isBot && s.leader < 0;
+        for (const Crewman& c : crew) aboard |= c.active;
+        voyageWait += dt;
+        if (!aboard && voyageWait < 20.0f) return;
+    }
+    voyageClock += dt;
+    std::vector<const Ship*> afloat;
+    int convoy = 0;
+    bool humans = false, alive = false;
+    for (const Ship& s : ships) {
+        if (!s.active || s.leader >= 0 || s.raider) continue;
+        ++convoy;
+        humans |= !s.isBot;
+        alive |= s.alive || !s.lost;
+        if (s.alive) {
+            afloat.push_back(&s);
+            voyageBest = fmaxf(voyageBest, RouteS(s.pos.x, s.pos.z));
+        }
+    }
+    if (!convoy) return;
+    if (voyageClock < 5.0f) teamScore[0] = std::max(voyage::reserve, 2 * convoy);  // (two per captain who sails from the start)
+    // made it: every (human) convoy ship afloat is in the far harbour, and none is waiting to rejoin
+    const Harbour& dest = harbours[voyage::endHarbour];
+    bool home = !afloat.empty();
+    for (const Ship& s : ships) {
+        if (!s.active || s.leader >= 0 || s.raider || (humans && s.isBot)) continue;
+        if (!s.alive) {
+            if (!s.lost) home = false;
+            continue;
+        }
+        if (Vector2Distance({s.pos.x, s.pos.z}, {dest.x, dest.z}) > tune::harbourRadius) home = false;
+    }
+    if (home || !alive) {
+        voyageWinner = home ? 0 : 1;
+        EndRound(true);
+        return;
+    }
+    // the pirates: driven on while far from the convoy, and gone if they've lost it for good
+    bool gone = false;
+    int pirates = 0;
+    for (Ship& p : ships) {
+        if (!p.active || !p.raider) continue;
+        ++pirates;
+        if (!p.alive) continue;
+        float nd = 1e9f;
+        for (const Ship* c : afloat) nd = fminf(nd, Vector2Distance({c->pos.x, c->pos.z}, {p.pos.x, p.pos.z}));
+        p.catchUp = Clamp((nd - 150.0f) / 400.0f, 0.0f, 1.0f) * voyage::pirateCatchUp;  // (gaining right up to the last cable or so)
+        p.raiderIdle = nd > voyage::despawn ? p.raiderIdle + dt : 0.0f;
+        if (p.raiderIdle > 15.0f) {
+            RemoveShip(p.id);
+            gone = true;
+            --pirates;
+        }
+        (void)gone;
+    }
+    static const float grace = getenv("BS_VOYGRACE") ? (float)atof(getenv("BS_VOYGRACE")) : voyage::graceTime;  // (tests)
+    if (afloat.empty() || voyageClock < grace) return;
+    voyageSpawn -= dt;
+    if (gone) voyageSpawn = fmaxf(voyageSpawn, 0.5f);  // (a freed slot isn't handed straight on: the clients must hear it left)
+    if (voyageSpawn > 0.0f) return;
+    const float prog = Clamp(voyageBest / fmaxf(RouteLength(), 1.0f), 0.0f, 1.0f);
+    int escorts = 0;
+    for (const Ship& e : ships) escorts += e.active && e.alive && !e.stowed && e.leader >= 0 && e.team == 0;
+    int want = std::min(40, (int)ceilf((1.0f + 1.0f * convoy + 0.3f * escorts) * (0.6f + 0.8f * prog)));
+    if (const char* e = getenv("BS_PIRATES")) want = std::min(want, atoi(e));  // (tests)
+    if (pirates >= want) {
+        voyageSpawn = 3.0f;
+        return;
+    }
+    // where: round one convoy ship, a long way off, in open water away from the harbours
+    const Ship& prey = *afloat[(size_t)(RandF() * afloat.size()) % afloat.size()];
+    const float sp = RouteS(prey.pos.x, prey.pos.z);
+    Vector2 dir = Vector2Normalize(Vector2Subtract(RouteAt(sp + 30.0f), RouteAt(fmaxf(0.0f, sp - 30.0f))));
+    float u = RandF(), rel;
+    bool ahead = false;
+    if (u < 0.45f) rel = PI + (RandF() - 0.5f) * 1.6f;                                              // astern
+    else if (u < 0.8f) rel = (RandF() < 0.5f ? 1.0f : -1.0f) * (PI * 0.5f + (RandF() - 0.5f) * 1.0f);  // abeam
+    else { rel = (RandF() - 0.5f) * 1.2f; ahead = true; }                                           // lying in wait
+    int group = 1 + (RandF() < 0.3f + 0.4f * prog ? 1 : 0) + (RandF() < 0.1f + 0.3f * prog ? 1 : 0);
+    group = std::max(1, std::min(group, want - pirates));
+    const float base = atan2f(dir.x, dir.y);
+    for (int tries = 0; tries < 30; ++tries) {
+        float a = base + rel + (RandF() - 0.5f) * 0.6f;
+        float d = voyage::spawnMin + RandF() * 350.0f + (ahead ? 300.0f : 0.0f);
+        Vector2 at = {prey.pos.x + sinf(a) * d, prey.pos.z + cosf(a) * d};
+        if (PassageInside(at.x, at.y) < 250.0f || RocksHeight(rocks, at.x, at.y) > -30.0f) continue;
+        bool ok = true;
+        for (const Ship* c : afloat) ok &= Vector2Distance({c->pos.x, c->pos.z}, at) > voyage::spawnMin * 0.85f;
+        for (int h = 0; h < (int)harbours.size(); ++h) ok &= Vector2Distance({harbours[h].x, harbours[h].z}, at) > (h == voyage::startHarbour ? 600.0f : 850.0f);
+        if (!ok) continue;
+        float toPrey = atan2f(prey.pos.x - at.x, prey.pos.z - at.y);
+        Vector2 side = {cosf(toPrey), -sinf(toPrey)};
+        for (int k = 0; k < group; ++k) {
+            float off = (k - (group - 1) * 0.5f) * 75.0f;
+            Vector2 q = {at.x + side.x * off, at.y + side.y * off};
+            if (RocksHeight(rocks, q.x, q.y) > -20.0f) q = at;
+            float v = RandF();
+            int cls = v < 0.45f - 0.25f * prog ? SC_CUTTER : v < 0.92f - 0.25f * prog ? SC_FRIGATE : SC_LINE;
+            SpawnRaider(q, toPrey, cls);
+        }
+        break;
+    }
+    voyageSpawn = (9.0f + RandF() * 7.0f) * (1.0f - 0.4f * prog);
+}
+
 void World::PlaceOnGrid(Ship& s) {
     int k = 0, all = 0;
     for (const Ship& o : ships) {

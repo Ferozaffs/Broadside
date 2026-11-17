@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "scenery.h"
 #include "maelstrom.h"
 #include "render.h"
@@ -164,7 +165,7 @@ void Scenery::DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, floa
 }
 
 // ---- islands -----------------------------------------------------------------------
-static Mesh BuildIsland(const Rock& k, bool vortex) {
+static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
     static const float Uisle[] = {0.0f, 0.12f, 0.25f, 0.37f, 0.48f, 0.58f, 0.67f, 0.74f, 0.8f, 0.85f, 0.89f,
                                   0.925f, 0.952f, 0.972f, 0.987f, 1.0f, 1.015f, 1.05f, 1.12f, 1.25f, 1.45f};
     static const float Ustack[] = {0.0f, 0.3f, 0.55f, 0.72f, 0.84f, 0.92f, 0.97f, 1.0f, 1.08f, 1.3f, 1.8f, 2.6f};
@@ -173,11 +174,11 @@ static Mesh BuildIsland(const Rock& k, bool vortex) {
     const int NU0 = k.stack ? (int)(sizeof(Ustack) / sizeof(float)) : (int)(sizeof(Uisle) / sizeof(float));
     std::vector<float> Uv;
     for (int i = 0; i + 1 < NU0; ++i)
-        for (int s = 0; s < 3; ++s) Uv.push_back(U0[i] + (U0[i + 1] - U0[i]) * s / 3.0f);
+        for (int s = 0, sub = coarse ? 1 : 3; s < sub; ++s) Uv.push_back(U0[i] + (U0[i + 1] - U0[i]) * s / (float)sub);
     Uv.push_back(U0[NU0 - 1]);
     const float* U = Uv.data();
     const int NU = (int)Uv.size();
-    const int NS = k.stack ? 36 : (int)Clamp(k.r * 1.5f, 90.0f, 220.0f);
+    const int NS0 = k.stack ? 36 : (int)Clamp(k.r * 1.5f, 90.0f, 220.0f), NS = coarse ? std::max(24, NS0 / 3) : NS0;
     const float so = (float)(k.seed % 1000);
 
     std::vector<Vector3> P;
@@ -250,7 +251,7 @@ static Mesh BuildIsland(const Rock& k, bool vortex) {
     if (!k.stack) {
         uint32_t s = k.seed | 1;
         auto rnd = [&](float a, float b) { s = s * 1664525u + 1013904223u; return a + (b - a) * ((s >> 8) & 0xFFFFFF) / 16777216.0f; };
-        int want = (int)(k.r * 1.1f);
+        int want = (int)(k.r * 1.1f) / (coarse ? 3 : 1);
         const int SL = 7;
         for (int t = 0; t < want * 6 && want > 0 && P.size() + 40 < 65000; ++t) {
             float a = rnd(0, 2 * PI), u = sqrtf(rnd(0.0f, 0.7f));
@@ -325,26 +326,42 @@ static Mesh BuildIsland(const Rock& k, bool vortex) {
 }
 
 void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
-    for (Island& is : islands) UnloadMesh(is.mesh);
+    for (Island& is : islands) {
+        UnloadMesh(is.mesh);
+        if (is.far.vertexCount) UnloadMesh(is.far);
+    }
     islands.clear();
     for (const Rock& k : rocks) {
         Island is;
         is.mesh = BuildIsland(k, maelstrom);
+        if (!k.stack && k.r > 40.0f) is.far = BuildIsland(k, maelstrom, true);
         is.centre = {k.x, k.h * 0.4f, k.z};
         is.radius = k.r * 1.5f + k.h;
         islands.push_back(is);
     }
 }
 
+static constexpr float kFarCull = 9000.0f;     // m: nothing on the voyage's long sea shows past this
+static constexpr float kCoarseFrom = 1400.0f;  // m past an island's edge: its coarse copy
+
 void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
     if (!ready) return;
     Vector3 fwd = Vector3Normalize(Vector3Subtract(v.target, v.pos));
+    const float halfH = atanf(tanf(v.fovy * DEG2RAD * 0.5f) * (v.height > 0 ? (float)v.width / v.height : 1.78f));
     r.SetLitParams(0.0f, 0.0f);
     r.SetShore(1.0f);
     rlDisableBackfaceCulling();  // ragged cliffs can fold over a little
     for (const Island& is : islands) {
         if (cull && Vector3DotProduct(Vector3Subtract(is.centre, v.pos), fwd) < -is.radius) continue;  // behind the camera
-        DrawMesh(is.mesh, rockMat, MatrixIdentity());
+        float d = Vector3Distance(is.centre, v.pos);
+        if (cull && d - is.radius > kFarCull) continue;  // lost in the haze (the voyage)
+        if (cull && d > is.radius) {  // off either side of the view
+            Vector2 to = {(is.centre.x - v.pos.x) / d, (is.centre.z - v.pos.z) / d}, fh = Vector2Normalize({fwd.x, fwd.z});
+            float tl = Vector2Length(to);
+            if (tl > 1e-4f && acosf(Clamp((to.x * fh.x + to.y * fh.y) / tl, -1.0f, 1.0f)) > halfH + asinf(fminf(1.0f, is.radius / d)) + 0.12f) continue;
+        }
+        // a long way off: the coarse copy (it has to be well out, its coastline is a little different)
+        DrawMesh(cull && is.far.vertexCount && d - is.radius > kCoarseFrom ? is.far : is.mesh, rockMat, MatrixIdentity());
     }
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
@@ -443,18 +460,20 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
         Port p;
         p.ang = h.ang;
         p.out = {cosf(h.ang), sinf(h.ang)};
+        p.base = {h.x - p.out.x * 730.0f, h.z - p.out.y * 730.0f};  // (laid out as if 730 m out from the middle of the Isles)
+        const Vector2 B0 = p.base;
         // walk out from the anchorage until we're on the island: that's where the pier starts
         float coast = 900.0f;
         for (float r = 740.0f; r < 920.0f; r += 2.0f)
-            if (RocksHeight(rocks, p.out.x * r, p.out.y * r) > 1.5f) { coast = r; break; }
+            if (RocksHeight(rocks, B0.x + p.out.x * r, B0.y + p.out.y * r) > 1.5f) { coast = r; break; }
         p.pierFrom = coast + 6.0f;
         p.pierTo = 752.0f;
         p.dock = {h.x, 0.0f, h.z};
-        p.lamp = {p.out.x * (p.pierTo - 2.0f), 27.0f, p.out.y * (p.pierTo - 2.0f)};
+        p.lamp = {B0.x + p.out.x * (p.pierTo - 2.0f), 27.0f, B0.y + p.out.y * (p.pierTo - 2.0f)};
 
         // local frame: Z runs out along the pier towards the island, X across it
         Vector3 Z = {p.out.x, 0, p.out.y}, X = {-p.out.y, 0, p.out.x}, Y = {0, 1, 0};
-        auto at = [&](float rr, float side, float y) { return Vector3{p.out.x * rr + X.x * side, y, p.out.y * rr + X.z * side}; };
+        auto at = [&](float rr, float side, float y) { return Vector3{B0.x + p.out.x * rr + X.x * side, y, B0.y + p.out.y * rr + X.z * side}; };
         uint32_t sd = (uint32_t)(h.ang * 1000.0f) | 1;
         auto rnd = [&](float a, float b) { sd = sd * 1664525u + 1013904223u; return a + (b - a) * ((sd >> 8) & 0xFFFFFF) / 16777216.0f; };
         auto tone = [&](Color c, float k) { return Shade(c, k); };
@@ -550,8 +569,9 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
     r.SetLitParams(0.0f, 0.0f);
     for (size_t i = 0; i < ports.size(); ++i) {
         const Port& p = ports[i];
-        Vector3 mid = {p.out.x * (p.pierFrom + p.pierTo) * 0.5f, 0, p.out.y * (p.pierFrom + p.pierTo) * 0.5f};
+        Vector3 mid = {p.base.x + p.out.x * (p.pierFrom + p.pierTo) * 0.5f, 0, p.base.y + p.out.y * (p.pierFrom + p.pierTo) * 0.5f};
         if (cull && Vector3DotProduct(Vector3Subtract(mid, v.pos), fwd) < -150.0f) continue;  // behind the camera
+        if (cull && Vector3Distance(mid, v.pos) > kFarCull) continue;                          // (the voyage's long sea)
         if (p.hasMesh) {
             r.SetProp(1.0f);
             DrawMesh(p.mesh, propMat, MatrixIdentity());
@@ -573,7 +593,8 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
         for (int b = 0; b < 10; ++b) {
             float a = b * 2.0f * PI / 10.0f;
             float bx = p.dock.x + cosf(a) * tune::harbourRadius, bz = p.dock.z + sinf(a) * tune::harbourRadius;
-            if (Vector2Length({bx, bz}) > p.pierTo - 4.0f && fabsf(atan2f(bz, bx) - atan2f(p.dock.z, p.dock.x)) < 0.02f) continue;
+            Vector2 rb = {bx - p.base.x, bz - p.base.y};
+            if (Vector2Length(rb) > p.pierTo - 4.0f && fabsf(atan2f(rb.y, rb.x) - p.ang) < 0.02f) continue;
             float by = ocean.Height(bx, bz);
             column(cyl, {bx, by - 0.6f, bz}, 0.9f, 2.0f, flag[i]);
             column(cone, {bx, by + 1.4f, bz}, 0.7f, 1.6f, {230, 226, 214, 255});

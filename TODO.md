@@ -423,6 +423,36 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
   40 bots in practice: 46-61 fps on the GTX 1060. A snapshot is ~115 bytes a ship at 30 Hz, to every client.
 - [x] Realistic handling in every mode and arena, with or without skills (user: "We should not limit the users").
 
+## Voyage: co-op mode (2026-11-17, user: "build a coop mode where you have survive going from on harbor to the other while
+## chased by pirates. Arena must be way way bigger.")
+- [x] MODE_VOYAGE (team 0 = the convoy: every human and the host's bots, now "allies"; team 1 = pirates) on its own sea,
+  ARENA_PASSAGE: a rounded oblong of coast (|x/1550|^4 + |z/4900|^4 = 1) of overlapping big islands with a backdrop of
+  high land, start harbour in the south end, destination in the north, a haven halfway up one side; ~34 islands, islets
+  and ~26 stack clusters inside (MakePassage in sim.cpp). ~12x the Isles' water. Built in ~140 ms.
+- [x] Sea lane: Dijkstra over a 25 m grid with a clearance cost, string-pulled, Chaikin-rounded, every 10 m
+  (World::route, RouteS/RouteAt). The convoy bots follow it (each in a lane, waiting for the hindmost human), the HUD
+  draws it as gold dots on the water for the next 800 m.
+- [x] Pirates (Ship::raider): bands of 1-3 out of sight (1050-1400 m) astern 45%, abeam 35%, ahead 20%; how many at
+  once (1 + captains + 0.3 escorts) x (0.6 + 0.8 progress), bigger ships further on; +35% speed while more than ~150 m
+  from their prey; give up after 15 s more than 2.7 km from every convoy ship; keep 700 m off the haven and the
+  destination; go down for good (slot reused only after the clients heard it left). "PIRATES SIGHTED off the port bow".
+- [x] Reserve: teamScore[0] (2 per starting captain, min 3, +1 per human joining under way); sunk with none left ->
+  Ship::lost (SF_LOST), out until the next voyage. teamScore[1] = pirates sunk. Won: every human captain afloat in
+  the destination's ring and nobody waiting; lost: nobody afloat or waiting. Round limit 60 min.
+- [x] The voyage waits in harbour until someone is aboard (the host's client joins a moment after its server starts).
+  Late joiners: in the harbour line until the convoy is 400 m out, then astern of the leader.
+- [x] Big-sea plumbing: shore-damp grid per arena (1024 cells over +-5400 m for the passage; OceanCPU::DampN/Extent,
+  shore texture recreated on a size change), harbour scenery generalised off the 730 m ring (Port::base), arena
+  shadow box follows the camera in 1 km steps, island LOD (coarse copy past 1.4 km) + side culling + 9 km cull
+  (voyage 50 -> 70-78 fps on the GTX 1060), bots look further ahead for rocks the faster they go, the camera starts
+  astern of your ship on every spawn (it kept the last compass bearing and could face the bow).
+- [x] Tests: BS_VOYAGETEST=1 (BS_CONVOY, BS_SEED, BS_REAL, BS_FLEETS, BS_SKILLS, BS_VOYMIN, BS_VOYMAP=chart.ppm,
+  BS_ROCKLOG, BS_VOYNOSAIL), BS_VOYGRACE=s brings the first pirates sooner, BS_PIRATES=n caps them. Results: 4 bot
+  captains make harbour in 6-11 min losing 2-10 ships; one alone 9-17 min; Realistic 27 min; tick ~2 ms.
+- Protocol 22.
+- Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
+  what comes within 300 m.
+
 ## Playtest list (2026-11-17, user: "add friendly fire so bots play less chaotic, also red team spawn in the wrong directions.
 ## Respawns should be close to harbor. Realistic mode could need a little better turn rate. Escort should have less hp so a
 ## full salvo from a cutter kills on ... crew should have way higher fire rate like 5-10x ... climb up an be lookout.

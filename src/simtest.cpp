@@ -237,7 +237,132 @@ static int HandlingTest() {
     return 0;
 }
 
+// The voyage: a convoy of bot captains sails the passage while the pirates find it. How far it gets, what it loses,
+// how many pirates turn up and go down, how the bots handle the archipelago, and how long a tick takes on the big sea.
+// BS_CONVOY=n captains (4), BS_REAL=1 realistic, BS_FLEETS=1, BS_SKILLS=1, BS_SEED, BS_VOYMAP=file.ppm (a chart).
+static int VoyageTest() {
+    World g;
+    g.rounds = true;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1;
+    double t0 = GetTimeNow();
+    g.Init(seed, 0, 0, MODE_VOYAGE, getenv("BS_FLEETS") != nullptr, ARENA_PASSAGE);
+    double built = GetTimeNow() - t0;
+    g.realistic = getenv("BS_REAL") != nullptr;
+    g.skills = getenv("BS_SKILLS") != nullptr;
+    int islands = 0, stacks = 0;
+    for (const Rock& k : g.rocks) (k.stack ? stacks : islands)++;
+    printf("voyage seed %u: arena %d, %d islands + %d stacks, harbours %zu (start %.0f %.0f, end %.0f %.0f, haven %.0f %.0f at s %.0f), route %.0f m, built in %.0f ms\n",
+           seed, g.arena, islands, stacks, g.harbours.size(), g.harbours[0].x, g.harbours[0].z, g.harbours[1].x, g.harbours[1].z,
+           g.harbours.size() > 2 ? g.harbours[2].x : 0.0f, g.harbours.size() > 2 ? g.harbours[2].z : 0.0f, g.havenS, g.RouteLength(), built * 1000.0);
+    // the route must stay on open water
+    float worstClear = 1e9f;
+    for (size_t i = 10; i + 10 < g.route.size(); ++i) worstClear = fminf(worstClear, -RocksHeight(g.rocks, g.route[i].x, g.route[i].y));
+    printf("   route: shallowest point %.1f m deep (rock profile), %zu points; starts", worstClear, g.route.size());
+    for (size_t i = 0; i < g.route.size() && i < 60; i += 6) printf(" (%.0f %.0f)", g.route[i].x, g.route[i].y);
+    printf("\n");
+    const int N = getenv("BS_CONVOY") ? atoi(getenv("BS_CONVOY")) : 4;
+    for (int i = 0; i < N; ++i) g.AddShip(TextFormat("convoy%d", i), true);
+    if (getenv("BS_VOYNOSAIL")) {
+        for (const Ship& x : g.ships)
+            if (x.active) printf("   %s at %.0f %.0f heading %.2f\n", x.name.c_str(), x.pos.x, x.pos.z, Heading(x));
+        return 0;
+    }
+    std::vector<Vector2> trail;
+    int rockPirate = 0, rockConvoy = 0, convoyLost = 0, piratesSunk = 0, spawned = 0, rockHits = 0, hardRock = 0, hits = 0, friendly = 0, maxPirates = 0;
+    double sum = 0, worst = 0;
+    int ticks = 0, result = -1;
+    float endT = 0;
+    const int T = (int)((getenv("BS_VOYMIN") ? atof(getenv("BS_VOYMIN")) : 30.0f) * 60 * 60);
+    for (int i = 0; i < T; ++i) {
+        double a = GetTimeNow();
+        g.Step();
+        double dt = GetTimeNow() - a;
+        sum += dt;
+        worst = std::max(worst, dt);
+        ++ticks;
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::Respawn && e.a < g.ShipCount() && g.ships[e.a].raider) spawned++;
+            if (e.type == EventType::Kill && e.b < g.ShipCount()) {
+                if (g.ships[e.b].raider) piratesSunk++;
+                else if (g.ships[e.b].leader < 0) {
+                    convoyLost++;
+                    printf("   t=%4.0f %s sunk at s %.0f by %s (reserve now %d)\n", g.time, g.ships[e.b].name.c_str(), g.RouteS(e.pos.x, e.pos.z),
+                           e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "the rocks", g.teamScore[0]);
+                }
+            }
+            if (e.type == EventType::Hit) {
+                hits++;
+                if (e.a < g.ShipCount() && e.b < g.ShipCount() && e.a != e.b && !g.Enemies(g.ships[e.a], g.ships[e.b])) friendly++;
+            }
+            if (e.type == EventType::Ram && (e.flags & EF_ROCK)) {
+                rockHits++;
+                if (e.value > 6.0f) hardRock++;
+                if (e.a < g.ShipCount()) (g.ships[e.a].raider ? rockPirate : rockConvoy)++;
+                if (getenv("BS_ROCKLOG") && e.a < g.ShipCount() && e.value > 6.0f)
+                    printf("   [rock] t=%.0f %s (%s) at %.0f %.0f, s %.0f, inside %.0f m, v %.1f, hit %.1f\n", g.time, g.ships[e.a].name.c_str(),
+                           g.ships[e.a].raider ? "pirate" : g.ships[e.a].leader >= 0 ? "escort" : "convoy", e.pos.x, e.pos.z, g.RouteS(e.pos.x, e.pos.z),
+                           PassageInside(e.pos.x, e.pos.z), Vector3Length(g.ships[e.a].vel), e.value);
+            }
+            if (e.type == EventType::MatchEnd && result < 0) {
+                result = e.b;
+                endT = (float)g.time;
+            }
+        }
+        g.events.clear();
+        int pir = 0;
+        for (const Ship& x : g.ships) pir += x.active && x.raider && x.alive;
+        maxPirates = std::max(maxPirates, pir);
+        if (i % 120 == 0)
+            for (const Ship& x : g.ships)
+                if (x.active && x.alive && x.leader < 0) trail.push_back({x.pos.x, x.pos.z});
+        if (i % (60 * 60) == 0) {
+            int afloat = 0;
+            for (const Ship& x : g.ships) afloat += x.active && x.alive && x.leader < 0 && !x.raider;
+            printf("   t=%4.0f best s %5.0f / %.0f, convoy afloat %d, pirates %d, reserve %d, pirates sunk %d, tick avg %.2f ms\n", g.time, g.voyageBest,
+                   g.RouteLength(), afloat, pir, g.teamScore[0], g.teamScore[1], sum / ticks * 1000.0);
+        }
+        if (result >= 0) break;
+    }
+    printf("voyage %s after %.0f s: convoy sunk %d times, %d pirates turned up (most at once %d), %d sunk, %d hits (%d on friends), rock hits %d (%d hard; %d pirate, %d convoy), tick avg %.2f ms worst %.2f ms\n",
+           result == 0 ? "MADE HARBOUR" : result == 1 ? "LOST" : "UNFINISHED", result >= 0 ? endT : (float)g.time, convoyLost, spawned, maxPirates,
+           piratesSunk, hits, friendly, rockHits, hardRock, rockPirate, rockConvoy, sum / ticks * 1000.0, worst * 1000.0);
+    if (const char* path = getenv("BS_VOYMAP")) {  // a chart: land, the lane, the harbours, where the ships went
+        const float px = 10.0f, X0 = -voyage::passageA - 600.0f, Z0 = -voyage::passageB - 600.0f;
+        const int W = (int)(2.0f * (voyage::passageA + 600.0f) / px), H = (int)(2.0f * (voyage::passageB + 600.0f) / px);
+        std::vector<unsigned char> img(W * H * 3);
+        for (int j = 0; j < H; ++j)
+            for (int i = 0; i < W; ++i) {
+                float x = X0 + (i + 0.5f) * px, z = Z0 + (H - 1 - j + 0.5f) * px;
+                float h = RocksHeight(g.rocks, x, z);
+                unsigned char* c = &img[(j * W + i) * 3];
+                if (h > 0.0f) { c[0] = 90; c[1] = 120; c[2] = 70; }
+                else if (h > -8.0f) { c[0] = 150; c[1] = 160; c[2] = 130; }
+                else { c[0] = 20; c[1] = 50; c[2] = 90; }
+            }
+        auto dot = [&](float x, float z, unsigned char r, unsigned char gg, unsigned char b, int rad) {
+            int i = (int)((x - X0) / px), j = H - 1 - (int)((z - Z0) / px);
+            for (int dj = -rad; dj <= rad; ++dj)
+                for (int di = -rad; di <= rad; ++di)
+                    if (i + di >= 0 && i + di < W && j + dj >= 0 && j + dj < H) {
+                        unsigned char* c = &img[((j + dj) * W + i + di) * 3];
+                        c[0] = r; c[1] = gg; c[2] = b;
+                    }
+        };
+        for (const Vector2& p : trail) dot(p.x, p.y, 230, 230, 230, 0);
+        for (const Vector2& p : g.route) dot(p.x, p.y, 240, 190, 60, 0);
+        for (size_t h = 0; h < g.harbours.size(); ++h) dot(g.harbours[h].x, g.harbours[h].z, h == 1 ? 255 : 60, h == 1 ? 215 : 220, 60, 6);
+        FILE* f = fopen(path, "wb");
+        if (f) {
+            fprintf(f, "P6 %d %d 255\n", W, H);
+            fwrite(img.data(), 1, img.size(), f);
+            fclose(f);
+        }
+    }
+    return 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_VOYAGETEST")) return VoyageTest();
     if (getenv("BS_LIVERYTEST")) return LiveryTest();
     if (getenv("BS_HANDLINGTEST")) return HandlingTest();
     if (getenv("BS_CROWDTEST")) {  // a full house: as many bots as there are berths, with and without fleets; how long a tick takes
@@ -1138,7 +1263,7 @@ duels:
         }
     }
     for (int m = 0; m < MODE_COUNT; ++m) {
-        if (m == MODE_RACE) continue;  // (its own test above)
+        if (m == MODE_RACE || m == MODE_VOYAGE) continue;  // (their own tests)
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;

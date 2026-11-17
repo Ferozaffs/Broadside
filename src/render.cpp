@@ -222,6 +222,12 @@ void Renderer::BeginShadow(int c, Vector3 centre, float half, float depth) {
 
 void Renderer::SetShoreDamp(const std::vector<unsigned char>& grid, int n, float extent) {
     if (grid.size() != (size_t)n * n) return;
+    if (shoreTex && shoreTexN != n) {  // (immutable storage: a sea of another size needs a new texture)
+        GLuint_ t = shoreTex;
+        DeleteTextures(1, &t);
+        shoreTex = 0;
+    }
+    shoreTexN = n;
     if (!shoreTex) {
         GLuint_ t;
         GenTextures(1, &t);
