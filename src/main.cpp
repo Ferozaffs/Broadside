@@ -605,6 +605,8 @@ private:
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
         if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
+        if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_ARMADA && s.team == 1)  // (the Navy: white, the Admiral gold)
+            return id == bossView.bossShip ? ui::kGold : Color{236, 236, 228, 255};
         if (curMode == MODE_BOSS && s.team == 1) return kPirate;
         return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
     }
@@ -673,6 +675,7 @@ private:
     void DrawKrakenQueen(float dt);
     void DrawSerpentBoss(float dt);
     void DrawFortressBoss(float dt);
+    void FireshipFx(float dt);
     void DrawSearchlight(const Camera3D& cam);
     void DrawMortarMarks();
     void DrawBossBar(float W);
@@ -2964,6 +2967,18 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_ARMADA) {
+                if (e.b == 1) {
+                    Notice("THE ADMIRAL'S ARMADA", ui::kGold, 4.0f);
+                    Feed3("THE ADMIRAL'S ARMADA", "  in line of battle: break the line, then sink the Admiral", "", ui::kGold, ui::kText);
+                } else {
+                    Notice(e.b == 2 ? "FIRE SHIPS!" : "THE ADMIRAL CALLS UP THE LAST OF HIS LINE", ui::kGold, 4.0f);
+                    Feed3("THE ADMIRAL", e.b == 2 ? "  sends fire ships at you, and a fresh line comes in" : "  brings in his last ships: the volleys come faster", "", ui::kGold,
+                          ui::kText);
+                }
+                sfx::PlayFlat(sfx::Thunder, 0.8f, 0.8f);
+                break;
+            }
             if (e.flags == BOSS_FORTRESS) {
                 const Color fc = {230, 200, 150, 255};
                 if (e.b == 1) {
@@ -3042,6 +3057,15 @@ void Game::PlayEvent(const GameEvent& e) {
             if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 420.0f) sfx::PlayFlat(sfx::Creak, 0.7f, 0.5f);
             break;
         case EventType::BossSlam: {
+            if (e.flags == 2) {  // a fire ship going up
+                fx.BigExplosion(e.pos);
+                fx.Explosion(e.pos, {0, 1, 0}, 2.0f);
+                sfx::Play(sfx::Thunder, e.pos, 1.0f, 1.2f);
+                sfx::Play(sfx::Hit, e.pos, 1.0f, 0.6f);
+                AddFoam(e.pos, 6.0f, e.value, 6.0f, 1.0f);
+                if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 160.0f) shake = fmaxf(shake, 1.6f);
+                break;
+            }
             if (e.flags == 1) {  // the Serpent landing: a ring of white water and spray
                 for (int i = 0; i < 24; ++i) {
                     float a = 2.0f * PI * i / 24, rr = e.value * 0.35f;
@@ -3785,6 +3809,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_KRAKEN) DrawKrakenQueen(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_SERPENT) DrawSerpentBoss(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_FORTRESS) DrawFortressBoss(dt);
+    if (!menu) FireshipFx(dt);
 
     renderer.Water();
 
@@ -6272,6 +6297,16 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_ARMADA) {
+        int line = 0, fire = 0;
+        for (int id = 0; id < NumShips(); ++id)
+            if (view[id].present && (view[id].s.flags & SF_ALIVE) && view[id].s.team == 1 && id != bossView.bossShip) {
+                if (NameOf(id) == "Fire ship") ++fire;
+                else if (view[id].s.cls == SC_LINE) ++line;
+            }
+        extra = TextFormat("   \xC2\xB7   THE LINE %d%s%s", line, line >= 3 ? "  (SHIELDING THE ADMIRAL)" : line == 0 ? "  (THE ADMIRAL IS OPEN)" : "",
+                           fire ? TextFormat("   \xC2\xB7   FIRE SHIPS %d", fire) : "");
+    }
     if (bossView.bossKind == BOSS_FORTRESS) {
         int up = 0;
         for (const NetBossPart& p : bossView.bossParts) up += p.state == 1;
@@ -6527,4 +6562,15 @@ void Game::DrawSearchlight(const Camera3D& cam) {
     rlSetTexture(0);
     rlEnableBackfaceCulling();
     EndBlendMode();
+}
+
+// The Armada's fire ships: alight from end to end
+void Game::FireshipFx(float dt) {
+    if (curMode != MODE_BOSS || !bossView.hasBoss || bossView.bossKind != BOSS_ARMADA) return;
+    for (int id = 0; id < NumShips(); ++id) {
+        if (!view[id].present || !(view[id].s.flags & SF_ALIVE) || NameOf(id) != "Fire ship") continue;
+        const NetShip& s = view[id].s;
+        for (float z : {-10.0f, 0.0f, 10.0f})
+            fx.ShipFire(HullToWorld(s.pos, s.rot, {0.0f, 4.0f, z}, ScaleOf(id)), 1.0f, dt, s.vel);
+    }
 }

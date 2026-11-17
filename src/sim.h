@@ -222,6 +222,11 @@ enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, F
 constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
 constexpr float curseSlow = 0.45f;
 }  // namespace fd
+namespace aa {  // the Admiral's Armada
+constexpr float wall = 95.0f;      // m ahead of the Admiral, towards the nearest of us, its line lies
+constexpr float spacing = 58.0f;   // ...this far apart
+constexpr float blastR = 42.0f;    // a fire ship going up: everything within this
+}  // namespace aa
 namespace sf {  // the Sea Fortress: towers on its rim (bossParts), a keep in the middle, a searchlight
 constexpr int towers = 6;
 constexpr float rim = 50.0f;       // m from the middle to the towers
@@ -531,6 +536,9 @@ struct Ship {
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool merchant = false;  // raid: one of the AI convoy (sunk, or in port, it's gone for the round)
     bool boss = false;      // boss mode: the Leviathan (its own brain, BossThink; its guns fire patterns, UpdateBoss)
+    int8_t formation = -1;  // boss mode: one of the Armada's line (keeps station between the Admiral and us)
+    bool fireship = false;  // boss mode: a burning hulk sailed at us, to blow up alongside
+    int16_t chase = -1;     // ...the ship it's after
     float raiderIdle = 0.0f;  // voyage: s this pirate has been far from every convoy ship
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
@@ -791,6 +799,13 @@ private:
     void SpawnDutchman();
     void SpawnSerpent();
     void SpawnFortress();
+    void SpawnArmada();
+    void UpdateArmada(float dt, int phase, const std::vector<const Ship*>& prey);
+    void ArmadaThink(Ship& s, float dt);
+    void FireshipBlast(Ship& f);
+    void AimAt(Ship& s, Vector3 at, Vector3 vel);  // a gun crew's lay onto a moving mark (the Armada's volleys)
+    float bossVolley = 0.0f;
+    int bossVolleyState = 0;
     void UpdateFortress(float dt, int phase, const std::vector<const Ship*>& prey);
     void FortressRockOn(bool on);  // its island in the sea (and out again)
     void UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& prey);

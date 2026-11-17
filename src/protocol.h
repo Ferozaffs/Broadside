@@ -229,6 +229,7 @@ struct Snapshot {
     std::vector<NetMonster> monsters;
     bool hasBoss = false;  // boss mode: which, its phase and state, its hull (0..1), where, its parts
     uint8_t bossKind = 0, bossPhase = 0, bossState = 0;
+    uint16_t bossShip = NO_SHIP;  // the boss's own ship (the Leviathan, the Dutchman, the Admiral), if it's one
     float bossHp = 1.0f, bossHeading = 0.0f, bossT = 0.0f;
     Vector3 bossPos{};
     std::vector<NetBossPart> bossParts;
@@ -393,6 +394,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put((uint8_t)(world.mode == MODE_BOSS && world.bossId >= 0 ? 1 : 0));
     if (world.mode == MODE_BOSS && world.bossId >= 0) {
         w.Put(world.bossKind);
+        w.Put((uint16_t)(!world.ships[world.bossId].stowed ? world.bossId : NO_SHIP));
         w.Put((uint8_t)world.bossPhase);
         w.Put(world.bossState);
         w.Put((uint16_t)(Clamp(world.bossHpNow / fmaxf(world.bossHpMax, 1.0f), 0.0f, 1.0f) * 65535.0f));
@@ -541,6 +543,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.hasBoss = r.Get<uint8_t>() != 0;
     if (s.hasBoss && r.ok) {
         s.bossKind = r.Get<uint8_t>();
+        s.bossShip = r.Get<uint16_t>();
         s.bossPhase = r.Get<uint8_t>();
         s.bossState = r.Get<uint8_t>();
         s.bossHp = r.Get<uint16_t>() / 65535.0f;

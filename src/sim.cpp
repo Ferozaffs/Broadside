@@ -1512,6 +1512,11 @@ void World::Respawn(Ship& s) {
 
 void World::Damage(Ship& v, float amount, int attacker) {
     if (!v.alive || matchState != 0 || RaceHeld()) return;  // (nothing counts on the start line)
+    if (mode == MODE_BOSS && v.boss && bossKind == BOSS_ARMADA) {  // the line shields the Admiral
+        int line = 0;
+        for (const Ship& l : ships) line += l.active && l.alive && l.formation >= 0;
+        amount *= line >= 3 ? 0.33f : line >= 1 ? 0.66f : 1.0f;
+    }
     if (!friendlyFire && attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // (host option)
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
@@ -1863,6 +1868,7 @@ void World::StepShip(Ship& s, float dt) {
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
+        if (s.formation >= 0) top *= 1.3f;  // (the Armada's line: getting between us and the Admiral)
         if (s.boss && bossKind == BOSS_DUTCHMAN && bossState != fd::SOLID) top *= 1.8f;  // (ethereal: nothing holds it back)
         if (mode == MODE_BOSS && bossKind == BOSS_DUTCHMAN && s.team == 0)  // cursed water
             for (const BossPart& c : bossParts)
@@ -2589,7 +2595,10 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
         }
     }
-    if (mode == MODE_BOSS && s.team == 0 && s.leader < 0 && bossId >= 0 && bossId < ShipCount() && ships[bossId].active && ships[bossId].alive) {
+    bool lineStands = false;
+    if (mode == MODE_BOSS && bossKind == BOSS_ARMADA)
+        for (const Ship& l : ships) lineStands |= l.active && l.alive && (l.formation >= 0 || l.fireship);
+    if (mode == MODE_BOSS && s.team == 0 && s.leader < 0 && bossId >= 0 && bossId < ShipCount() && ships[bossId].active && ships[bossId].alive && !lineStands) {
         // the Leviathan: round it at a couple of cables, broadside on (in close its grapeshot is murder); a gunboat
         // right on top of us comes first
         Ship& B = ships[bossId];
@@ -2696,7 +2705,7 @@ void World::BotThink(Ship& s, float dt) {
                                             : Vector3{sinf(m.heading) * m.speed, 0.0f, cosf(m.heading) * m.speed};
             }
         }
-    if (mode == MODE_BOSS && bossKind != BOSS_LEVIATHAN && s.team == 0 && bossId >= 0 && target == &ships[bossId]) {  // a boss that isn't a ship
+    if (mode == MODE_BOSS && s.team == 0 && bossId >= 0 && target == &ships[bossId] && ships[bossId].stowed) {  // a boss that isn't a ship
         Vector3 p;
         if (BossAimFor(s.pos, p)) {
             tPos = p;
@@ -3582,6 +3591,7 @@ void World::Step() {
         if (!s.active || s.stowed) continue;
         if (s.isBot) {
             if (s.boss) BossThink(s, dt);
+            else if (s.formation >= 0 || s.fireship) ArmadaThink(s, dt);
             else BotThink(s, dt);
         }
         ShipControls(s, dt, true);
@@ -3593,6 +3603,7 @@ void World::Step() {
             s.deadTimer -= dt;
             if (s.deadTimer <= 0) {
                 if (s.leader >= 0) s.stowed = true;  // lost escorts wait for their captain
+                else if (s.fireship) FireshipBlast(s);
                 else if (s.raider || s.merchant) {  // (a pirate (voyage) or a merchant (raid) goes down for good; its slot isn't handed straight on)
                     RemoveShip(s.id);
                     voyageSpawn = fmaxf(voyageSpawn, 0.5f);
@@ -4341,15 +4352,16 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
-    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 5) % 5);  // (random: among the ones there are so far)
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 6) % 6);  // (random: among the ones there are so far)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
     bossParts.clear();
     FortressRockOn(false);
-    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS) {
+    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS || bossKind == BOSS_ARMADA) {
         if (bossKind == BOSS_KRAKEN) SpawnKrakenQueen();
         else if (bossKind == BOSS_DUTCHMAN) SpawnDutchman();
         else if (bossKind == BOSS_SERPENT) SpawnSerpent();
-        else SpawnFortress();
+        else if (bossKind == BOSS_FORTRESS) SpawnFortress();
+        else SpawnArmada();
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
@@ -4459,7 +4471,7 @@ void World::UpdateBoss(float dt) {
     }
     if (bossId >= ShipCount() || !ships[bossId].active) return;
     Ship& B = ships[bossId];
-    const bool ship = bossKind == BOSS_LEVIATHAN || bossKind == BOSS_DUTCHMAN;  // (ships keep their hull in the ship)
+    const bool ship = bossKind == BOSS_LEVIATHAN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_ARMADA;  // (ships keep their hull in the ship)
     if (ship) {
         bossHpNow = B.alive ? B.hp : 0.0f;
         bossHpMax = B.maxHp;
@@ -4486,6 +4498,38 @@ void World::UpdateBoss(float dt) {
         e.flags = bossKind;
         e.pos = bossPos;
         events.push_back(e);
+        if (bossKind == BOSS_ARMADA) {  // the Admiral's reinforcements: a fresh line sails in
+            int captains = 0, next = 0;
+            for (const Ship& s : ships) {
+                captains += s.active && s.leader < 0 && s.team == 0;
+                if (s.active && s.formation >= next) next = s.formation + 1;
+            }
+            const int n = 2 + captains / 2;
+            float a0 = RandF() * 2.0f * PI;
+            for (int k = 0; k < n; ++k) {
+                int i = NewShipSlot();
+                if (i < 0) break;
+                Ship& l = ships[i];
+                l = Ship{};
+                l.active = true;
+                l.id = (uint16_t)i;
+                l.isBot = true;
+                l.raider = true;
+                l.fixedCls = true;
+                l.team = 1;
+                l.formation = (int8_t)(next + k);
+                l.cls = l.nextCls = SC_LINE;
+                l.name = std::string("HMS ") + (k % 2 ? "Valiant" : "Resolute") + " " + std::to_string(next + k);
+                float a = a0 + k * 0.25f;
+                Vector2 at = {sinf(a) * 480.0f, cosf(a) * 480.0f};
+                if (RocksHeight(rocks, at.x, at.y) > -20.0f) at = Vector2Scale(at, 0.8f);
+                l.pos = {at.x, ocean.Height(at.x, at.y) + 1.0f, at.y};
+                l.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI);
+                l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * Diff().bossHp;
+                l.alive = true;
+                l.sail = 1.0f;
+            }
+        }
         if (phase == 2 && bossKind == BOSS_FORTRESS)  // its gunboats sally out
             for (int k = 0; k < 2; ++k) {
                 float a = RandF() * 2.0f * PI;
@@ -4520,6 +4564,10 @@ void World::UpdateBoss(float dt) {
     }
     if (bossKind == BOSS_FORTRESS) {
         UpdateFortress(dt, phase, prey);
+        return;
+    }
+    if (bossKind == BOSS_ARMADA) {
+        UpdateArmada(dt, phase, prey);
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
@@ -5715,6 +5763,258 @@ void World::UpdateFortress(float dt, int phase, const std::vector<const Ship*>& 
             }
             bossRot += 0.3f;
             smoke(c, {0, 1, 0});
+        }
+    }
+}
+
+// ---- the Admiral's Armada -----------------------------------------------------------------
+// The Admiral's flagship (its hull is the boss bar), sailing a slow circle round the bay, and before it a line of
+// battle - ships of the line keeping station in a wall between the Admiral and the nearest of us. Every so often red
+// lines run out across the water from each of them, and then they all fire together. While three or more of the line
+// stand the Admiral takes a third of the shot. From two thirds down they send fire ships at us, burning hulks that
+// blow up alongside; from a third the volleys come faster and the Admiral fires with them.
+static const char* kLineNames[] = {"HMS Defiance", "HMS Thunderer", "HMS Dreadnought", "HMS Bellerophon", "HMS Conqueror",
+                                   "HMS Implacable", "HMS Formidable", "HMS Indomitable", "HMS Revenge", "HMS Spartiate"};
+
+void World::SpawnArmada() {
+    int j = NewShipSlot();
+    if (j < 0) return;
+    Ship& b = ships[j];
+    b = Ship{};
+    b.active = true;
+    b.id = (uint16_t)j;
+    b.isBot = true;
+    b.boss = true;
+    b.fixedCls = true;
+    b.team = 1;
+    b.cls = b.nextCls = SC_LINE;
+    b.name = "The Admiral";
+    float a = RandF() * 2.0f * PI;
+    b.pos = {sinf(a) * 240.0f, ocean.Height(sinf(a) * 240.0f, cosf(a) * 240.0f) + 1.0f, cosf(a) * 240.0f};
+    b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI * 0.5f);
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
+    b.maxHp = b.hp = (1000.0f + 400.0f * std::max(captains, 1)) * Diff().bossHp;
+    if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
+    b.alive = true;
+    b.sail = 0.5f;
+    bossId = j;
+    bossHpMax = bossHpNow = b.hp;
+    bossPos = b.pos;
+    bossVolley = 6.0f;
+    bossVolleyState = 0;
+    bossSpit = 10.0f;
+    bossParts.clear();
+    const int n = std::min(4 + captains, 9);
+    Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, b.rot);
+    for (int k = 0; k < n; ++k) {
+        int i = NewShipSlot();
+        if (i < 0) break;
+        Ship& l = ships[i];
+        l = Ship{};
+        l.active = true;
+        l.id = (uint16_t)i;
+        l.isBot = true;
+        l.raider = true;  // (goes down for good)
+        l.fixedCls = true;
+        l.team = 1;
+        l.formation = (int8_t)k;
+        l.cls = l.nextCls = SC_LINE;
+        l.name = kLineNames[k % 10];
+        float off = (k - (n - 1) * 0.5f) * aa::spacing;
+        Vector3 side = {fwd.z, 0.0f, -fwd.x};
+        Vector3 p = Vector3Add(b.pos, Vector3Add(Vector3Scale(fwd, aa::wall), Vector3Scale(side, off)));
+        l.pos = {p.x, ocean.Height(p.x, p.z) + 1.0f, p.z};
+        l.rot = b.rot;
+        l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * Diff().bossHp;
+        l.alive = true;
+        l.sail = 0.5f;
+    }
+}
+
+// a gun crew laying onto a moving mark: lead it, and the elevation for the range
+void World::AimAt(Ship& s, Vector3 at, Vector3 vel) {
+    const ShipClass& C = ClassOf(s.cls);
+    float d = Vector3Distance(at, s.pos), flight = d / C.muzzleSpeed;
+    Vector3 lead = Vector3Subtract(Vector3Add(at, Vector3Scale(vel, flight)), Vector3Scale(s.vel, flight));
+    Vector3 dd = Vector3Subtract(lead, s.pos);
+    float range = sqrtf(dd.x * dd.x + dd.z * dd.z);
+    float sn = Clamp(tune::gravity * range / (C.muzzleSpeed * C.muzzleSpeed), -1.0f, 1.0f);
+    s.input.aim = AimForElevation({dd.x, dd.z}, 0.5f * asinf(sn) + atan2f(dd.y, range));
+}
+
+// the line keeping station between the Admiral and the nearest of us, broadside on to us; a fire ship straight at its mark
+void World::ArmadaThink(Ship& s, float dt) {
+    PlayerInput& in = s.input;
+    if (!s.alive) { in.sail = 0.0f; return; }
+    Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+    float heading = atan2f(fwd.x, fwd.z), desired = heading;
+    if (s.fireship) {
+        const Ship* t = s.chase >= 0 && s.chase < ShipCount() && ships[s.chase].active && ships[s.chase].alive ? &ships[s.chase] : nullptr;
+        if (!t) {  // its mark's gone: the nearest of us instead
+            float bd = 1e9f;
+            for (const Ship& o : ships)
+                if (o.active && o.alive && !o.stowed && o.team == 0) {
+                    float d = Vector3Distance(o.pos, s.pos);
+                    if (d < bd) { bd = d; t = &o; s.chase = (int16_t)o.id; }
+                }
+        }
+        if (t) desired = atan2f(t->pos.x + t->vel.x * 2.0f - s.pos.x, t->pos.z + t->vel.z * 2.0f - s.pos.z);
+        in.sail = 1.0f;
+    } else if (bossId >= 0 && bossId < ShipCount() && ships[bossId].active && ships[bossId].alive) {
+        const Ship& F = ships[bossId];
+        const Ship* threat = nullptr;
+        float bd = 1e9f;
+        for (const Ship& o : ships)
+            if (o.active && o.alive && !o.stowed && o.team == 0) {
+                float d = Vector3Distance(o.pos, F.pos);
+                if (d < bd) { bd = d; threat = &o; }
+            }
+        Vector3 ffwd = Vector3RotateByQuaternion({0, 0, 1}, F.rot);
+        Vector2 dir = threat ? Vector2Normalize({threat->pos.x - F.pos.x, threat->pos.z - F.pos.z}) : Vector2{ffwd.x, ffwd.z};
+        Vector2 side = {dir.y, -dir.x};
+        int idx = 0, n = 0;
+        for (const Ship& o : ships)
+            if (o.active && o.alive && o.formation >= 0) {
+                if (o.formation < s.formation) ++idx;
+                ++n;
+            }
+        float off = (idx - (n - 1) * 0.5f) * aa::spacing;
+        Vector2 slot = {F.pos.x + dir.x * aa::wall + side.x * off, F.pos.z + dir.y * aa::wall + side.y * off};
+        float d = Vector2Distance(slot, {s.pos.x, s.pos.z});
+        if (d > 30.0f) {
+            desired = atan2f(slot.x - s.pos.x, slot.y - s.pos.z);
+            in.sail = Clamp(d / 80.0f, 0.5f, 1.0f);
+        } else {  // on station: broadside on to us
+            float a = atan2f(side.x, side.y);
+            if (fabsf(remainderf(a - heading, 2.0f * PI)) > PI * 0.5f) a += PI;
+            desired = a;
+            in.sail = 0.35f;
+        }
+        if (RocksHeight(rocks, s.pos.x + fwd.x * 70.0f, s.pos.z + fwd.z * 70.0f) > -6.0f) desired = heading + 1.2f;
+    }
+    in.rudder = Clamp(-remainderf(desired - heading, 2.0f * PI) * 2.0f, -1.0f, 1.0f);
+    (void)dt;
+}
+
+void World::FireshipBlast(Ship& f) {
+    const Vector3 at = f.pos;
+    for (Ship& s : ships) {
+        if (!s.active || !s.alive || s.stowed || s.id == f.id || s.team == 1) continue;
+        float d = Vector3Distance(s.pos, at);
+        if (d > aa::blastR + hull::halfLength * ClassOf(s.cls).scale) continue;
+        float k = 1.0f - Clamp(d / (aa::blastR + 20.0f), 0.0f, 1.0f);
+        float dmg = 34.0f * Diff().monster * (0.4f + 0.6f * k);
+        Vector3 out = Vector3Normalize(Vector3Subtract(s.pos, at));
+        ApplyImpulse(s, Vector3Scale({out.x, 0.6f, out.z}, tune::ballKnockback * 2.0f * k), at, {tune::hitPitch, tune::hitYaw, 1.2f});
+        GameEvent h{EventType::Hit};
+        h.a = f.id;
+        h.b = s.id;
+        h.flags = EF_PLUNGING;
+        h.pos = Vector3Lerp(s.pos, at, 0.3f);
+        h.dir = out;
+        h.value = dmg;
+        events.push_back(h);
+        Damage(s, dmg, bossId >= 0 ? bossId : f.id);
+    }
+    GameEvent e{EventType::BossSlam};
+    e.a = f.id;
+    e.flags = 2;  // (a fire ship going up)
+    e.pos = at;
+    e.value = aa::blastR;
+    events.push_back(e);
+    f.fireship = false;
+    f.alive = false;
+    f.hp = 0.0f;
+    f.deadTimer = 0.5f;
+}
+
+void World::UpdateArmada(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& F = ships[bossId];
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.15f : 1.6f);
+    // the volley: red lines out from every gun of the line, then all of them at once
+    bossVolley -= dt * rate;
+    if (bossVolleyState == 0 && bossVolley <= 0.0f) {
+        bossVolleyState = 1;
+        bossVolley = 1.6f;
+        for (Ship& l : ships) {
+            if (!l.active || !l.alive || (l.formation < 0 && !(phase >= 3 && l.id == F.id))) continue;
+            const Ship* t = nullptr;
+            float bd = 480.0f;
+            for (const Ship* s : prey) {
+                float d = Vector3Distance(s->pos, l.pos);
+                if (d < bd) { bd = d; t = s; }
+            }
+            l.chase = t ? (int16_t)t->id : -1;
+            if (!t) continue;
+            Vector3 at = Vector3Add(t->pos, Vector3Scale(t->vel, 1.6f));
+            Vector3 d = Vector3Subtract(at, l.pos);
+            GameEvent e{EventType::BossTell};
+            e.a = l.id;
+            e.pos = l.pos;
+            e.dir = {d.x, 0.0f, d.z};
+            e.value = 1.6f;
+            events.push_back(e);
+        }
+    } else if (bossVolleyState == 1 && bossVolley <= 0.0f) {
+        bossVolleyState = 0;
+        bossVolley = 7.0f;
+        for (Ship& l : ships) {
+            if (!l.active || !l.alive || l.chase < 0 || l.chase >= ShipCount() || (l.formation < 0 && l.id != F.id)) continue;
+            const Ship& t = ships[l.chase];
+            if (!t.active || !t.alive) continue;
+            AimAt(l, t.pos, t.vel);
+            l.reload[0] = l.reload[1] = 0.0f;
+            l.input.fireSeq++;
+            l.chase = -1;
+        }
+    }
+    // the Admiral's own broadside, at whoever's nearest
+    if (F.alive && bossVolleyState == 0) {
+        bossTimer -= dt * rate;
+        if (bossTimer <= 0.0f) {
+            bossTimer = 5.0f;
+            const Ship* t = nullptr;
+            float bd = 460.0f;
+            for (const Ship* s : prey) {
+                float d = Vector3Distance(s->pos, F.pos);
+                if (d < bd) { bd = d; t = s; }
+            }
+            if (t) {
+                AimAt(F, t->pos, t->vel);
+                F.input.fireSeq++;
+            }
+        }
+    }
+    // fire ships (phase 2 on)
+    if (phase >= 2 && !prey.empty()) {
+        bossSpit -= dt * rate;
+        int burning = 0;
+        for (const Ship& s : ships) burning += s.active && s.alive && s.fireship;
+        if (bossSpit <= 0.0f && burning < 3) {
+            bossSpit = 14.0f;
+            const Ship* t = prey[(size_t)(RandF() * prey.size()) % prey.size()];
+            Vector2 d = Vector2Normalize({t->pos.x - F.pos.x, t->pos.z - F.pos.z});
+            Vector2 at = {F.pos.x + d.x * 60.0f, F.pos.z + d.y * 60.0f};
+            int before = ShipCount();
+            SpawnRaider(at, atan2f(d.x, d.y), SC_CUTTER);
+            for (int i = 0; i < ShipCount(); ++i)  // (the one just put in the water)
+                if (ships[i].active && ships[i].raider && ships[i].formation < 0 && !ships[i].fireship && (i >= before || Vector2Distance({ships[i].pos.x, ships[i].pos.z}, at) < 1.0f)) {
+                    ships[i].fireship = true;
+                    ships[i].chase = (int16_t)t->id;
+                    ships[i].name = "Fire ship";
+                    ships[i].maxHp = ships[i].hp = 40.0f;
+                    break;
+                }
+        }
+        // alongside one of us: up it goes
+        for (Ship& f : ships) {
+            if (!f.active || !f.alive || !f.fireship) continue;
+            for (const Ship* s : prey)
+                if (Vector3Distance(s->pos, f.pos) < 26.0f + hull::halfLength * ClassOf(s->cls).scale * 0.5f) {
+                    FireshipBlast(f);
+                    break;
+                }
         }
     }
 }

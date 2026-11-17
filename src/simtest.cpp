@@ -498,9 +498,15 @@ static int BossTest() {
             }
         }
         g.events.clear();
-        if (i % (60 * 60) == 0 && g.bossId >= 0)
-            printf("   t=%4.0f boss hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d\n", g.time, g.bossHpNow, g.bossHpMax,
-                   g.bossPhase, g.balls.size(), g.teamScore[0]);
+        if (i % (60 * 60) == 0 && g.bossId >= 0) {
+            int line = 0, fire = 0;
+            for (const Ship& x : g.ships) {
+                line += x.active && x.alive && x.formation >= 0;
+                fire += x.active && x.alive && x.fireship;
+            }
+            printf("   t=%4.0f boss hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d, its line %d, fire ships %d\n", g.time, g.bossHpNow,
+                   g.bossHpMax, g.bossPhase, g.balls.size(), g.teamScore[0], line, fire);
+        }
         if (i % (60 * 60) == 0 && g.bossId >= 0)
             for (const Ship& x : g.ships)
                 if (x.active && x.team == 0 && x.leader < 0)

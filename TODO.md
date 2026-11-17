@@ -539,7 +539,17 @@ Protocol 25.
   YOU"), then 6 mortars there. Phase 2: 2 gunboats sally out, the light sweeps faster; phase 3: the keep fires rings.
   Art: MonsterArt::DrawFortress (wall, towers / stumps, keep, lamp-house, banner); the beam additive ribbons. Bot runs:
   phase 2 at ~66% after ~8 min.
-- [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
+- [x] Admiral's Armada (BOSS_ARMADA): the Admiral (an SC_LINE ship, boss, gold sails; hull 1000 + 400 per captain; it
+  circles the bay like the Leviathan) and a line of battle (Ship::formation >= 0, raiders, line hull x1.8, 4 + captains
+  up to 9): ArmadaThink keeps them in a wall 95 m ahead of the Admiral towards the nearest of us, 58 m apart, broadside
+  on. Volleys: red lines out from each (BossTell, 1.6 s), then all fire together (World::AimAt + fireSeq), every 7 s;
+  the Admiral fires its own every 5 s (with the line from phase 3). The line shields the Admiral (Damage: 3+ standing
+  0.33, 1-2 0.66). A fresh line sails in at each phase (2 + captains/2). Phase 2 on: fire ships (Ship::fireship: a
+  burning cutter at a ship, FireshipBlast within 42 m, also when it's sunk). Allied bots fight the line while it stands,
+  then orbit the Admiral. The snapshot's boss block carries the boss's ship id (the Admiral gold, the Navy white).
+  Fixed on the way: the aim override for bosses that aren't ships had stopped bots shooting ship bosses. Bot runs:
+  phase 2 at ~65% after ~8 min.
+- [ ] Ironclad  - [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 
