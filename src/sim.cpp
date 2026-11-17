@@ -1373,7 +1373,6 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         if (mode == MODE_RAID) ships[i].team = 1;  // (everyone sails with the pirates; the convoy is the server's, SpawnConvoy)
         if (mode == MODE_BOSS) {
             ships[i].team = 0;  // (all of us against the Leviathan)
-            if (bossId >= 0 && !bot) teamScore[0] += Diff().joiner;  // a captain joining the fight brings a ship
         }
         ships[i].maxHp = MaxHpOf(ships[i]);
         Respawn(ships[i]);
@@ -1489,6 +1488,10 @@ void World::Respawn(Ship& s) {
     s.alive = true;
     s.stowed = false;
     s.lost = false;
+    s.downed = false;
+    s.reviveT = 0.0f;
+    s.harbourCd = 0.0f;
+    s.harbourWork = false;
     s.booty = 0;
     s.deadTimer = 0;
     s.buoyMul = 1.0f;
@@ -1557,9 +1560,12 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (mode == MODE_TEAMS && ships[killer].team >= 0) teamScore[ships[killer].team]++;
         }
         if (mode == MODE_RAID && v.merchant) teamScore[1]++;  // a prize sunk
-        if (mode == MODE_BOSS && v.team == 0 && v.leader < 0) {  // one of us: back in while there are ships in reserve
-            if (teamScore[0] > 0) teamScore[0]--;
-            else v.lost = true;
+        const bool down = mode == MODE_BOSS && v.team == 0 && v.leader < 0;  // one of us: disabled, afloat, until a friend comes alongside
+        if (down) {
+            v.downed = true;
+            v.reviveT = 0.0f;
+            v.held = 0.0f;
+            v.hooked = -1;
         }
         if (mode == MODE_VOYAGE) {
             if (v.raider) teamScore[1]++;  // pirates sunk (by anyone, the rocks included)
@@ -1571,6 +1577,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
         GameEvent e{EventType::Kill};
         e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
         e.b = v.id;
+        e.flags = down ? EF_DOWNED : 0;
         e.pos = v.pos;
         events.push_back(e);
         if (v.pirate) DropTreasure(v);  // the treasure goes over the side, free for anyone
@@ -1581,6 +1588,12 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
     const PlayerInput& in = s.input;
     if (!s.alive) {
         s.sail = Lerp(s.sail, 0.0f, dt);
+        if (s.downed) {  // dead in the water: she loses her way quickly, so a friend can get alongside
+            const float k = expf(-dt * 0.9f);
+            s.vel.x *= k;
+            s.vel.z *= k;
+            s.angVel.y *= k;
+        }
         s.pending.clear();
         for (float& p : s.power) p = 0.0f;
         return;
@@ -1737,7 +1750,7 @@ void World::StepShip(Ship& s, float dt) {
     const float g = tune::gravity * tune::shipGravityScale;
     const bool real = Real();  // realistic handling: no planing, no breach kick, real speeds and turning
 
-    float targetBuoy = s.alive ? 1.0f : 0.55f;  // wrecks sink slowly
+    float targetBuoy = s.alive ? 1.0f : s.downed ? 0.8f : 0.55f;  // wrecks sink slowly (a disabled ship lies low, awash)
     if (ocean.Vortex()) {  // the maelstrom's eye: the water there won't hold a hull up
         float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
         float k = Clamp((maelstrom::eye * 1.4f - r) / (maelstrom::eye * 0.8f), 0.0f, 1.0f);
@@ -2607,6 +2620,23 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
         }
     }
+    // boss mode: a friend disabled - the nearest bot goes and lies alongside her (unless somebody's there already),
+    // whatever else is going on (the Armada's line included)
+    const Ship* aid = nullptr;
+    float aidDist = 900.0f;
+    if (mode == MODE_BOSS && s.team == 0 && s.leader < 0)
+        for (const Ship& d : ships) {
+            if (!d.active || d.alive || !d.downed || d.id == s.id) continue;
+            const float dd = Vector2Distance({s.pos.x, s.pos.z}, {d.pos.x, d.pos.z});
+            if (dd >= aidDist) continue;
+            bool covered = false;
+            for (const Ship& o : ships) {
+                if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
+                const float od = Vector2Distance({o.pos.x, o.pos.z}, {d.pos.x, d.pos.z});
+                if (od < tune::reviveRadius || (o.isBot && o.leader < 0 && od < dd)) { covered = true; break; }
+            }
+            if (!covered) { aid = &d; aidDist = dd; }
+        }
     bool lineStands = false;
     if (mode == MODE_BOSS && bossKind == BOSS_ARMADA)
         for (const Ship& l : ships) lineStands |= l.active && l.alive && (l.formation >= 0 || l.fireship);
@@ -2629,6 +2659,12 @@ void World::BotThink(Ship& s, float dt) {
                 target = nullptr;
                 best = 1e9f;
             }
+        }
+        // a friend disabled: go and lie alongside her, guns still bearing on the boss
+        if (aid) {
+            goal = aid->pos;
+            haveGoal = true;
+            in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
         }
         // dodge: out of a slam's line before it comes down, and from under a shell about to land on us
         Vector2 me = {s.pos.x, s.pos.z}, flee = {0.0f, 0.0f};
@@ -2674,6 +2710,12 @@ void World::BotThink(Ship& s, float dt) {
             haveGoal = true;
             in.sail = brake ? 0.15f : 1.0f;
         }
+    }
+    if (aid && lineStands) {  // (the Armada's line still up: the boss block above didn't run)
+        goal = aid->pos;
+        haveGoal = true;
+        fight = false;
+        in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
     }
 
     float goalDist = 1e9f;
@@ -3432,12 +3474,27 @@ void World::DropTreasure(Ship& v) {
 
 void World::UpdateHarbours(float dt) {
     for (Ship& s : ships) {
-        if (!s.active || !s.alive || s.stowed) { s.bankTimer = 0; continue; }
-        bool atCove = false;
+        s.harbourCd = fmaxf(0.0f, s.harbourCd - dt);
+        if (!s.active || !s.alive || s.stowed) { s.bankTimer = 0; s.harbourWork = false; continue; }
+        bool atCove = false, inPort = false;
         for (int h = 0; h < (int)harbours.size(); ++h) {
             const Harbour& hb = harbours[h];
             if (Vector2Distance({s.pos.x, s.pos.z}, {hb.x, hb.z}) > tune::harbourRadius || !FriendlyHarbour(s, h)) continue;
-            if (!s.pirate) s.hp = fminf(s.maxHp, s.hp + tune::harbourRepair * dt);  // shipwrights at work (none for the treasure carrier)
+            inPort = true;
+            // shipwrights at work (none for the treasure carrier, none in boss mode: there we bring each other round), then
+            // not again for a couple of minutes
+            if (!s.pirate && mode != MODE_BOSS && s.harbourCd <= 0.0f && (s.hp < s.maxHp || s.harbourWork)) {
+                s.harbourWork = true;
+                s.hp = fminf(s.maxHp, s.hp + tune::harbourRepair * dt);
+                if (s.hp >= s.maxHp) {
+                    s.harbourWork = false;
+                    s.harbourCd = tune::harbourCooldown;
+                    GameEvent ev{EventType::Repaired};
+                    ev.a = s.id;
+                    ev.pos = s.pos;
+                    events.push_back(ev);
+                }
+            }
             if (s.leader >= 0) continue;
             // a captain in port recovers the ships he has lost
             int got = 0;
@@ -3470,6 +3527,15 @@ void World::UpdateHarbours(float dt) {
             }
         }
         if (!atCove) s.bankTimer = 0;
+        if (!inPort && s.harbourWork) {  // sailed before they'd finished: what's done is done, and the cooldown starts
+            s.harbourWork = false;
+            s.harbourCd = tune::harbourCooldown;
+            GameEvent ev{EventType::Repaired};
+            ev.a = s.id;
+            ev.b = 1;
+            ev.pos = s.pos;
+            events.push_back(ev);
+        }
     }
 }
 
@@ -3641,7 +3707,7 @@ void World::Step() {
                     RemoveShip(s.id);
                     voyageSpawn = fmaxf(voyageSpawn, 0.5f);
                 }
-                else if (s.lost || s.boss) s.deadTimer = 0.5f;  // (voyage: no ship left in reserve; out until the next one)
+                else if (s.lost || s.boss || s.downed) s.deadTimer = 0.5f;  // (voyage: no ship left in reserve; out until the next one)
                 else Respawn(s);
             }
         }
@@ -3658,6 +3724,7 @@ void World::Step() {
     if (mode == MODE_VOYAGE && matchState == 0) UpdateVoyage(dt);
     if (mode == MODE_RAID && matchState == 0) UpdateRaid(dt);
     if (mode == MODE_BOSS && matchState == 0) UpdateBoss(dt);
+    if (mode == MODE_BOSS && matchState == 0) UpdateRevives(dt);
     if (Voyaging() && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
 }
@@ -4400,7 +4467,8 @@ void World::SpawnBoss() {
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
-        teamScore[0] = StartReserve(captains);
+        teamScore[0] = 0;  // (no reserve: we bring each other round)
+        (void)captains;
         GameEvent e{EventType::BossPhase};
         e.a = (uint16_t)(bossId >= 0 ? bossId : NO_SHIP);
         e.b = 1;
@@ -4437,7 +4505,7 @@ void World::SpawnBoss() {
     bossTimer = 4.0f;  // (a moment to take it in)
     bossHpMax = bossHpNow = b.hp;
     bossPos = b.pos;
-    teamScore[0] = StartReserve(captains);
+    teamScore[0] = 0;  // (no reserve: we bring each other round)
     GameEvent e{EventType::BossPhase};
     e.a = b.id;
     e.b = 1;
@@ -4533,7 +4601,7 @@ void World::UpdateBoss(float dt) {
     }
     // won: it's going down; lost: none of us afloat or coming back
     bool anyone = false;
-    for (const Ship& s : ships) anyone |= s.active && s.leader < 0 && s.team == 0 && (s.alive || !s.lost);
+    for (const Ship& s : ships) anyone |= s.active && s.leader < 0 && s.team == 0 && s.alive;  // (all of us disabled at once: nobody left to bring anyone round)
     if (bossHpNow <= 0.0f || !anyone) {
         voyageWinner = bossHpNow <= 0.0f ? 0 : 1;
         if (bossHpNow <= 0.0f) bossState = 2;
@@ -6429,5 +6497,46 @@ void World::UpdateStormCaller(float dt, int phase, const std::vector<const Ship*
             AimAt(C, t->pos, t->vel);
             C.input.fireSeq++;
         }
+    }
+}
+
+// Boss mode: a disabled ship comes back when one of us lies alongside her long enough (it keeps what's been done if
+// they have to break off a moment, but it ebbs away). The bots go to the nearest one nobody's helping (BotThink).
+void World::UpdateRevives(float dt) {
+    static const float downAt = getenv("BS_DOWNME") ? (float)atof(getenv("BS_DOWNME")) : -1.0f;  // (screenshots: the first ship disabled then)
+    static bool downDone = false;
+    if (downAt >= 0.0f && !downDone && time >= downAt)
+        for (Ship& s : ships)
+            if (s.active && s.alive && !s.isBot && s.team == 0) {  // (the first player)
+                downDone = true;
+                Damage(s, 1e6f, -1);
+                break;
+            }
+    for (Ship& s : ships) {
+        if (!s.active || s.alive || !s.downed) continue;
+        int helpers = 0, who = -1;
+        for (const Ship& o : ships) {
+            if (!o.active || !o.alive || o.stowed || o.boss || o.team != 0 || o.id == s.id) continue;
+            if (Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}) > tune::reviveRadius) continue;
+            ++helpers;
+            who = o.id;
+        }
+        if (helpers == 0) {
+            s.reviveT = fmaxf(0.0f, s.reviveT - dt * 0.5f);
+            continue;
+        }
+        s.reviveT += dt;
+        if (s.reviveT < tune::reviveTime) continue;
+        s.alive = true;
+        s.downed = false;
+        s.reviveT = 0.0f;
+        s.deadTimer = 0.0f;
+        s.hp = s.maxHp * tune::reviveHull;
+        for (Leak& l : s.leaks) l = Leak{};
+        GameEvent e{EventType::Revive};
+        e.a = s.id;
+        e.b = (uint16_t)(helpers == 1 ? who : NO_SHIP);
+        e.pos = s.pos;
+        events.push_back(e);
     }
 }

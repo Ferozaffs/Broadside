@@ -572,6 +572,23 @@ Protocol 25.
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 
+## Revives, harbour cooldown (2026-11-17, user: "remove harbor repair and respawns for bosses. Instead you revive each
+## other at 25% hull by staying next to them. Repair should take 10 seconds. Harbours should also have a repair
+## cooldown in other modes of 2 minutes")
+- [x] Boss mode: no reserve, no respawn. Damage takes one of us to 0: Ship::downed (alive = false, EF_DOWNED on the Kill
+  event), buoyancy 0.8 (awash, not sinking), her way damped in ShipControls. UpdateRevives: any of us (alive, team 0)
+  within tune::reviveRadius (60 m) adds to reviveT; nobody there, it ebbs at half speed; at tune::reviveTime (10 s) she's
+  back at tune::reviveHull (25%), leaks cleared (EventType::Revive). All captains disabled at once: lost. Bots: the
+  nearest bot goes to a disabled ship nobody's alongside, shortens sail there, keeps firing. Client: DISABLED overlay
+  with the progress, a marker on disabled friends (a ring for the progress), AFLOAT n / m on the boss bar instead of
+  RESERVE, the class picker hidden while disabled. Snapshot: a state byte (downed, harbourWork), revive, harbourCd.
+  BS_DOWNME=<s> disables the first player then (screenshots). Bot run (Leviathan, 3, Normal): two revives, lost at
+  66% in phase 2 after ~4 min (with the reserve they lasted longer).
+- [x] Harbours: repairs (12 hp/s) until full or she sails, then Ship::harbourCd = tune::harbourCooldown (120 s) before
+  they'll touch her again (EventType::Repaired). None in boss mode. HUD: REPAIRING / HARBOUR REPAIRS IN m:ss on the hull
+  card, and on the harbour marker. BS_HARBOURTEST=1 --simtest checks it.
+- Read "Repair should take 10 seconds" as the revive (a friend alongside for 10 s); harbour repair keeps its rate.
+
 ## Playtest list (2026-11-17, user: "add friendly fire so bots play less chaotic, also red team spawn in the wrong directions.
 ## Respawns should be close to harbor. Realistic mode could need a little better turn rate. Escort should have less hp so a
 ## full salvo from a cutter kills on ... crew should have way higher fire rate like 5-10x ... climb up an be lookout.

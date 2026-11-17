@@ -168,6 +168,9 @@ struct NetShip {
     int16_t leader = -1;
     float maxHp = 100;
     float unload = 0;  // pirate: unloading progress in the cove, 0..1
+    bool downed = false, harbourWork = false;  // boss mode: disabled (a friend can bring her round) / in the shipwrights' hands
+    float revive = 0;     // ...how far along that is, 0..1
+    float harbourCd = 0;  // s until a harbour will repair her again
     uint16_t banked = 0;
     uint8_t raceGate = 0, racePlace = 0;  // race: gates behind it / finishing place (0: racing)
     float raceTime = 0, slowTimer = 0;    // race: time over the line / s left crippled
@@ -265,6 +268,9 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(s.leader);
         w.Put((uint8_t)Clamp(roundf(s.maxHp), 1.0f, 255.0f));  // whole points (cutter 55 .. ship of the line + treasure 180)
         w.PutU8f(s.bankTimer / tune::bankTime);  // pirate: unloading progress
+        w.Put((uint8_t)((s.downed ? 1 : 0) | (s.harbourWork ? 2 : 0)));
+        w.PutU8f(s.reviveT / tune::reviveTime);
+        w.PutU8f(s.harbourCd / tune::harbourCooldown);
         w.Put((uint16_t)std::min(s.banked, 65535));
         w.PutU8f(s.hp / s.maxHp);
         w.Put((int8_t)(Clamp(s.sail, -1.0f, 1.0f) * 127));
@@ -438,6 +444,13 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.leader = r.Get<int16_t>();
         sh.maxHp = (float)r.Get<uint8_t>();
         sh.unload = r.GetU8f();
+        {
+            uint8_t st = r.Get<uint8_t>();
+            sh.downed = (st & 1) != 0;
+            sh.harbourWork = (st & 2) != 0;
+        }
+        sh.revive = r.GetU8f();
+        sh.harbourCd = r.GetU8f() * tune::harbourCooldown;
         sh.banked = r.Get<uint16_t>();
         sh.hp = r.GetU8f() * sh.maxHp;
         sh.sail = r.Get<int8_t>() / 127.0f;

@@ -158,6 +158,10 @@ constexpr float reloadMax = 6.0f;          // (network encoding range for reload
 constexpr float pirateReload = 0.8f;
 constexpr float harbourRadius = 85.0f;
 constexpr float harbourRepair = 12.0f;     // hp per second in a friendly harbour
+constexpr float harbourCooldown = 120.0f;  // s after a ship's been patched up in a harbour before the shipwrights will see her again
+constexpr float reviveTime = 10.0f;        // boss mode: s a friend must lie alongside a disabled ship to get her going again
+constexpr float reviveRadius = 60.0f;      // ...this close (centre to centre)
+constexpr float reviveHull = 0.25f;        // ...and she's back with this share of her hull
 constexpr int chestSlots = 1;              // pirate mode: the one treasure everyone chases
 constexpr float chestRespawn = 6.0f;       // s after it is banked before a new one appears
 constexpr float chestAdrift = 60.0f;       // s a dropped treasure floats before it sinks and a fresh one surfaces
@@ -546,6 +550,10 @@ struct Ship {
     float slowTimer = 0.0f; // crippled: s left at reduced speed
     bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
+    bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
+    float reviveT = 0.0f; // ...s of that so far
+    float harbourCd = 0.0f;   // s until a harbour will repair her again
+    bool harbourWork = false; // the shipwrights are at her now (the cooldown starts when they finish or she sails)
     bool merchant = false;  // raid: one of the AI convoy (sunk, or in port, it's gone for the round)
     bool boss = false;      // boss mode: the Leviathan (its own brain, BossThink; its guns fire patterns, UpdateBoss)
     int8_t formation = -1;  // boss mode: one of the Armada's line (keeps station between the Admiral and us)
@@ -628,7 +636,10 @@ enum class EventType : uint8_t {
     BossInk = 33,    // an ink cloud: pos, value = its radius
     BossMortar = 27, // a = the boss, pos = where a shell will land, value = s until it does (the clients mark the spot)
     BossPhase = 28,  // a = the boss, b = its phase (1 when it appears, then 2, 3 as its hull goes)
+    Revive = 34,     // boss mode: a = the ship back in the fight, b = who brought her round (NO_SHIP: several)
+    Repaired = 35,   // a = ship, the harbour's done with her (b = 1: she sailed before they'd finished); the cooldown starts
 };
+constexpr uint8_t EF_DOWNED = 32;   // (Kill in boss mode: disabled, not sunk - a friend can bring her round; EF_ROCK's bit, which only Ram uses)
 constexpr uint8_t EF_CRIPPLE = 64;  // (Kill in a race: crippled, not sunk; shares the bit with EF_DENY, which only chests use)
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
 
@@ -815,6 +826,7 @@ private:
     void SpawnArmada();
     void SpawnIronclad();
     void SpawnStormCaller();
+    void UpdateRevives(float dt);
     void UpdateStormCaller(float dt, int phase, const std::vector<const Ship*>& prey);
     float bossBolt = 0.0f, bossWave = 0.0f;
     void UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& prey);

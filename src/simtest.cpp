@@ -441,6 +441,61 @@ static int RaidTest() {
 
 // Boss mode: bot captains (BS_CAPTAINS=n, 3) against the Leviathan. Its phases, how much shot it puts up (and how
 // much of it is in the air at once: the snapshot carries every ball), what it sinks, how long it lasts.
+// Harbour repairs: a damaged ship in a friendly harbour is patched up, then not again for tune::harbourCooldown; a
+// ship that sails half-mended starts the cooldown too. Boss mode: no repairs at all.
+static int HarbourTest() {
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        printf("   %s %s\n", ok ? "ok  " : "FAIL", what);
+        fails += !ok;
+    };
+    for (uint8_t mode : {(uint8_t)MODE_FFA, (uint8_t)MODE_BOSS}) {
+        World g;
+        g.Init(1, 0, 0, mode, false, ARENA_ISLES);
+        int id = g.AddShip("captain", false);
+        Ship& s = g.ships[id];
+        auto park = [&]() {  // in harbour 0, stopped
+            const Harbour& h = g.harbours[0];
+            s.pos = {h.x, g.ocean.Height(h.x, h.z) + 1.0f, h.z};
+            s.vel = {0, 0, 0};
+            s.input = PlayerInput{};
+        };
+        auto run = [&](float secs, bool stay) {
+            for (int i = 0; i < (int)(secs * 60); ++i) {
+                if (stay) park();
+                g.Step();
+                g.events.clear();
+            }
+        };
+        printf("%s:\n", mode == MODE_BOSS ? "boss" : "ffa");
+        s.hp = s.maxHp * 0.5f;
+        run(1.0f, true);
+        if (mode == MODE_BOSS) {
+            run(20.0f, true);
+            check(s.hp <= s.maxHp * 0.5f + 0.01f, "boss mode: no repairs in harbour");
+            continue;
+        }
+        check(s.hp > s.maxHp * 0.5f && s.harbourWork, "in harbour: the shipwrights start");
+        run(30.0f, true);
+        check(s.hp >= s.maxHp - 0.01f, "patched right up");
+        check(s.harbourCd > tune::harbourCooldown - 31.0f && !s.harbourWork, "then the cooldown runs");
+        s.hp = s.maxHp * 0.5f;
+        run(20.0f, true);
+        check(s.hp <= s.maxHp * 0.5f + 0.01f, "no repairs during the cooldown");
+        run(tune::harbourCooldown, true);
+        check(s.hp > s.maxHp * 0.5f, "repairs again once it's over");
+        // sailing away half-mended starts it too
+        s.hp = s.maxHp * 0.2f;
+        s.harbourCd = 0.0f;
+        run(1.0f, true);
+        s.pos = {0.0f, 1.0f, 0.0f};
+        run(0.5f, false);
+        check(s.harbourCd > tune::harbourCooldown - 2.0f && !s.harbourWork && s.hp < s.maxHp, "sailing half-mended: the cooldown starts");
+    }
+    printf("harbour test: %s\n", fails ? "FAILED" : "passed");
+    return fails ? 1 : 0;
+}
+
 static int BossTest() {
     World g;
     g.rounds = true;
@@ -455,6 +510,7 @@ static int BossTest() {
     printf("boss seed %u, %s, %d captains\n", seed, voyage::kDifficultyNames[g.difficulty], N);
     int result = -1, sunk = 0, hitsOnUs = 0, hitsOnIt = 0, maxBalls = 0, bossBalls = 0;
     float dmgOnUs = 0.0f;
+    int revives = 0;
     int ourVolleys = 0, misses = 0, nearMiss = 0;
     double missDist = 0;
     float endT = 0;
@@ -494,7 +550,13 @@ static int BossTest() {
             }
             if (e.type == EventType::Kill && e.b < g.ShipCount() && g.ships[e.b].team == 0 && g.ships[e.b].leader < 0) {
                 sunk++;
-                printf("   t=%4.0f %s sunk (by %s), reserve %d\n", g.time, g.ships[e.b].name.c_str(), e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "-", g.teamScore[0]);
+                int afloat = 0;
+                for (const Ship& x : g.ships) afloat += x.active && x.leader < 0 && x.team == 0 && x.alive;
+                printf("   t=%4.0f %s disabled (by %s), %d afloat\n", g.time, g.ships[e.b].name.c_str(), e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "-", afloat);
+            }
+            if (e.type == EventType::Revive && e.a < g.ShipCount()) {
+                revives++;
+                printf("   t=%4.0f %s brought round by %s\n", g.time, g.ships[e.a].name.c_str(), e.b < g.ShipCount() ? g.ships[e.b].name.c_str() : "several");
             }
             if (e.type == EventType::MatchEnd && result < 0) {
                 result = e.b;
@@ -508,8 +570,10 @@ static int BossTest() {
                 line += x.active && x.alive && x.formation >= 0;
                 fire += x.active && x.alive && x.fireship;
             }
-            printf("   t=%4.0f boss hull %.0f / %.0f, phase %d, %zu balls in the air, reserve %d, its line %d, fire ships %d\n", g.time, g.bossHpNow,
-                   g.bossHpMax, g.bossPhase, g.balls.size(), g.teamScore[0], line, fire);
+            int afloat = 0;
+            for (const Ship& x : g.ships) afloat += x.active && x.leader < 0 && x.team == 0 && x.alive;
+            printf("   t=%4.0f boss hull %.0f / %.0f, phase %d, %zu balls in the air, %d afloat, its line %d, fire ships %d\n", g.time, g.bossHpNow,
+                   g.bossHpMax, g.bossPhase, g.balls.size(), afloat, line, fire);
         }
         if (i % (60 * 60) == 0 && g.bossId >= 0)
             for (const Ship& x : g.ships)
@@ -529,7 +593,8 @@ static int BossTest() {
                            x.input.sail, x.input.rudder);
         if (result >= 0) break;
     }
-    printf("boss %s after %.0f s: %d of ours sunk, %d hits on us, %d on it, it fired %d balls (%.1f/s), at most %d in the air, tick avg %.2f ms\n",
+    printf("   %d brought round\n", revives);
+    printf("boss %s after %.0f s: %d of ours disabled, %d hits on us, %d on it, it fired %d balls (%.1f/s), at most %d in the air, tick avg %.2f ms\n",
            result == 0 ? "SUNK" : result == 1 ? "WON" : "UNFINISHED", result >= 0 ? endT : (float)g.time, sunk, hitsOnUs, hitsOnIt, bossBalls,
            bossBalls / fmaxf((float)g.time, 1.0f), maxBalls, sum / ticks * 1000.0);
     if (g.bossKind == BOSS_STORM)
@@ -541,6 +606,7 @@ static int BossTest() {
 
 int RunSimTest() {
     if (getenv("BS_BOSSTEST")) return BossTest();
+    if (getenv("BS_HARBOURTEST")) return HarbourTest();
     if (getenv("BS_RAIDTEST")) return RaidTest();
     if (getenv("BS_VOYAGETEST")) return VoyageTest();
     if (getenv("BS_LIVERYTEST")) return LiveryTest();

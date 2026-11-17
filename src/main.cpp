@@ -2669,6 +2669,16 @@ void Game::PlayEvent(const GameEvent& e) {
                 }
                 break;
             }
+            if (e.flags & EF_DOWNED) {  // boss mode: disabled, not sunk - a friend can bring her round
+                fx.BigExplosion(e.pos);
+                sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
+                Feed3(NameOf(e.b), "  is dead in the water: get alongside her!", "", TeamOf(e.b), ui::kGold);
+                if (e.b == myId) {
+                    flash = fmaxf(flash, 0.5f);
+                    shake = fmaxf(shake, 1.2f);
+                }
+                break;
+            }
             fx.BigExplosion(e.pos);
             sfx::Play(sfx::Hit, e.pos, 1.0f, 0.75f);
             sfx::Play(sfx::Sink, e.pos, 0.9f);
@@ -2746,6 +2756,23 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("%s  %ds", Scenery::PowerName(e.b), (int)e.value), pc, 2.4f});
             break;
         }
+        case EventType::Revive:
+            if (e.b != NO_SHIP && e.b < NumShips()) Feed3(NameOf(e.b), "  brought round  ", NameOf(e.a), TeamOf(e.b), TeamOf(e.a));
+            else Feed3(NameOf(e.a), "  is back in the fight", "", TeamOf(e.a), ui::kGreen);
+            for (int i = 0; i < 30; ++i) {
+                fx::Particle& q = fx.Add(fx::Spark, Vector3Add(e.pos, {0, 4, 0}), Vector3Add(RandDir(Rnd(4, 10)), {0, Rnd(6, 14), 0}), Rnd(0.6f, 1.2f), 0.3f, 0, ui::kGreen);
+                q.drag = 0.6f;
+            }
+            sfx::PlayFlat(sfx::Confirm, e.a == myId || e.b == myId ? 0.9f : 0.4f, 0.8f);
+            if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "BACK IN THE FIGHT", ui::kGreen, 2.6f});
+            if (e.b == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("BROUGHT %s ROUND", TextToUpper(NameOf(e.a).c_str())), ui::kGreen, 2.6f});
+            break;
+        case EventType::Repaired:
+            if (e.a == myId) {
+                floats.push_back({Vector3Add(e.pos, {0, 14, 0}), e.b == 1 ? "PATCHED UP (PART-DONE)" : "REPAIRED", ui::kGreen, 2.4f});
+                Feed3("The shipwrights", TextFormat("  are done with you: no more repairs for %d minutes", (int)(tune::harbourCooldown / 60.0f)), "", ui::kDim, ui::kText);
+            }
+            break;
         case EventType::Resupply:
             Feed3(NameOf(e.a), TextFormat("  recovered %d ship%s in harbour", e.b, e.b == 1 ? "" : "s"), "", TeamOf(e.a), ui::kText);
             if (e.a == myId) floats.push_back({Vector3Add(view[myId].s.pos, {0, 14, 0}), TextFormat("FLEET +%d", e.b), ui::kGreen, 2.4f});
@@ -4322,6 +4349,12 @@ void Game::DrawHUD() {
             c = i == voyage::endHarbour ? kRed : i == voyage::haven ? kGreen : kDim;
             what = i == voyage::endHarbour ? "THE CONVOY'S PORT" : i == voyage::haven ? "PIRATE COVE   \xC2\xB7   REPAIRS" : "THE CONVOY SAILS FROM";
         }
+        std::string whatS = what;
+        if (friendly && me && !(curMode == MODE_PIRATE && i == cove)) {
+            if (curMode == MODE_BOSS) whatS = "HARBOUR   \xC2\xB7   NO REPAIRS";
+            else if (me->harbourCd > 0.0f) whatS += TextFormat("   \xC2\xB7   REPAIRS IN %d:%02d", (int)me->harbourCd / 60, (int)me->harbourCd % 60);
+        }
+        what = whatS.c_str();
         float a = Clamp(1.4f - d / 1400.0f, 0.45f, 1.0f);
         if (PassageMode(curMode) && i == voyage::endHarbour) a = 1.0f;  // (the goal: always clear)
         DrawCircleV(sp, 9.0f, A({0, 0, 0, 150}, a));
@@ -4370,6 +4403,24 @@ void Game::DrawHUD() {
             Color c = TeamOf(id);
             DrawTriangle({sp.x - 6, sp.y - 5}, {sp.x, sp.y + 4}, {sp.x + 6, sp.y - 5}, A(c, 0.9f));
         }
+    }
+    // ---- disabled friends (boss mode): where, and how far along bringing them round is ----
+    for (int id = 0; id < NumShips() && myId >= 0; ++id) {
+        if (id == myId || !view[id].present || !view[id].s.downed || IsEnemy(id)) continue;
+        const NetShip& s = view[id].s;
+        Vector2 sp;
+        float d = Vector3Distance(rv.pos, s.pos);
+        if (!rv.Project(Vector3Add(s.pos, {0, 30, 0}), sp)) continue;
+        float pulse = 0.5f + 0.5f * sinf((float)now * 4.0f);
+        DrawCircleV(sp, 16.0f + 3.0f * pulse, Fade(kGold, 0.18f));
+        DrawCircleV(sp, 13.0f, {0, 0, 0, 180});
+        DrawRing(sp, 10.0f, 13.0f, 0.0f, 360.0f, 32, Fade(kGold, 0.35f));
+        if (s.revive > 0.0f) DrawRing(sp, 10.0f, 13.0f, -90.0f, -90.0f + 360.0f * s.revive, 32, kGreen);
+        DrawRectangle((int)sp.x - 1, (int)sp.y - 6, 3, 12, kGold);  // a cross: help needed
+        DrawRectangle((int)sp.x - 6, (int)sp.y - 1, 12, 3, kGold);
+        Label(s.revive > 0.0f ? TextFormat("BRINGING %s ROUND", TextToUpper(NameOf(id).c_str())) : TextFormat("%s DISABLED: GET ALONGSIDE", TextToUpper(NameOf(id).c_str())),
+              sp.x, sp.y - 30, 10, s.revive > 0.0f ? kGreen : kGold, Center);
+        Text(TextFormat("%d m", (int)d), sp.x, sp.y + 17, 12, kGold, false, Center);
     }
     // ---- mode banner: team scores / the pirate's haul ----
     float bannerRight = -1.0f;  // the round clock sits to the right of the mode banner
@@ -4666,6 +4717,9 @@ void Game::DrawHUD() {
         float hpF = me->hp / me->maxHp;
         Color hpC = hpF > 0.5f ? kGreen : hpF > 0.25f ? kGold : kRed;
         Label(me->flags & SF_PIRATE ? "HULL  \xC2\xB7  PIRATE" : "HULL", x0, y, 12, me->flags & SF_PIRATE ? kPirateText : kDim);
+        if (me->harbourWork) Label("REPAIRING", x0 + 120, y, 11, kGreen);
+        else if (me->harbourCd > 0.0f && curMode != MODE_BOSS)
+            Label(TextFormat("HARBOUR REPAIRS IN %d:%02d", (int)me->harbourCd / 60, (int)me->harbourCd % 60), x0 + 120, y, 11, kDim);
         Text(TextFormat("%d", (int)ceilf(me->hp)), x1, y - 6, 22, hpC, true, Right);
         SegBar({x0, y + 20, w, 7}, hpF, 20, hpC);
         y += 44;
@@ -4749,11 +4803,18 @@ void Game::DrawHUD() {
     }
     else if (alive && me->depthBelow > 2.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
 
-    if (me && !alive) {
+    if (me && !alive && me->downed) {  // boss mode: disabled, waiting for a friend
+        Text("DISABLED", W * 0.5f, H * 0.5f - 150, 72, kGold, true, Center);
+        if (me->revive > 0.0f) {
+            Text(TextFormat("Being brought round: %d%%", (int)(me->revive * 100.0f)), W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
+            SegBar({W * 0.5f - 160, H * 0.5f - 40, 320, 9}, me->revive, 20, kGreen);
+        } else
+            Text(TextFormat("Dead in the water: a friend alongside for %d s brings you back with a quarter of your hull", (int)tune::reviveTime), W * 0.5f,
+                 H * 0.5f - 72, 22, kText, false, Center);
+        Text("If every ship is disabled at once, the fight is lost", W * 0.5f, H * 0.5f - 18, 16, kDim, false, Center);
+    } else if (me && !alive) {
         Text("SUNK", W * 0.5f, H * 0.5f - 150, 72, kRed, true, Center);
-        if (curMode == MODE_BOSS && (me->flags & SF_LOST))
-            Text("No ships left in reserve: the fight goes on without you", W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
-        else if (curMode == MODE_VOYAGE && (me->flags & SF_LOST))
+        if (curMode == MODE_VOYAGE && (me->flags & SF_LOST))
             Text("No ships left in reserve: the convoy sails on without you", W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
         else if (curMode == MODE_VOYAGE)
             Text(TextFormat("Rejoining the convoy in %.0f s", ceilf(me->deadTimer)), W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
@@ -4898,7 +4959,7 @@ void Game::DrawHUD() {
     }
 
     if (matchState == 1) DrawResults(W, H);
-    if (me && crewId < 0 && (!(me->flags & SF_ALIVE) || matchState == 1)) {
+    if (me && crewId < 0 && ((!(me->flags & SF_ALIVE) && !me->downed) || matchState == 1)) {  // (disabled: she comes back as she is)
         float cw = fminf(860.0f, W - 80);
         Rectangle area = {W * 0.5f - cw * 0.5f, H - (matchState == 1 ? 210.0f : 250.0f), cw, 84};
         Label(matchState == 1 ? "NEXT ROUND YOU SAIL  (1 / 2 / 3)" : "CHOOSE YOUR NEXT SHIP  (1 / 2 / 3)", W * 0.5f, area.y - 22, 12, kGold, Center);
@@ -6395,7 +6456,12 @@ void Game::DrawBossBar(float W) {
     DrawRectangleRounded({x, 36, bw * shown, 12}, 0.5f, 6, {255, 220, 200, 120});  // (what it just lost, draining away)
     DrawRectangleRounded({x, 36, bw * frac, 12}, 0.5f, 6, {214, 52, 52, 255});
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
-    const bool noReserve = curDifficulty == voyage::DEADLY;
+    int afloat = 0, captains = 0;
+    for (int id = 0; id < NumShips(); ++id) {
+        if (!view[id].present || view[id].s.leader >= 0 || view[id].s.team != 0 || id == bossView.bossShip) continue;
+        ++captains;
+        afloat += (view[id].s.flags & SF_ALIVE) != 0;
+    }
     std::string extra;
     if (bossView.bossKind == BOSS_STORM) {
         int spouts = 0, waves = 0;
@@ -6441,8 +6507,8 @@ void Game::DrawBossBar(float W) {
         extra = TextFormat("   \xC2\xB7   ARMS %d / %d%s", up, (int)bossView.bossParts.size(), up >= 4 ? "  (SHIELDING HER)" : "  (SHE'S OPEN)");
     }
     Text(TextFormat("%s   \xC2\xB7   %s%s   \xC2\xB7   %d:%02d", TextToUpper(voyage::kDifficultyNames[curDifficulty]),
-                    noReserve ? "NO RESERVE" : TextFormat("RESERVE %d", teamScore[0]), extra.c_str(), el / 60, el % 60),
-         W * 0.5f, 50, 13, teamScore[0] == 0 ? kRed : kDim, true, Center);
+                    TextFormat("AFLOAT %d / %d", afloat, captains), extra.c_str(), el / 60, el % 60),
+         W * 0.5f, 50, 13, afloat <= 1 ? kRed : kDim, true, Center);
 }
 
 // Boss mode: the strike lines its arms are about to come down along, red on the water, a brighter band racing out

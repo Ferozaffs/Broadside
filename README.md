@@ -141,9 +141,10 @@ The host picks the game in the menu:
   haven is your cove (repairs). The sea monsters come for the pirates here.
 - **Boss** (co-op): everyone (and the bots, your allies) against one huge enemy, bullet-hell style. The host picks
   which under the co-op cards (or Random: a new one every round). Each has three phases as its hull goes (the bar at
-  the top of the screen), and **red** on the water always marks where something is about to land. Sunk ships come
-  back while the fleet has ships in reserve (as in the Voyage). The difficulty sets its hull and how fast it attacks
-  (Deadly: no reserve).
+  the top of the screen), and **red** on the water always marks where something is about to land. Nobody respawns
+  and the harbours do no repairs: a ship whose hull is gone is **disabled**, dead in the water, and a friend who
+  stays alongside her for 10 seconds brings her back with a quarter of her hull (the bots come to help too). If every
+  ship is disabled at once, the fight is lost. The difficulty sets its hull and how fast it attacks.
   - **The Leviathan**: a man-o'-war three times the size of a ship of the line, under black sails. It fills the sea
     with magenta shot in patterns: rings, turning spirals, marching walls, aimed fans and marked mortars, with
     grapeshot up close. Later it fires faster and its gunboats come out.
@@ -223,6 +224,10 @@ The ship of the line has its own model now, and the sailors on deck are animated
 **Fleets** (on top of any mode): every captain gets three AI escort ships that sail in formation and fight
 alongside. Ships you lose stay lost until you are sunk yourself (you come back with a fresh fleet) or until you
 sail into a friendly harbour, which also repairs your hull.
+
+**Harbours** repair your hull while you lie in one, then not again for 2 minutes (the hull card counts it down, and
+the harbour marker shows it too). Sailing out before they're done starts the 2 minutes as well. In Boss mode there are
+no harbour repairs.
 
 Aiming: the cannonballs land where the reticle points (on an enemy hull, the sea or the rocks). The guns swing
 about 34 degrees either side of the beam; the dashed lines on the water show how far. When the reticle is outside
