@@ -512,6 +512,36 @@ static int HarbourTest() {
     return fails ? 1 : 0;
 }
 
+// Spawns: how spread out a crowd of captains starts (the closest friend, the closest enemy), teams and free-for-all,
+// with and without fleets. BS_SPAWNTEST=1 --simtest.
+static int SpawnTest() {
+    for (uint8_t mode : {(uint8_t)MODE_TEAMS, (uint8_t)MODE_FFA})
+        for (bool fleets : {false, true}) {
+            World g;
+            g.Init(1, 0, 0, mode, fleets, ARENA_ISLES);
+            const int N = 16;
+            for (int i = 0; i < N; ++i) g.AddShip(TextFormat("c%d", i), true);
+            float worstF = 1e9f, worstE = 1e9f, sumF = 0.0f;
+            int n = 0;
+            for (const Ship& a : g.ships) {
+                if (!a.active || a.leader >= 0) continue;
+                float nf = 1e9f, ne = 1e9f;
+                for (const Ship& b : g.ships) {
+                    if (!b.active || b.leader >= 0 || b.id == a.id) continue;
+                    const float d = Vector2Distance({a.pos.x, a.pos.z}, {b.pos.x, b.pos.z});
+                    if (g.Enemies(a, b)) ne = fminf(ne, d);
+                    else nf = fminf(nf, d);
+                }
+                worstF = fminf(worstF, nf);
+                worstE = fminf(worstE, ne);
+                if (nf < 1e8f) { sumF += nf; ++n; }
+            }
+            printf("%s%s, %d captains: closest friend %.0f m (mean %.0f m), closest enemy %.0f m\n", mode == MODE_TEAMS ? "teams" : "ffa",
+                   fleets ? " + fleets" : "", N, worstF < 1e8f ? worstF : 0.0f, n ? sumF / n : 0.0f, worstE);
+        }
+    return 0;
+}
+
 static int BossTest() {
     World g;
     g.rounds = true;
@@ -622,6 +652,7 @@ static int BossTest() {
 
 int RunSimTest() {
     if (getenv("BS_BOSSTEST")) return BossTest();
+    if (getenv("BS_SPAWNTEST")) return SpawnTest();
     if (getenv("BS_HARBOURTEST")) return HarbourTest();
     if (getenv("BS_RAIDTEST")) return RaidTest();
     if (getenv("BS_VOYAGETEST")) return VoyageTest();

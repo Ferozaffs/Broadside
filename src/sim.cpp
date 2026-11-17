@@ -1452,18 +1452,25 @@ void World::Respawn(Ship& s) {
                     if (sc > bestH) { bestH = sc; pickAng = a; }
                 }
         }
+        // Spread out over the water off it (teams: a wide stretch of their own side of the bay), as far as can be had
+        // from the nearest friend and further still from any enemy, so nobody starts in a crowd or in someone's sights.
         Vector2 ax = {cosf(pickAng), sinf(pickAng)}, px = {-ax.y, ax.x};
+        const bool teams = mode == MODE_TEAMS;
         float bestScore = -1e9f;
-        for (int tries = 0; tries < 24; ++tries) {
-            float rr = 500.0f + RandF() * 110.0f, lat = (RandF() - 0.5f) * 150.0f;
+        for (int tries = 0; tries < 48; ++tries) {
+            float rr = (teams ? 380.0f : 470.0f) + RandF() * (teams ? 240.0f : 150.0f), lat = (RandF() - 0.5f) * (teams ? 560.0f : 300.0f);
             float cx = ax.x * rr + px.x * lat, cz = ax.y * rr + px.y * lat;
             if (RocksHeight(rocks, cx, cz) > -25.0f) continue;
-            float near = 1e9f;
-            for (const Ship& o : ships)
-                if (o.active && o.alive && !o.stowed && o.id != s.id) near = fminf(near, Vector2Distance({o.pos.x, o.pos.z}, {cx, cz}));
-            float score = fminf(near, 80.0f) - fabsf(lat) * 0.05f;
+            float nearF = 1e9f, nearE = 1e9f;
+            for (const Ship& o : ships) {
+                if (!o.active || !o.alive || o.stowed || o.id == s.id) continue;
+                const float d = Vector2Distance({o.pos.x, o.pos.z}, {cx, cz});
+                if (Enemies(s, o)) nearE = fminf(nearE, d);
+                else nearF = fminf(nearF, d);
+            }
+            float score = fminf(nearF, 150.0f) + 0.6f * fminf(nearE, 450.0f) - fabsf(lat) * 0.02f;
             if (score > bestScore) { bestScore = score; x = cx; z = cz; }
-            if (near > 80.0f) break;
+            if (nearF > 150.0f && nearE > 450.0f) break;
         }
     } else {
         for (int tries = 0; tries < 20 && RocksHeight(rocks, cosf(ang) * r, sinf(ang) * r) > -25.0f; ++tries) ang += 0.25f;  // not on a stack

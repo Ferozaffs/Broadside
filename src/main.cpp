@@ -610,7 +610,12 @@ private:
         if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_ARMADA && s.team == 1)  // (the Navy: white, the Admiral gold)
             return id == bossView.bossShip ? ui::kGold : Color{236, 236, 228, 255};
         if (curMode == MODE_BOSS && s.team == 1) return kPirate;
-        return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
+        // each captain (and their fleet) a colour of their own: by their place among the captains, not their id - with
+        // fleets every captain's id is followed by three escorts', so id % 8 came out red or purple every time
+        const int cap = s.leader >= 0 ? s.leader : id;
+        int k = 0;
+        for (int o = 0; o < cap && o < NumShips(); ++o) k += view[o].present && view[o].s.leader < 0;
+        return kPalette[k % 8];
     }
     Color TeamOf(int id) const {
         if (id >= 0 && id < NumShips() && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
