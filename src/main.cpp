@@ -238,11 +238,11 @@ public:
     ShipModel shipModel;              // the default ship (assets/ship)...
     ShipModel classModel[SC_COUNT];   // ...and any class with its own (assets/ship_<class>)
     ShipModel& ModelOf(int cls) {
-        if ((cls == SC_BOSS || cls == SC_GHOST) && !classModel[cls].HasExternal()) cls = SC_LINE;  // (the Leviathan, the Dutchman: ships of the line, bigger)
+        if ((cls == SC_BOSS || cls == SC_GHOST || cls == SC_IRON) && !classModel[cls].HasExternal()) cls = SC_LINE;  // (the bosses: ships of the line, bigger)
         return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel;
     }
     const ShipModel& ModelOf(int cls) const {
-        if ((cls == SC_BOSS || cls == SC_GHOST) && !classModel[cls].HasExternal()) cls = SC_LINE;
+        if ((cls == SC_BOSS || cls == SC_GHOST || cls == SC_IRON) && !classModel[cls].HasExternal()) cls = SC_LINE;
         return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel;
     }
     const ShipModel& DeckModel() const { return ModelOf(myId >= 0 && myId < NumShips() && view[myId].present ? view[myId].s.cls : SC_FRIGATE); }
@@ -605,6 +605,7 @@ private:
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
         if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
+        if (curMode == MODE_BOSS && s.cls == SC_IRON) return {50, 50, 56, 255};  // (the Ironclad: iron grey, its canvas furled)
         if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_ARMADA && s.team == 1)  // (the Navy: white, the Admiral gold)
             return id == bossView.bossShip ? ui::kGold : Color{236, 236, 228, 255};
         if (curMode == MODE_BOSS && s.team == 1) return kPirate;
@@ -676,6 +677,8 @@ private:
     void DrawSerpentBoss(float dt);
     void DrawFortressBoss(float dt);
     void FireshipFx(float dt);
+    void DrawIronclad(float dt);
+    float ironWheel = 0.0f;
     void DrawSearchlight(const Camera3D& cam);
     void DrawMortarMarks();
     void DrawBossBar(float W);
@@ -725,7 +728,7 @@ void Game::Init() {
     for (const char* n : {"sailor", "sailor_2", "sailor_3"})
         if (crewModels[crewOutfits].Load((assetDir.substr(0, assetDir.size() - 4) + "crew").c_str(), renderer.litShader, n)) ++crewOutfits;
     {
-        static const char* const kClassDirs[SC_COUNT] = {"cutter", "frigate", "line", "gunboat", "boss", "ghost"};  // (the bosses: the line's model if they have none)
+        static const char* const kClassDirs[SC_COUNT] = {"cutter", "frigate", "line", "gunboat", "boss", "ghost", "ironclad"};  // (the bosses: the line's model if they have none)
         for (int c = 0; c < SC_COUNT; ++c) {
             std::string d = assetDir.substr(0, assetDir.size() - 4) + "ship_" + kClassDirs[c];  // (.../assets/ship -> .../assets/ship_<class>)
             if (!DirectoryExists(d.c_str())) continue;
@@ -2635,6 +2638,12 @@ void Game::PlayEvent(const GameEvent& e) {
                 hitMarker = 0.35f;
                 hitMarkerGold = (e.flags & (EF_PLUNGING | EF_AIRSHOT | EF_RAKE)) != 0;
                 std::string t = TextFormat("+%d", (int)roundf(e.value));
+                if (e.flags & EF_SKIP) {  // (off the Ironclad's plates)
+                    t = "DEFLECTED";
+                    hitMarkerGold = false;
+                    sfx::Play(sfx::RockHit, e.pos, 0.6f, 1.6f);
+                    for (int i = 0; i < 14; ++i) fx.Add(fx::Spark, e.pos, Vector3Add(RandDir(Rnd(6, 14)), {0, Rnd(2, 6), 0}), 0.4f, 0.25f, 0, {255, 220, 160, 255});
+                }
                 if (e.flags & EF_PLUNGING) t += " PLUNGING!";
                 if (e.flags & EF_AIRSHOT) t += " AIR SHOT!";
                 if (e.flags & EF_RAKE) t += " RAKED!";
@@ -2967,6 +2976,18 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_IRONCLAD) {
+                if (e.b == 1) {
+                    Notice("THE IRONCLAD", ui::kRed, 4.0f);
+                    Feed3("THE IRONCLAD", "  steams into the bay: get out of its lane, hit its stern", "", ui::kRed, ui::kText);
+                } else {
+                    Notice(e.b == 2 ? "FULL STEAM" : "ITS BOILERS ARE BURSTING", ui::kRed, 4.0f);
+                    Feed3("THE IRONCLAD", e.b == 2 ? "  charges sooner, and its deck gun sweeps anyone close" : "  charges and charges: its stern is wide open", "", ui::kRed,
+                          ui::kText);
+                }
+                sfx::PlayFlat(sfx::Thunder, 0.8f, 1.2f);
+                break;
+            }
             if (e.flags == BOSS_ARMADA) {
                 if (e.b == 1) {
                     Notice("THE ADMIRAL'S ARMADA", ui::kGold, 4.0f);
@@ -3053,10 +3074,22 @@ void Game::PlayEvent(const GameEvent& e) {
                 }
                 break;
             }
-            tells.push_back({e.pos, e.dir, kq::slamHalf, GetTime(), e.value});
+            tells.push_back({e.pos, e.dir, e.flags == 2 ? ic::lane : kq::slamHalf, GetTime(), e.value});
             if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 420.0f) sfx::PlayFlat(sfx::Creak, 0.7f, 0.5f);
             break;
         case EventType::BossSlam: {
+            if (e.flags == 3) {  // the Ironclad rams
+                fx.Explosion(e.pos, {0, 1, 0}, 2.0f);
+                for (int i = 0; i < 40; ++i) Emit(e.pos, RandDir(12.0f), Rnd(1.0f, 2.5f), Rnd(0.5f, 1.0f), 0.0f, {110, 75, 45, 255}, 4);
+                sfx::Play(sfx::Hit, e.pos, 1.0f, 0.5f);
+                sfx::Play(sfx::RockHit, e.pos, 1.0f, 0.6f);
+                if (e.b < NumShips()) Feed3("The Ironclad", "  rams  ", NameOf(e.b), ui::kRed, TeamOf(e.b));
+                if (e.b == myId) {
+                    shake = fmaxf(shake, 2.2f);
+                    flash = fmaxf(flash, 0.35f);
+                }
+                break;
+            }
             if (e.flags == 2) {  // a fire ship going up
                 fx.BigExplosion(e.pos);
                 fx.Explosion(e.pos, {0, 1, 0}, 2.0f);
@@ -3129,6 +3162,13 @@ void Game::PlayEvent(const GameEvent& e) {
                     Notice("IT'S BEHIND YOU", {150, 255, 200, 255}, 3.0f);
                     sfx::PlayFlat(sfx::Thunder, 0.7f, 0.4f);
                 } else if (e.a < NumShips()) Feed3("The Dutchman", "  comes through astern of  ", NameOf(e.a), {150, 255, 200, 255}, TeamOf(e.a));
+                break;
+            }
+            if (e.flags == 8) {  // the Ironclad has singled someone out
+                if (e.a == myId) {
+                    Notice("THE IRONCLAD IS COMING FOR YOU", ui::kRed, 3.0f);
+                    sfx::PlayFlat(sfx::Thunder, 0.6f, 1.3f);
+                } else if (e.a < NumShips()) Feed3("The Ironclad", "  turns on  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
                 break;
             }
             if (e.flags == 7) {  // the Fortress's light, settled on someone
@@ -3728,7 +3768,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
             if (!shadow && id == myId && OwnShipLate()) continue;  // drawn see-through after the water
             if (s.cls == SC_GHOST) continue;  // (the Dutchman: see-through, after the water)
-            DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
+            DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, s.cls == SC_IRON ? 0.0f : fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
                      (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
         if (!shadow)
@@ -3810,6 +3850,7 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_SERPENT) DrawSerpentBoss(dt);
     if (!menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_FORTRESS) DrawFortressBoss(dt);
     if (!menu) FireshipFx(dt);
+    if (!menu && curMode == MODE_BOSS) DrawIronclad(dt);
 
     renderer.Water();
 
@@ -6297,6 +6338,11 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_IRONCLAD) {
+        const uint8_t st = bossView.bossState;
+        extra = st == ic::CHARGE ? "   \xC2\xB7   CHARGING!" : st == ic::WINDUP ? "   \xC2\xB7   LINING UP: GET OUT OF ITS LANE" : st == ic::RECOVER ? "   \xC2\xB7   SLOW: HIT ITS STERN!"
+                : "   \xC2\xB7   ARMOURED: AIM FOR THE STERN";
+    }
     if (bossView.bossKind == BOSS_ARMADA) {
         int line = 0, fire = 0;
         for (int id = 0; id < NumShips(); ++id)
@@ -6572,5 +6618,28 @@ void Game::FireshipFx(float dt) {
         const NetShip& s = view[id].s;
         for (float z : {-10.0f, 0.0f, 10.0f})
             fx.ShipFire(HullToWorld(s.pos, s.rot, {0.0f, 4.0f, z}, ScaleOf(id)), 1.0f, dt, s.vel);
+    }
+}
+
+// The Ironclad: its funnel and paddle-boxes on the ship, smoke pouring out of it (thick on the charge)
+void Game::DrawIronclad(float dt) {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_IRONCLAD) return;
+    int id = bossView.bossShip;
+    if (id >= NumShips() || !view[id].present) return;
+    const NetShip& s = view[id].s;
+    const float S = ScaleOf(id), speed = Vector3Length(s.vel);
+    ironWheel += dt * (0.4f + speed * 0.12f);
+    monArt.DrawIroncladParts(renderer, s.pos, s.rot, S, ironWheel, hitFlash[id] * 0.6f);
+    const bool charging = bossView.bossState == ic::CHARGE;
+    if (Rnd(0.0f, 1.0f) < dt * (charging ? 30.0f : 10.0f)) {
+        Vector3 top = HullToWorld(s.pos, s.rot, {0.0f, 15.0f, 2.0f}, S);
+        fx::Particle& q = fx.Add(fx::Smoke, top, Vector3Add(s.vel, {Rnd(-1, 1), Rnd(3, 6), Rnd(-1, 1)}), Rnd(4.0f, 7.0f), Rnd(2.5f, 4.0f), 2.5f,
+                                 charging ? Color{30, 28, 28, 230} : Color{60, 58, 56, 200});
+        q.drag = 0.5f;
+        q.rise = 2.5f;
+    }
+    if (charging && Rnd(0.0f, 1.0f) < dt * 20.0f) {  // a bow wave
+        Vector3 bow = HullToWorld(s.pos, s.rot, {0.0f, 0.0f, hull::halfLength}, S);
+        Emit(bow, {Rnd(-4, 4), Rnd(4, 9), Rnd(-4, 4)}, 1.0f, 0.6f, 0.4f, {235, 245, 250, 220}, 0);
     }
 }

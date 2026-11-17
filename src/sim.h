@@ -25,7 +25,7 @@ constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 // Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
 // follow `scale`. How each one rides the swell falls out of that: a short light hull gets thrown off every
 // crest, a long heavy one spans them.
-enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_BOSS = 4, SC_GHOST = 5, SC_COUNT = 6 };  // (boss mode: the Leviathan, the Flying Dutchman)
+enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_BOSS = 4, SC_GHOST = 5, SC_IRON = 6, SC_COUNT = 7 };  // (boss mode: the Leviathan, the Flying Dutchman, the Ironclad)
 constexpr int SC_PLAYABLE = 3;  // captains sail classes 0..2; the gunboat is a fleet escort only
 constexpr uint8_t SC_ALL = (1 << SC_PLAYABLE) - 1;
 struct ShipClass {
@@ -222,6 +222,11 @@ enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, F
 constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
 constexpr float curseSlow = 0.45f;
 }  // namespace fd
+namespace ic {  // the Ironclad: its states (World::bossState)
+enum State : uint8_t { CRUISE = 1, RECOVER = 3, WINDUP = 4, CHARGE = 5 };
+constexpr float chargeSpeed = 2.7f;  // x its top speed on the charge
+constexpr float lane = 18.0f;        // m either side of its charge line
+}  // namespace ic
 namespace aa {  // the Admiral's Armada
 constexpr float wall = 95.0f;      // m ahead of the Admiral, towards the nearest of us, its line lies
 constexpr float spacing = 58.0f;   // ...this far apart
@@ -800,6 +805,8 @@ private:
     void SpawnSerpent();
     void SpawnFortress();
     void SpawnArmada();
+    void SpawnIronclad();
+    void UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& prey);
     void UpdateArmada(float dt, int phase, const std::vector<const Ship*>& prey);
     void ArmadaThink(Ship& s, float dt);
     void FireshipBlast(Ship& f);

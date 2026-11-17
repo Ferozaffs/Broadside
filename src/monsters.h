@@ -50,6 +50,7 @@ public:
     void DrawQueenArm(Renderer& r, int slot, const std::vector<Vector3>& ctrl, float r0, float r1, Vector3 inner, float time, float hurt);
     void DrawSerpent(Renderer& r, const std::vector<Vector3>& spine, float time, float hurt);  // the Sea Serpent along its spine (head first)
     void DrawFortress(Renderer& r, const std::vector<FortTower>& towers, float top, float keepH, float keepR, float hurt, float time);
+    void DrawIroncladParts(Renderer& r, Vector3 pos, Quaternion rot, float scale, float wheel, float hurt);
     // points along the kraken's arms over the water (for spray and drips), filled by DrawKraken
     std::vector<Vector3> armTips;
 

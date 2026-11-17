@@ -549,7 +549,15 @@ Protocol 25.
   then orbit the Admiral. The snapshot's boss block carries the boss's ship id (the Admiral gold, the Navy white).
   Fixed on the way: the aim override for bosses that aren't ships had stopped bots shooting ship bosses. Bot runs:
   phase 2 at ~65% after ~8 min.
-- [ ] Ironclad  - [ ] Storm Caller
+- [x] Ironclad (BOSS_IRONCLAD): a ship (SC_IRON, scale 1.8, two guns a side and a chaser; the line's model in iron
+  grey with a funnel and paddle-boxes drawn on it, MonsterArt::DrawIroncladParts, smoke). Armour (UpdateBalls): 0.15 of
+  a hit off its plates (Hit flags EF_SKIP: "DEFLECTED", sparks), x1.6 at its stern (x2 in phase 3), x1.2 at a
+  paddle-box (EF_RAKE: "RAKED!"). States (ic::): CRUISE (singles one of us out: "THE IRONCLAD IS COMING FOR YOU"),
+  WINDUP (a wide red lane to where she'll be, 1.9 / 1.5 / 1.1 s), CHARGE (2.7x its speed, rams what's at its bow:
+  24 + 12% of her hull, thrown), RECOVER (slow, 3.5 s / 2 s). Phase 2 on: a deck gun's grapeshot at anyone inside 200 m.
+  Hull 1500 + 650 per captain. Allied bots aim at its stern and get out of its lane. Bot runs (hull 1100 + 450): sunk
+  in ~7 min, 5 lost; raised since.
+- [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 

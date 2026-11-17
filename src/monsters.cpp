@@ -665,3 +665,29 @@ void MonsterArt::DrawFortress(Renderer& r, const std::vector<FortTower>& towers,
     mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
     r.SetLitParams(0.0f, 0.0f);
 }
+
+// The Ironclad's steam: a tall black funnel amidships and a paddle-box either side, its wheels turning (hull space)
+void MonsterArt::DrawIroncladParts(Renderer& r, Vector3 pos, Quaternion rot, float scale, float wheel, float hurt) {
+    if (!ready) return;
+    r.SetLitParams(hurt * 0.4f, 0.0f);
+    const Color iron = {38, 38, 42, 255}, band = {120, 30, 24, 255}, wood = {70, 50, 36, 255};
+    Matrix base = ShipModelMatrix(pos, rot, scale);
+    auto part = [&](const Mesh& m, Matrix local, Color c) {
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = c;
+        DrawMesh(m, mat, MatrixMultiply(local, base));
+    };
+    part(cyl, MatrixMultiply(MatrixScale(1.5f, 11.0f, 1.5f), MatrixTranslate(0.0f, 3.0f, 2.0f)), iron);
+    part(cyl, MatrixMultiply(MatrixScale(1.62f, 1.0f, 1.62f), MatrixTranslate(0.0f, 11.5f, 2.0f)), band);
+    for (int sd = -1; sd <= 1; sd += 2) {
+        // the box over the wheel, and the wheel's spokes turning in its open lower half
+        part(cube, MatrixMultiply(MatrixScale(1.6f, 4.0f, 7.5f), MatrixTranslate(sd * (hull::maxHalfBeam + 0.7f), 2.4f, 0.0f)), iron);
+        for (int k = 0; k < 6; ++k) {
+            float a = wheel + k * PI / 3.0f;
+            Matrix spoke = MatrixMultiply(MatrixMultiply(MatrixScale(1.3f, 0.35f, 6.6f), MatrixRotateX(a)),
+                                          MatrixTranslate(sd * (hull::maxHalfBeam + 0.7f), 0.6f, 0.0f));
+            part(cube, spoke, wood);
+        }
+    }
+    mat.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    r.SetLitParams(0.0f, 0.0f);
+}
