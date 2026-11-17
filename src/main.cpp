@@ -238,11 +238,11 @@ public:
     ShipModel shipModel;              // the default ship (assets/ship)...
     ShipModel classModel[SC_COUNT];   // ...and any class with its own (assets/ship_<class>)
     ShipModel& ModelOf(int cls) {
-        if (cls == SC_BOSS && !classModel[SC_BOSS].HasExternal()) cls = SC_LINE;  // (the Leviathan: a ship of the line three times over)
+        if ((cls == SC_BOSS || cls == SC_GHOST) && !classModel[cls].HasExternal()) cls = SC_LINE;  // (the Leviathan, the Dutchman: ships of the line, bigger)
         return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel;
     }
     const ShipModel& ModelOf(int cls) const {
-        if (cls == SC_BOSS && !classModel[SC_BOSS].HasExternal()) cls = SC_LINE;
+        if ((cls == SC_BOSS || cls == SC_GHOST) && !classModel[cls].HasExternal()) cls = SC_LINE;
         return cls >= 0 && cls < SC_COUNT && classModel[cls].HasExternal() ? classModel[cls] : shipModel;
     }
     const ShipModel& DeckModel() const { return ModelOf(myId >= 0 && myId < NumShips() && view[myId].present ? view[myId].s.cls : SC_FRIGATE); }
@@ -604,6 +604,7 @@ private:
         if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
         if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
+        if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
         if (curMode == MODE_BOSS && s.team == 1) return kPirate;
         return kPalette[(s.leader >= 0 ? s.leader : id) % 8];
     }
@@ -625,6 +626,13 @@ private:
         if (curMode != MODE_TEAMS && !PassageMode(curMode) && curMode != MODE_BOSS) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
+    bool GhostHidden(int id) const {  // (the Dutchman, ethereal: no tag, no marker, nothing to aim at)
+        return curMode == MODE_BOSS && id >= 0 && id < NumShips() && view[id].s.cls == SC_GHOST && bossView.hasBoss && bossView.bossState != fd::SOLID;
+    }
+    float GhostAlpha() const;
+    void DrawGhostShip(float dt);
+    void DrawCurses();
+    float ghostFog = 0.0f;
     bool BossShot(const NetBall& b) const {  // (boss mode: the Leviathan's or its gunboats')
         return curMode == MODE_BOSS && b.owner < NumShips() && view[b.owner].present && view[b.owner].s.team == 1;
     }
@@ -704,7 +712,7 @@ void Game::Init() {
     for (const char* n : {"sailor", "sailor_2", "sailor_3"})
         if (crewModels[crewOutfits].Load((assetDir.substr(0, assetDir.size() - 4) + "crew").c_str(), renderer.litShader, n)) ++crewOutfits;
     {
-        static const char* const kClassDirs[SC_COUNT] = {"cutter", "frigate", "line", "gunboat", "boss"};  // (the boss: the line's model if it has none)
+        static const char* const kClassDirs[SC_COUNT] = {"cutter", "frigate", "line", "gunboat", "boss", "ghost"};  // (the bosses: the line's model if they have none)
         for (int c = 0; c < SC_COUNT; ++c) {
             std::string d = assetDir.substr(0, assetDir.size() - 4) + "ship_" + kClassDirs[c];  // (.../assets/ship -> .../assets/ship_<class>)
             if (!DirectoryExists(d.c_str())) continue;
@@ -1146,6 +1154,13 @@ void Game::Interpolate() {
         pred.bossPhase = b->bossPhase;
         pred.bossPos = b->bossPos;
         pred.bossHpNow = b->bossHp > 0.0f && b->bossState != 2 ? 1.0f : 0.0f;
+        pred.bossState = b->bossState;
+        pred.bossParts.resize(b->bossParts.size());
+        for (size_t i = 0; i < b->bossParts.size(); ++i) {
+            pred.bossParts[i].state = b->bossParts[i].state;
+            pred.bossParts[i].pos = b->bossParts[i].pos;
+            pred.bossParts[i].len = b->bossParts[i].len;
+        }
     } else bossView.hasBoss = false;
     monView.clear();  // the sea monsters, between the two snapshots like the ships
     for (const NetMonster& mb : b->monsters) {
@@ -2117,7 +2132,7 @@ Vector3 Game::SolveAim(Vector3 dir, int crewGun) {
     float bestK = 0.0f;
     Vector3 bestLead{};
     for (int id = 0; id < NumShips(); ++id) {
-        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
+        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE) || GhostHidden(id)) continue;
         if (!IsEnemy(id)) continue;
         const NetShip& o = view[id].s;
         Vector3 now = Vector3Add(o.pos, Vector3Scale(o.vel, lag));
@@ -2935,6 +2950,18 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_DUTCHMAN) {
+                if (e.b == 1) {
+                    Notice("THE FLYING DUTCHMAN", {150, 255, 200, 255}, 4.0f);
+                    Feed3("THE FLYING DUTCHMAN", "  haunts the bay: shoot it when it's solid", "", {150, 255, 200, 255}, ui::kText);
+                } else {
+                    Notice(e.b == 2 ? "THE DROWNED CREWS RISE" : "THE DUTCHMAN CURSES THE WATER", {150, 255, 200, 255}, 4.0f);
+                    Feed3("THE FLYING DUTCHMAN", e.b == 2 ? "  brings drowned crews up with it" : "  leaves cursed water behind it: keep out of the green rings", "",
+                          {150, 255, 200, 255}, ui::kText);
+                }
+                sfx::PlayFlat(sfx::Thunder, 0.8f, 0.45f);
+                break;
+            }
             if (e.flags == BOSS_KRAKEN) {
                 if (e.b == 1) {
                     Notice("THE KRAKEN QUEEN", ui::kRed, 4.0f);
@@ -3002,6 +3029,29 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::BossPart:
+            if (e.flags == 4) {  // the Dutchman coming through, astern of someone
+                sfx::Play(sfx::Thunder, e.pos, 0.9f, 0.5f);
+                sfx::Play(sfx::Creak, e.pos, 1.0f, 0.5f);
+                for (int i = 0; i < 30; ++i) {
+                    fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(e.pos, {Rnd(-30, 30), Rnd(0, 20), Rnd(-30, 30)}), {Rnd(-1, 1), 0.5f, Rnd(-1, 1)}, Rnd(4.0f, 7.0f),
+                                             Rnd(6.0f, 12.0f), 2.0f, {170, 255, 210, 140});
+                    q.drag = 1.0f;
+                }
+                if (e.a == myId) {
+                    Notice("IT'S BEHIND YOU", {150, 255, 200, 255}, 3.0f);
+                    sfx::PlayFlat(sfx::Thunder, 0.7f, 0.4f);
+                } else if (e.a < NumShips()) Feed3("The Dutchman", "  comes through astern of  ", NameOf(e.a), {150, 255, 200, 255}, TeamOf(e.a));
+                break;
+            }
+            if (e.flags == 5) {  // fading
+                sfx::Play(sfx::Whoosh, e.pos, 0.8f, 0.5f);
+                break;
+            }
+            if (e.flags == 6) {  // cursed water
+                sfx::Play(sfx::Chime, e.pos, 0.7f, 0.4f);
+                AddFoam(e.pos, 3.0f, fd::curseR, 10.0f, 0.5f);
+                break;
+            }
             if (e.flags == 1) {  // an arm shot off
                 sfx::Play(sfx::Roar, e.pos, 0.8f, 1.3f);
                 AddFoam(e.pos, 4.0f, 18.0f, 5.0f, 1.0f);
@@ -3334,6 +3384,22 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
             if (lightningSecond <= 0.0f) lightning = fmaxf(lightning, 0.85f);
         }
     }
+    {  // the Dutchman brings its own fog, green-grey, the sun gone thin
+        float want = !menu && curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_DUTCHMAN ? 1.0f : 0.0f;
+        ghostFog += (want - ghostFog) * fminf(1.0f, dt * 0.25f);
+        const float g = ghostFog;
+        if (g > 0.001f) {
+            a.fogDensity = Lerp(a.fogDensity, fmaxf(a.fogDensity, 0.0013f), g);
+            a.fogColor = Vector3Lerp(a.fogColor, {0.30f, 0.40f, 0.38f}, g);
+            a.horizon = Vector3Lerp(a.horizon, {0.34f, 0.44f, 0.42f}, g);
+            a.zenith = Vector3Lerp(a.zenith, {0.10f, 0.16f, 0.17f}, g);
+            a.sunColor = Vector3Scale(a.sunColor, 1.0f - 0.5f * g);
+            a.ambient = Vector3Scale(a.ambient, 1.0f - 0.3f * g);
+            a.cloud = Lerp(a.cloud, 0.85f, g);
+            a.haze = Lerp(a.haze, 0.6f, g);
+            a.lanterns = fmaxf(a.lanterns, 0.75f * g);
+        }
+    }
     lightning = fmaxf(0.0f, lightning - dt * 3.5f);
     float L = lightning * lightning;
     a.lightning = L * 1.3f;
@@ -3559,6 +3625,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
             if (!shadow && id == myId && OwnShipLate()) continue;  // drawn see-through after the water
+            if (s.cls == SC_GHOST) continue;  // (the Dutchman: see-through, after the water)
             DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
                      (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
@@ -3658,6 +3725,8 @@ void Game::RenderWorld(float dt, bool menu) {
     if (!menu && curMode == MODE_BOSS) {
         DrawMortarMarks();
         DrawTells();
+        DrawCurses();
+        DrawGhostShip(dt);
     }
     if (!menu) DrawFleetRings();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
@@ -3745,7 +3814,9 @@ void Game::DrawTracers(const Camera3D& cam) {
         const bool bs = BossShot(b);
         if (bs) side = Vector3Scale(side, 2.2f);
         unsigned char a0 = (unsigned char)((bs ? 255 : 200) * (bs ? fmaxf(k, 0.8f) : k)), a1 = 0;
-        Color c0 = bs ? Color{255, 70, 210, 255} : Color{255, 150, 60, 255}, c1 = bs ? Color{180, 40, 255, 255} : Color{255, 90, 30, 255};
+        const bool green = bs && bossView.hasBoss && bossView.bossKind == BOSS_DUTCHMAN;
+        Color c0 = bs ? (green ? Color{120, 255, 170, 255} : Color{255, 70, 210, 255}) : Color{255, 150, 60, 255};
+        Color c1 = bs ? (green ? Color{40, 200, 120, 255} : Color{180, 40, 255, 255}) : Color{255, 90, 30, 255};
         rlColor4ub(c0.r, c0.g, c0.b, a0); rlVertex3f(b.pos.x + side.x, b.pos.y + side.y, b.pos.z + side.z);
         rlColor4ub(c0.r, c0.g, c0.b, a0); rlVertex3f(b.pos.x - side.x, b.pos.y - side.y, b.pos.z - side.z);
         rlColor4ub(c1.r, c1.g, c1.b, a1); rlVertex3f(tail.x - side.x * 0.4f, tail.y - side.y * 0.4f, tail.z - side.z * 0.4f);
@@ -3764,8 +3835,9 @@ void Game::DrawTracers(const Camera3D& cam) {
         Vector3 p = Vector3Add(b.pos, Vector3Scale(Vector3Normalize(Vector3Subtract(rv.pos, b.pos)), 1.2f));
         if (BossShot(b)) {  // (the Leviathan's: big and bright whatever the hour, so a pattern can be read and dodged)
             float kb = fmaxf(k, 0.8f);
-            DrawBillboardRec(cam, fx.glowTex, src, p, {size * 5.5f, size * 5.5f}, Fade({255, 60, 200, 255}, 0.7f * kb));
-            DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.0f, size * 2.0f}, Fade({255, 220, 245, 255}, 1.0f * kb));
+            const bool green = bossView.hasBoss && bossView.bossKind == BOSS_DUTCHMAN;
+            DrawBillboardRec(cam, fx.glowTex, src, p, {size * 5.5f, size * 5.5f}, Fade(green ? Color{80, 255, 150, 255} : Color{255, 60, 200, 255}, 0.7f * kb));
+            DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.0f, size * 2.0f}, Fade(green ? Color{220, 255, 230, 255} : Color{255, 220, 245, 255}, 1.0f * kb));
             continue;
         }
         DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.6f, size * 2.6f}, Fade({255, 120, 40, 255}, 0.6f * k));
@@ -3978,7 +4050,7 @@ void Game::DrawHUD() {
 
     // ---- name tags ----
     for (int id = 0; id < NumShips(); ++id) {
-        if (!view[id].present || id == myId) continue;
+        if (!view[id].present || id == myId || GhostHidden(id)) continue;
         const NetShip& s = view[id].s;
         if (s.leader >= 0) continue;  // (escorts are just there to fill the sea: no tags)
         // is the ship under the reticle? screen rect of bow, stern, keel and masthead vs the ring
@@ -4070,7 +4142,7 @@ void Game::DrawHUD() {
     }
     // ---- friends and the pirate: always marked ----
     for (int id = 0; id < NumShips() && myId >= 0; ++id) {
-        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
+        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE) || GhostHidden(id)) continue;
         const NetShip& s = view[id].s;
         bool pirate = s.flags & SF_PIRATE;
         bool friendTag = !IsEnemy(id) && curMode != MODE_FFA;
@@ -4458,7 +4530,7 @@ void Game::DrawHUD() {
     auto Pill = [&](const char* label, const char* value, Color col) {
         Vector2 lm = Measure(value, 40, true);
         float pw = fmaxf(220.0f, lm.x + 60), ph = 72;
-        Rectangle r = {W * 0.5f - pw * 0.5f, 34, pw, ph};
+        Rectangle r = {W * 0.5f - pw * 0.5f, curMode == MODE_BOSS ? 82.0f : 34.0f, pw, ph};  // (below the boss's bar)
         Panel(r, kPanelHi, 16);
         Label(label, W * 0.5f, r.y + 10, 12, col, Center);
         Text(value, W * 0.5f, r.y + 24, 40, kText, true, Center);
@@ -6118,6 +6190,10 @@ void Game::DrawBossBar(float W) {
     for (float pip : {0.66f, 0.33f}) DrawRectangle((int)(x + bw * pip) - 1, 34, 2, 16, {255, 255, 255, 140});
     const bool noReserve = curDifficulty == voyage::DEADLY;
     std::string extra;
+    if (bossView.bossKind == BOSS_DUTCHMAN) {
+        const uint8_t st = bossView.bossState;
+        extra = st == fd::SOLID ? "   \xC2\xB7   SOLID: FIRE!" : st == fd::MATERIALISING ? "   \xC2\xB7   COMING THROUGH..." : "   \xC2\xB7   ETHEREAL: OUT OF REACH";
+    }
     if (bossView.bossKind == BOSS_KRAKEN) {
         int up = 0;
         for (const NetBossPart& p : bossView.bossParts) up += p.state >= kq::ARM_RISING && p.state <= kq::ARM_GRAB;
@@ -6235,4 +6311,56 @@ void Game::DrawKrakenQueen(float dt) {
             AddFoam(p, 1.0f, Rnd(3, 6), 2.0f, 0.5f);
         }
     }
+}
+
+// Boss mode: the Flying Dutchman, see-through over the water (after it, like our own ship when it's late), green,
+// glowing, trailing mist; and its cursed water, green rings on the sea
+float Game::GhostAlpha() const {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_DUTCHMAN) return 1.0f;
+    switch (bossView.bossState) {
+        case fd::MATERIALISING: return 0.08f + 0.62f * Clamp(bossView.bossT / 2.0f, 0.0f, 1.0f);
+        case fd::SOLID: return 0.72f;
+        case fd::FADING: return 0.72f * Clamp(1.0f - bossView.bossT / 1.5f, 0.0f, 1.0f) + 0.04f;
+        default: return 0.05f;  // (ethereal: the faintest shimmer)
+    }
+}
+
+void Game::DrawGhostShip(float dt) {
+    for (int id = 0; id < NumShips(); ++id) {
+        if (!view[id].present || view[id].s.cls != SC_GHOST) continue;
+        const NetShip& s = view[id].s;
+        float a = GhostAlpha();
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
+        ModelOf(SC_GHOST).alpha = a;
+        DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), 0.05f + hitFlash[id] * 0.6f,
+                 s.hp / fmaxf(s.maxHp, 1.0f), (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
+        ModelOf(SC_GHOST).alpha = 1.0f;
+        rlDrawRenderBatchActive();
+        // its lanterns, and mist off it
+        const float S = ScaleOf(id);
+        for (float z : {-14.0f, 0.0f, 14.0f}) {
+            Vector3 p = HullToWorld(s.pos, s.rot, {0.0f, 12.0f, z}, S);
+            fx.Lantern(p, 6.0f + 4.0f * a, Fade({110, 255, 170, 255}, 0.25f + 0.6f * a));
+        }
+        if (Rnd(0.0f, 1.0f) < dt * 10.0f * fmaxf(a, 0.15f)) {
+            Vector3 p = HullToWorld(s.pos, s.rot, {Rnd(-6, 6), Rnd(0, 20), Rnd(-16, 16)}, S);
+            fx::Particle& q = fx.Add(fx::Smoke, p, {Rnd(-1, 1), 0.6f, Rnd(-1, 1)}, Rnd(3.0f, 5.0f), Rnd(3.0f, 6.0f), 2.0f, {170, 255, 210, (unsigned char)(70 + 80 * a)});
+            q.drag = 1.0f;
+        }
+    }
+}
+
+void Game::DrawCurses() {
+    if (!bossView.hasBoss || bossView.bossKind != BOSS_DUTCHMAN) return;
+    rlDrawRenderBatchActive();
+    const float now = (float)GetTime();
+    for (const NetBossPart& c : bossView.bossParts) {
+        if (c.state != 1) continue;
+        Vector3 p = {c.pos.x, Ocean().Height(c.pos.x, c.pos.z) + 0.7f, c.pos.z};
+        float pulse = 0.55f + 0.35f * sinf(now * 3.0f + c.pos.x);
+        for (float dr : {-0.4f, 0.0f, 0.4f}) DrawCircle3D(p, c.len + dr, {1, 0, 0}, 90.0f, Fade({90, 255, 150, 255}, pulse));
+        for (float dr : {-0.3f, 0.3f}) DrawCircle3D(p, c.len * 0.6f + dr, {1, 0, 0}, 90.0f, Fade({90, 255, 150, 255}, pulse * 0.5f));
+    }
+    rlDrawRenderBatchActive();
 }

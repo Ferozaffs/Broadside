@@ -41,6 +41,8 @@ static const ShipClass kClasses[SC_COUNT] = {
      32.0f, 22.0f, 2.6f, 0.9f, 0.9f, 2, {-4, 4}, {1.1f, 1.1f}, 3.0f, 90.0f, 0.55f, false, 0.6f},
     {"The Leviathan", "boss mode's monster of a man-o'-war: its guns fire patterns, not broadsides", 3.0f, 3000.0f,
      14.0f, 6.0f, 0.35f, 0.12f, 0.3f, 6, {-10, -3, 4, -7, 0, 7}, {0.3f, 0.3f, 0.3f, 2.1f, 2.1f, 2.1f}, 4.5f, 88.0f, 1.1f, false, 0.45f},
+    {"The Flying Dutchman", "boss mode's ghost galleon: there, and not there", 2.0f, 3000.0f,
+     26.0f, 8.0f, 0.9f, 0.3f, 0.4f, 6, {-10, -3, 4, -7, 0, 7}, {0.3f, 0.3f, 0.3f, 2.1f, 2.1f, 2.1f}, 4.5f, 88.0f, 1.0f, false, 0.45f},
 };
 const ShipClass& ClassOf(int id) { return kClasses[id >= 0 && id < SC_COUNT ? id : SC_FRIGATE]; }
 
@@ -1043,7 +1045,7 @@ ShipPhys BuildPhys(float S) {
 
 const ShipPhys& Phys(int cls = SC_FRIGATE) {
     static ShipPhys p[SC_COUNT] = {BuildPhys(ClassOf(0).scale), BuildPhys(ClassOf(1).scale), BuildPhys(ClassOf(2).scale),
-                                   BuildPhys(ClassOf(3).scale), BuildPhys(ClassOf(4).scale)};
+                                   BuildPhys(ClassOf(3).scale), BuildPhys(ClassOf(4).scale), BuildPhys(ClassOf(5).scale)};
     return p[cls >= 0 && cls < SC_COUNT ? cls : SC_FRIGATE];
 }
 
@@ -1861,6 +1863,10 @@ void World::StepShip(Ship& s, float dt) {
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
+        if (s.boss && bossKind == BOSS_DUTCHMAN && bossState != fd::SOLID) top *= 1.8f;  // (ethereal: nothing holds it back)
+        if (mode == MODE_BOSS && bossKind == BOSS_DUTCHMAN && s.team == 0)  // cursed water
+            for (const BossPart& c : bossParts)
+                if (c.state == 1 && Vector2Distance({c.pos.x, c.pos.z}, {s.pos.x, s.pos.z}) < c.len) top *= fd::curseSlow;
         if (s.slowTimer > 0.0f) top *= tune::raceSlow;  // crippled in a race
         if (real) top *= tune::realSpeed;
         float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
@@ -2022,6 +2028,7 @@ void World::Collisions() {
             Ship& A = ships[a];
             Ship& B = ships[b];
             if (Vector3Distance(A.pos, B.pos) > 45.0f) continue;
+            if ((A.boss || B.boss) && !BossSolid()) continue;  // (the Dutchman, ethereal: sails through)
             for (float za : zs)
                 for (float zb : zs) {
                     float sa = ClassOf(A.cls).scale, sb = ClassOf(B.cls).scale;
@@ -2206,7 +2213,7 @@ void World::UpdateBalls(float dt) {
         Vector3 prev = b.pos;
         bool splashed, skipped;
         bool dead = StepBall(b, ocean, dt, &splashed, &skipped);
-        if (!dead && sqrtf(b.pos.x * b.pos.x + b.pos.z * b.pos.z) > rockInner && b.pos.y < RocksHeight(rocks, b.pos.x, b.pos.z)) {
+        if (!dead && !b.ghost && sqrtf(b.pos.x * b.pos.x + b.pos.z * b.pos.z) > rockInner && b.pos.y < RocksHeight(rocks, b.pos.x, b.pos.z)) {
             GameEvent e{EventType::Splash};  // smacked into an island
             e.a = b.owner;
             e.flags = EF_ROCK;
@@ -2248,6 +2255,7 @@ void World::UpdateBalls(float dt) {
             Ship& sh = ships[s];
             if (!sh.active || !sh.alive || sh.stowed) continue;
             if (s == b.owner && (b.age < 0.4f || sh.boss)) continue;  // (the Leviathan's shot leaves from inside its own long hull)
+            if (sh.boss && !BossSolid()) continue;  // (the Dutchman, ethereal: shot goes through)
             if (!friendlyFire && s != b.owner && ships[b.owner].active && !Enemies(ships[b.owner], sh)) continue;  // friends duck (host option)
             if (Vector3Distance(sh.pos, b.pos) > 75.0f) continue;
             float S = ClassOf(sh.cls).scale;
@@ -2357,6 +2365,7 @@ void World::BotThink(Ship& s, float dt) {
     float best = 1e9f, score = 1e9f;
     for (auto& o : ships) {
         if (!o.active || !o.alive || o.stowed || !Enemies(s, o)) continue;
+        if (o.boss && !BossSolid()) continue;  // (the Dutchman, ethereal)
         float d = Vector3Distance(o.pos, s.pos);
         float sc = (mode == MODE_PIRATE && o.pirate) ? d * 0.2f : d;
         if (sc < score) { score = sc; best = d; target = &o; }
@@ -2595,6 +2604,10 @@ void World::BotThink(Ship& s, float dt) {
             target = &B;
             best = Vector3Distance(C, s.pos);
             if (best < 420.0f) in.sail = 0.65f;  // (steady in the orbit: the guns bear longer)
+            if (!BossSolid()) {  // (the Dutchman, ethereal: nothing to shoot at)
+                target = nullptr;
+                best = 1e9f;
+            }
         }
         // dodge: out of a slam's line before it comes down, and from under a shell about to land on us
         Vector2 me = {s.pos.x, s.pos.z}, flee = {0.0f, 0.0f};
@@ -4325,11 +4338,12 @@ void World::UpdateRaid(float dt) {
 // at each captain, mortar shells that rain down where the clients have marked the water. Three phases as its hull
 // goes, each faster and fiercer; in the last its gunboats come out too. The captains share a reserve of ships.
 void World::SpawnBoss() {
-    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 2) % 2);  // (random: among the ones there are so far)
+    bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * 3) % 3);  // (random: among the ones there are so far)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
     bossParts.clear();
-    if (bossKind == BOSS_KRAKEN) {
-        SpawnKrakenQueen();
+    if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN) {
+        if (bossKind == BOSS_KRAKEN) SpawnKrakenQueen();
+        else SpawnDutchman();
         int captains = 0;
         for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
         bossPhase = 1;
@@ -4402,6 +4416,17 @@ static Vector3 Lob(Vector2 dir, float range, float speed, bool high) {
 void World::BossThink(Ship& s, float dt) {
     PlayerInput& in = s.input;
     if (!s.alive) { in.sail = 0.0f; return; }
+    if (bossKind == BOSS_DUTCHMAN && bossTarget >= 0 && bossTarget < ShipCount() && ships[bossTarget].active && ships[bossTarget].alive) {
+        // after the one it's haunting: hard on her heels while it's ethereal, lying off her broadside on when it's solid
+        const Ship& t = ships[bossTarget];
+        Vector3 to = Vector3Subtract(t.pos, s.pos), fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+        float d = sqrtf(to.x * to.x + to.z * to.z), bearing = atan2f(to.x, to.z), heading = atan2f(fwd.x, fwd.z);
+        float desired = bearing;
+        if (bossState == fd::SOLID && d < 280.0f) desired = bearing + (AimSide(s.rot, to) == 0 ? -PI * 0.5f : PI * 0.5f);
+        in.rudder = Clamp(-remainderf(desired - heading, 2.0f * PI) * 2.0f, -1.0f, 1.0f);
+        in.sail = bossState == fd::SOLID ? 0.6f : 1.0f;
+        return;
+    }
     // round the bay: steer for the circle's tangent, easing in or out to its radius
     Vector2 p = {s.pos.x, s.pos.z};
     float r = Vector2Length(p), R = 230.0f;
@@ -4428,7 +4453,7 @@ void World::UpdateBoss(float dt) {
     }
     if (bossId >= ShipCount() || !ships[bossId].active) return;
     Ship& B = ships[bossId];
-    const bool ship = bossKind == BOSS_LEVIATHAN;  // (the Leviathan is a ship; the others keep their own hull)
+    const bool ship = bossKind == BOSS_LEVIATHAN || bossKind == BOSS_DUTCHMAN;  // (ships keep their hull in the ship)
     if (ship) {
         bossHpNow = B.alive ? B.hp : 0.0f;
         bossHpMax = B.maxHp;
@@ -4455,7 +4480,7 @@ void World::UpdateBoss(float dt) {
         e.flags = bossKind;
         e.pos = bossPos;
         events.push_back(e);
-        if (phase == 3 && ship) {  // its gunboats come out
+        if (phase == 3 && bossKind == BOSS_LEVIATHAN) {  // its gunboats come out
             int captains = 0;
             for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
             int n = 2 + captains / 2;
@@ -4472,6 +4497,10 @@ void World::UpdateBoss(float dt) {
         if (s.active && s.alive && !s.stowed && s.team == 0) prey.push_back(&s);
     if (bossKind == BOSS_KRAKEN) {
         UpdateKrakenQueen(dt, phase, prey);
+        return;
+    }
+    if (bossKind == BOSS_DUTCHMAN) {
+        UpdateDutchman(dt, phase, prey);
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
@@ -4967,4 +4996,184 @@ bool World::BossAimFor(Vector3 from, Vector3& at) const {
         return found;
     }
     return false;
+}
+
+// ---- the Flying Dutchman ------------------------------------------------------------------
+// A ghost galleon, twice a ship of the line. It sails ethereal (out of reach, and through anything), then picks a
+// captain to haunt and materialises astern of her: two seconds coming through, then solid and hittable for a dozen,
+// firing spectral shot that goes through islands. Then it fades and is gone again. From two thirds down drowned crews
+// come out of the sea with it in ghostly cutters; from a third it leaves cursed water behind it (sail at half speed).
+void World::SpawnDutchman() {
+    int j = NewShipSlot();
+    if (j < 0) return;
+    Ship& b = ships[j];
+    b = Ship{};
+    b.active = true;
+    b.id = (uint16_t)j;
+    b.isBot = true;
+    b.boss = true;
+    b.fixedCls = true;
+    b.team = 1;
+    b.cls = b.nextCls = SC_GHOST;
+    b.name = kBossNames[BOSS_DUTCHMAN];
+    b.pos = {0.0f, ocean.Height(0.0f, 0.0f) + 2.0f, 0.0f};
+    b.rot = QuaternionFromAxisAngle({0, 1, 0}, RandF() * 2.0f * PI);
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
+    b.maxHp = b.hp = (1500.0f + 650.0f * std::max(captains, 1)) * Diff().bossHp;  // (it's only there to be shot about half the time)
+    if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
+    b.alive = true;
+    b.sail = 0.6f;
+    bossId = j;
+    bossHpMax = bossHpNow = b.hp;
+    bossPos = b.pos;
+    bossState = fd::ARRIVING;
+    bossT = 0.0f;
+    bossTimer = 2.0f;
+    bossSpit = 5.0f;
+    bossTarget = -1;
+    bossParts.clear();  // (its cursed water)
+}
+
+void World::UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& prey) {
+    Ship& D = ships[bossId];
+    bossT += dt;
+    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    for (size_t i = 0; i < bossParts.size();) {  // cursed water fades
+        bossParts[i].timer -= dt;
+        bossParts[i].t += dt;
+        if (bossParts[i].timer <= 0.0f) bossParts.erase(bossParts.begin() + i);
+        else ++i;
+    }
+    auto enter = [&](uint8_t st, int flags) {
+        bossState = st;
+        bossT = 0.0f;
+        GameEvent e{EventType::BossPart};
+        e.a = (uint16_t)(bossTarget >= 0 ? bossTarget : NO_SHIP);
+        e.b = NO_SHIP;
+        e.flags = (uint8_t)flags;
+        e.pos = D.pos;
+        events.push_back(e);
+    };
+    const Ship* tgt = bossTarget >= 0 && bossTarget < ShipCount() && ships[bossTarget].active && ships[bossTarget].alive ? &ships[bossTarget] : nullptr;
+    auto ghostBall = [&](Vector3 from, Vector3 vel, float dmg) {
+        BossBall(D, from, vel, dmg);
+        balls.back().ghost = true;
+    };
+    auto lob = [&](Vector2 dir, float range, float speed) {
+        float sn = Clamp(tune::gravity * range / (speed * speed), 0.0f, 1.0f), e = 0.5f * asinf(sn);
+        return Vector3{dir.x * speed * cosf(e), speed * sinf(e), dir.y * speed * cosf(e)};
+    };
+    switch (bossState) {
+        case fd::ARRIVING:
+        case fd::PHASED: {
+            if (bossT < (bossState == fd::ARRIVING ? 4.0f : phase == 3 ? 4.5f : 7.0f) || prey.empty()) break;
+            // haunt one of us: come through astern of her
+            const Ship* t = prey[(size_t)(RandF() * prey.size()) % prey.size()];
+            Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, t->rot);
+            Vector2 back = Vector2Normalize({-f.x, -f.z});
+            Vector2 spot = {t->pos.x + back.x * 230.0f, t->pos.z + back.y * 230.0f};
+            for (float turn : {0.0f, 0.8f, -0.8f, 1.6f, -1.6f}) {  // (not into an island)
+                Vector2 d = {back.x * cosf(turn) - back.y * sinf(turn), back.x * sinf(turn) + back.y * cosf(turn)};
+                Vector2 c = {t->pos.x + d.x * 230.0f, t->pos.z + d.y * 230.0f};
+                if (RocksHeight(rocks, c.x, c.y) < -25.0f && c.x * c.x + c.y * c.y < 640.0f * 640.0f) { spot = c; break; }
+            }
+            D.pos = {spot.x, ocean.Height(spot.x, spot.y) + 1.0f, spot.y};
+            D.rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(f.x, f.z));
+            D.vel = Vector3Scale({f.x, 0.0f, f.z}, 8.0f);
+            D.angVel = {0, 0, 0};
+            bossTarget = t->id;
+            enter(fd::MATERIALISING, 4);
+            if (phase >= 2) {  // drowned crews come up with it
+                int out = 0;
+                for (const Ship& r : ships) out += r.active && r.alive && r.raider;
+                if (out < 1 + phase) {
+                    Vector2 side = {-back.y, back.x};
+                    for (int k = 0; k < (phase == 3 ? 2 : 1); ++k) {
+                        float sd = k == 0 ? 70.0f : -70.0f;
+                        Vector2 at = {spot.x + side.x * sd, spot.y + side.y * sd};
+                        if (RocksHeight(rocks, at.x, at.y) < -20.0f) SpawnRaider(at, atan2f(f.x, f.z), SC_CUTTER);
+                    }
+                }
+            }
+            break;
+        }
+        case fd::MATERIALISING:
+            if (bossT > 2.0f) {
+                enter(fd::SOLID, 0);
+                bossTimer = 0.8f;
+            }
+            break;
+        case fd::SOLID: {
+            bossTimer -= dt * rate;
+            if (bossTimer <= 0.0f) {
+                bossTimer = 2.6f;
+                const Vector3 deck = Vector3Add(D.pos, {0.0f, 7.0f, 0.0f});
+                Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, D.rot), port = Vector3RotateByQuaternion({1, 0, 0}, D.rot);
+                float u = RandF();
+                if (u < 0.45f) {  // a spectral broadside out of both sides, fanned
+                    for (int side = -1; side <= 1; side += 2) {
+                        Vector2 out = Vector2Normalize({port.x * side, port.z * side});
+                        float rng = 220.0f;
+                        if (tgt) {
+                            Vector2 rel = {tgt->pos.x - D.pos.x, tgt->pos.z - D.pos.z};
+                            if (Vector2DotProduct(rel, out) > 0.0f) rng = Clamp(Vector2Length(rel), 80.0f, 360.0f);
+                        }
+                        for (int g = 0; g < 8; ++g) {
+                            float fan = (g - 3.5f) * 0.07f;
+                            Vector2 d = {out.x * cosf(fan) - out.y * sinf(fan), out.x * sinf(fan) + out.y * cosf(fan)};
+                            Vector3 m = Vector3Add(deck, Vector3Add(Vector3Scale(fwd, (g - 3.5f) * 6.0f), Vector3Scale(port, side * 8.0f)));
+                            ghostBall(m, lob(d, rng, 72.0f), 0.85f);
+                        }
+                    }
+                } else if (u < 0.75f) {  // a ring of slow souls
+                    int n = 14 + 4 * phase;
+                    for (int k = 0; k < n; ++k) {
+                        float a = bossRot + 2.0f * PI * k / n;
+                        ghostBall(deck, lob({sinf(a), cosf(a)}, 150.0f + 30.0f * (k & 1), 46.0f), 0.7f);
+                    }
+                    bossRot += 0.4f;
+                } else if (tgt) {  // straight at the one it's haunting
+                    float d = Vector2Distance({tgt->pos.x, tgt->pos.z}, {D.pos.x, D.pos.z});
+                    Vector3 at = Vector3Add(tgt->pos, Vector3Scale(tgt->vel, d / 70.0f));
+                    float a = atan2f(at.x - D.pos.x, at.z - D.pos.z);
+                    for (int k = 0; k < 7; ++k) {
+                        float aa = a + (k - 3) * 0.06f;
+                        ghostBall(deck, lob({sinf(aa), cosf(aa)}, Clamp(d, 60.0f, 380.0f), 70.0f), 0.85f);
+                    }
+                }
+                GameEvent e{EventType::Fire};
+                e.a = D.id;
+                e.pos = deck;
+                e.dir = fwd;
+                events.push_back(e);
+            }
+            if (bossT > (phase == 3 ? 13.0f : 11.0f)) enter(fd::FADING, 5);
+            break;
+        }
+        case fd::FADING:
+            if (bossT > 1.5f) enter(fd::PHASED, 0);
+            break;
+    }
+    // cursed water (phase 3): dropped where one of us is going
+    if (phase >= 3 && !prey.empty()) {
+        bossSpit -= dt * rate;
+        if (bossSpit <= 0.0f && bossParts.size() < 6) {
+            bossSpit = 6.0f;
+            const Ship* t = prey[(size_t)(RandF() * prey.size()) % prey.size()];
+            BossPart c;
+            c.state = 1;
+            c.pos = Vector3Add(t->pos, Vector3Scale(t->vel, 3.0f));
+            c.pos.y = ocean.Height(c.pos.x, c.pos.z);
+            c.root = c.pos;
+            c.len = fd::curseR;
+            c.timer = 12.0f;
+            bossParts.push_back(c);
+            GameEvent e{EventType::BossPart};
+            e.b = NO_SHIP;
+            e.flags = 6;
+            e.pos = c.pos;
+            events.push_back(e);
+        }
+    }
 }

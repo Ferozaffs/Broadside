@@ -25,7 +25,7 @@ constexpr int MAX_LEAKS = 8;         // crew mode: open shot holes per ship
 // Every class is the same hull scaled: physics (mass ~ s^3, inertia ~ s^5), hit box, guns and the model all
 // follow `scale`. How each one rides the swell falls out of that: a short light hull gets thrown off every
 // crest, a long heavy one spans them.
-enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_BOSS = 4, SC_COUNT = 5 };  // (the boss: boss mode's Leviathan)
+enum ShipClassId : uint8_t { SC_CUTTER = 0, SC_FRIGATE = 1, SC_LINE = 2, SC_GUNBOAT = 3, SC_BOSS = 4, SC_GHOST = 5, SC_COUNT = 6 };  // (boss mode: the Leviathan, the Flying Dutchman)
 constexpr int SC_PLAYABLE = 3;  // captains sail classes 0..2; the gunboat is a fleet escort only
 constexpr uint8_t SC_ALL = (1 << SC_PLAYABLE) - 1;
 struct ShipClass {
@@ -217,6 +217,11 @@ struct BossPart {
     float len = 0.0f, t = 0.0f, timer = 0.0f;
     int16_t target = -1;     // a ship it has hold of
 };
+namespace fd {  // the Flying Dutchman: its states (World::bossState)
+enum State : uint8_t { ARRIVING = 0, SOLID = 1, PHASED = 3, MATERIALISING = 4, FADING = 5 };
+constexpr float curseR = 48.0f;  // cursed water: this radius, ships in it sail at curseSlow
+constexpr float curseSlow = 0.45f;
+}  // namespace fd
 namespace kq {  // the Kraken Queen
 enum ArmState : uint8_t { ARM_DOWN = 0, ARM_RISING = 1, ARM_UP = 2, ARM_WINDUP = 3, ARM_SLAM = 4, ARM_GRAB = 5, ARM_SINKING = 6 };
 constexpr int arms = 6;
@@ -554,6 +559,7 @@ struct Ball {
     int skips = 0;
     int16_t crew = -1;  // crew mode: the crewman who fired it
     float splash = 0.0f;  // boss mode: a mortar shell, bursting where it lands with this radius (m)
+    bool ghost = false;   // boss mode: the Flying Dutchman's spectral shot (passes through islands)
     Vector3 pos{}, vel{};
 };
 
@@ -763,6 +769,10 @@ private:
     void SpawnBoss();
     int BossProxy(const char* name);  // a ship that isn't there (stowed), for a boss that isn't a ship: owns its shot, sinks ours
     void SpawnKrakenQueen();
+    void SpawnDutchman();
+    void UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& prey);
+    bool BossSolid() const { return bossKind != BOSS_DUTCHMAN || bossState == 1; }  // (the Dutchman: only while it's materialised)
+    int bossTarget = -1;  // the ship it's after (the Dutchman: the one it's haunting)
     void UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*>& prey);
     bool BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at);
     void BossDamage(float dmg, int part, int attacker, Vector3 at, Vector3 dir);

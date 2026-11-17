@@ -513,7 +513,14 @@ Protocol 25.
   the arm is shot off (arm hull 110 + 40 per captain). Phase 2: whirlpool current round her (QueenCurrent in StepShip,
   predicted too) and ink clouds; phase 3: ink bombs (mortars) and arms regrow in 20 s not 32. Body hull 1600 + 700 per
   captain. Bot runs (3 captains, Normal): she wins at ~60% hull in phase 2 after ~7 min.
-- [ ] Flying Dutchman  - [ ] Sea Serpent  - [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
+- [x] Flying Dutchman (BOSS_DUTCHMAN): a ship (SC_GHOST, scale 2, the line's model drawn see-through after the water,
+  green sails and lanterns, mist). States (fd::, World::bossState): ARRIVING, PHASED (ethereal: 1.8x speed, shot and
+  hulls go through it, no tag or marker for us, bots don't aim at it), MATERIALISING (2 s, 230 m astern of the captain
+  it's haunting, World::bossTarget; "IT'S BEHIND YOU"), SOLID (11 s, 13 in phase 3: spectral shot - Ball::ghost, green,
+  through islands - fanned broadsides, rings of slow souls, aimed fans), FADING (1.5 s). Phase 2: 1-2 drowned cutters come
+  up with it each time; phase 3: cursed water (bossParts state 1, 48 m, 12 s: sail at 0.45, predicted too). Hull 1500 +
+  650 per captain. A green-grey fog comes in while it's the boss (client, UpdateAtmosphere). Bot runs: phase 2 at ~58%.
+- [ ] Sea Serpent  - [ ] Sea Fortress  - [ ] Admiral's Armada  - [ ] Ironclad  - [ ] Storm Caller
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.
 
