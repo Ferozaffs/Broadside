@@ -413,6 +413,82 @@ Buf SynthSink(uint32_t seed) {
     return b;
 }
 
+// the kraken: a deep growl (a rough sawtooth through throat-like resonances), a sub rumble under it, the sea
+// boiling off it in bubbles
+Buf SynthRoar(uint32_t seed) {
+    Rng r(seed);
+    const float len = 4.2f;
+    Buf b = Make(len);
+    Biquad f1, f2, f3;
+    f1.Band(r.R(200, 260), 3.0f);
+    f2.Band(r.R(430, 540), 4.0f);
+    f3.Band(r.R(850, 1050), 5.0f);
+    OnePole lp, sub;
+    lp.Set(1400);
+    sub.Set(60);
+    Wander jit, fry;
+    float ph = 0, ph2 = 0, f0 = r.R(42, 54);
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR, u = t / len;
+        float env = fminf(1.0f, t / 0.35f) * (u < 0.55f ? 1.0f + 0.3f * sinf(PI * u / 0.55f) : expf(-(u - 0.55f) * 5.0f));
+        float f = f0 * (1.15f - 0.35f * u) * (0.92f + 0.16f * jit.Next(r, 7.0f));
+        ph += f / SR;
+        ph -= floorf(ph);
+        float saw = 2.0f * ph - 1.0f;
+        float rough = 0.55f + 0.45f * fry.Next(r, 28.0f);  // vocal fry: the growl's rattle
+        float x = saw * rough + 0.25f * r.W();
+        float voice = (f1.Run(x) * 1.4f + f2.Run(x) * 0.9f + f3.Run(x) * 0.45f) * env;
+        ph2 += TAU * f * 0.5f / SR;
+        float rumble = sinf(ph2) * env * 0.8f + sub.Lp(r.W()) * 6.0f * env;
+        b[i] = lp.Lp(voice * 2.2f) + rumble;
+    }
+    for (int k = 0; k < 90; ++k) {  // the sea boiling off it
+        float t0 = r.R(0.1f, len - 0.4f), f = r.R(140, 520), a = r.R(0.04f, 0.16f);
+        size_t s0 = (size_t)(t0 * SR);
+        float p = 0;
+        for (size_t i = s0; i < b.size() && i < s0 + (size_t)(0.07f * SR); ++i) {
+            float t = (float)(i - s0) / SR;
+            p += TAU * f * (1.0f + 2.5f * t) / SR;
+            b[i] += sinf(p) * a * expf(-t / 0.02f);
+        }
+    }
+    Soft(b, 1.8f);
+    Reverb(b, 0.45f, 1.5f, 0.25f, seed + 3);
+    FadeOut(b, 0.6f);
+    Normalize(b, 0.95f);
+    return b;
+}
+
+// the megalodon's bite: a heavy thump into the hull, timbers splintering, the sea thrashed white
+Buf SynthBite(uint32_t seed) {
+    Rng r(seed);
+    Buf b = Make(1.6f);
+    Biquad crack;
+    OnePole hp, wash;
+    hp.Set(1800);
+    wash.Set(900);
+    float p = 0;
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR;
+        p += TAU * (48.0f + 70.0f * expf(-t / 0.05f)) / SR;
+        b[i] = sinf(p) * Env(t, 0.003f, 0.22f) * 1.6f + wash.Lp(r.W()) * Env(t, 0.05f, 0.5f) * 0.9f;
+    }
+    for (int k = 0; k < 26; ++k) {  // splinters: sharp little cracks, thickest at the start
+        float t0 = r.R(0.0f, 0.35f) * r.F(), a = r.R(0.3f, 1.0f);
+        crack.Band(r.R(700, 3200), r.R(4, 9));
+        size_t s0 = (size_t)(t0 * SR);
+        for (size_t i = s0; i < b.size() && i < s0 + (size_t)(0.05f * SR); ++i) {
+            float t = (float)(i - s0) / SR;
+            b[i] += crack.Run(hp.Hp(r.W())) * a * 3.0f * expf(-t / 0.008f);
+        }
+    }
+    Soft(b, 1.5f);
+    Reverb(b, 0.2f, 0.9f, 0.1f, seed + 5);
+    FadeOut(b, 0.3f);
+    Normalize(b, 0.95f);
+    return b;
+}
+
 std::vector<Buf> Variants(Id id) {
     std::vector<Buf> v;
     switch (id) {
@@ -431,12 +507,14 @@ std::vector<Buf> Variants(Id id) {
         case Sink: for (uint32_t s = 1; s <= 2; ++s) v.push_back(SynthSink(s * 41)); break;
         case Confirm: v.push_back(SynthConfirm()); break;
         case Step: for (uint32_t s = 1; s <= 6; ++s) v.push_back(SynthStep(s * 43)); break;
+        case Roar: for (uint32_t s = 1; s <= 2; ++s) v.push_back(SynthRoar(s * 47)); break;
+        case Bite: for (uint32_t s = 1; s <= 3; ++s) v.push_back(SynthBite(s * 53)); break;
         default: break;
     }
     return v;
 }
 
-const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm", "step"};
+const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm", "step", "roar", "bite"};
 
 // ---- live ambience (audio thread) ------------------------------------------------------------
 struct AmbienceGen {

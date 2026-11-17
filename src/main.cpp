@@ -18,6 +18,7 @@
 #include "ui.h"
 #include "fx.h"
 #include "scenery.h"
+#include "monsters.h"
 #include "sim.h"
 
 #include <cstdio>
@@ -62,6 +63,7 @@ struct Options {
     bool skills = false;         // host: --skills (dash + grappling hook)
     bool realistic = false;      // host: --realistic (real ship handling)
     bool friendlyFire = true;    // host: --no-friendly-fire to turn it off
+    int difficulty = voyage::NORMAL;  // host: --difficulty easy|normal|hard|deadly (the voyage)
     int arena = ARENA_ISLES;     // host: --arena isles|maelstrom
     int role = ROLE_CAPTAIN;     // --crew: sign on as crew instead of sailing your own ship
     bool autopilot = false;    // --autopilot: the bot brain sails our ship, the camera + reticle aim and fire
@@ -105,6 +107,10 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         else if (a == "--skills") o.skills = true;
         else if (a == "--realistic") o.realistic = true;
         else if (a == "--no-friendly-fire") o.friendlyFire = false;
+        else if (a == "--difficulty") {
+            std::string v = next("normal");
+            o.difficulty = v == "easy" ? voyage::EASY : v == "hard" ? voyage::HARD : v == "deadly" ? voyage::DEADLY : voyage::NORMAL;
+        }
         else if (a == "--friendly-fire") o.friendlyFire = true;
         else if (a == "--crew") o.role = ROLE_CREW;
         else if (a == "--arena") {  // isles | maelstrom, or for a race: any | strait | serpent | hairpin | zigzag
@@ -321,6 +327,8 @@ public:
     int skillSel = 0;                // host's choice: 0 off, 1 dash + hook
     int handlingSel = 0;             // host's choice: 0 arcade, 1 realistic
     int ffSel = 1;                   // host's choice: friendly fire off / on
+    int diffSel = voyage::NORMAL;    // host's choice: how hard the voyage is
+    int curDifficulty = voyage::NORMAL;
     bool curSkills = false;
     bool curRealistic = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
@@ -436,6 +444,7 @@ public:
     Scenery scenery;
     uint32_t sceneryKey = 0xFFFFFFFFu;
     std::vector<NetCrate> crates;
+    std::vector<NetMonster> monView;  // the sea monsters as shown (interpolated)
     struct Beam { Vector3 pos; Color c; };
     std::vector<Beam> crateBeams;
     struct LanternPt { Vector3 p; Color c; };
@@ -592,6 +601,19 @@ private:
     float hitMarker = 0.0f;
     bool hitMarkerGold = false;
     double lastSighting = -100.0;  // voyage: the last "pirates sighted" call
+    // the sea monsters
+    MonsterArt monArt;
+    float monHurt[MON_TYPES] = {0, 0};  // a flash on it when it's hit
+    float krakenSlam = 99.0f;            // s since an arm came down on a deck
+    Vector3 krakenSlamLocal{};           // where on her (hull space)
+    double lastBiteFeed = -100.0;
+    std::string notice;                  // a big line across the screen for a few seconds
+    Color noticeC{};
+    float noticeT = 0.0f;
+    void Notice(const std::string& s, Color c, float sec) { notice = s; noticeC = c; noticeT = sec; }
+    void DrawMonsters(float dt);
+    void DrawMonsterLabels();
+    std::string BearingFrom(Vector3 p) const;
     std::string NameOf(int id) const {
         if (id < 0 || id >= NumShips()) return "the sea";
         int lead = info[id].leader >= 0 ? info[id].leader : view[id].s.leader;
@@ -666,6 +688,7 @@ void Game::Init() {
     }
     fx.Init();
     scenery.Init(renderer.litShader);
+    monArt.Init(renderer.litShader);
 
     // live backdrop for the menu: bots fighting it out
     todSel = opt.timeOfDay;
@@ -680,6 +703,7 @@ void Game::Init() {
     skillSel = opt.skills ? 1 : 0;
     handlingSel = opt.realistic ? 1 : 0;
     ffSel = opt.friendlyFire ? 1 : 0;
+    diffSel = opt.difficulty;
     arenaSel = RaceArena(opt.arena) || opt.arena == ARENA_RACE_ANY ? ARENA_ISLES : opt.arena;
     courseSel = RaceArena(opt.arena) ? opt.arena - ARENA_STRAIT + 1 : 0;
     roleSel = opt.role;
@@ -726,7 +750,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
         int arena = modeSel == MODE_VOYAGE ? ARENA_PASSAGE : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arena, handlingSel != 0, ffSel != 0)) {
+                          arena, handlingSel != 0, ffSel != 0, diffSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -865,6 +889,8 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             }
             if (curDeckOnly || crewId >= 0) camDist = 0.0f;
             curRealistic = r.Get<uint8_t>() != 0 && r.ok;
+            curDifficulty = r.Get<uint8_t>();
+            if (!r.ok || curDifficulty >= voyage::DIFFICULTIES) curDifficulty = voyage::NORMAL;
             SetOcean(seed, curWeather, curArena, curMode);
             pred.realistic = curRealistic;  // (our own ship is predicted with the same handling as the server's)
             predTime = t;
@@ -880,7 +906,8 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
             DisableCursor();
             if (curMode == MODE_VOYAGE) {
                 Feed("Welcome aboard. Take the convoy to the far harbour: pirates hunt it all the way.", ui::kText);
-                Feed("Follow the dotted sea lane. Sunk ships rejoin the convoy while there are ships in reserve.", ui::kDim);
+                if (curDifficulty == voyage::DEADLY) Feed("Deadly: no ships in reserve. Sunk is out until the next voyage.", ui::kRed);
+                else Feed("Follow the dotted sea lane. Sunk ships rejoin the convoy while there are ships in reserve.", ui::kDim);
             } else
             Feed(curMode == MODE_TEAMS ? "Welcome aboard. Sink the other side!"
                  : curMode == MODE_RACE ? TextFormat("Welcome aboard. Race down %s: first across the finish line wins!", RaceCourseName(curArena))
@@ -1046,6 +1073,25 @@ void Game::Interpolate() {
             }
     }
     leakView = snaps.back().leaks;
+    monView.clear();  // the sea monsters, between the two snapshots like the ships
+    for (const NetMonster& mb : b->monsters) {
+        NetMonster m = mb;
+        if (a != b)
+            for (const NetMonster& ma : a->monsters)
+                if (ma.slot == mb.slot && ma.state == mb.state) {
+                    m.pos = Vector3Lerp(ma.pos, mb.pos, t);
+                    m.heading = ma.heading + remainderf(mb.heading - ma.heading, 2.0f * PI) * t;
+                    m.depth = Lerp(ma.depth, mb.depth, t);
+                    m.t = Lerp(ma.t, mb.t, t);
+                    break;
+                }
+        if (extra > 0) {
+            m.pos.x += sinf(m.heading) * m.speed * extra;
+            m.pos.z += cosf(m.heading) * m.speed * extra;
+            m.t += extra;
+        }
+        monView.push_back(m);
+    }
     if (crewId >= 0) {  // we ride whichever ship the server has us aboard
         for (const NetCrew& cc : snaps.back().crew)
             if (cc.id == crewId && cc.ship >= 0 && cc.ship != myId) {
@@ -1424,8 +1470,9 @@ void Game::DrawResults(float W, float H) {
     Color tc = kGold;
     std::string sub;
     if (curMode == MODE_VOYAGE) {
-        if (winTeam == 0) { title = "SAFE HARBOUR"; sub = TextFormat("the convoy made it through   \xC2\xB7   %d pirate%s sunk", teamScore[1], teamScore[1] == 1 ? "" : "s"); }
-        else if (winTeam == 1) { title = "LOST AT SEA"; tc = kRed; sub = TextFormat("the pirates took the convoy   \xC2\xB7   %d of them sunk first", teamScore[1]); }
+        const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
+        if (winTeam == 0) { title = "SAFE HARBOUR"; sub = TextFormat("the convoy made it through   \xC2\xB7   %d pirate%s sunk   \xC2\xB7   %s", teamScore[1], teamScore[1] == 1 ? "" : "s", lvl); }
+        else if (winTeam == 1) { title = "LOST AT SEA"; tc = kRed; sub = TextFormat("the pirates took the convoy   \xC2\xB7   %d of them sunk first   \xC2\xB7   %s", teamScore[1], lvl); }
         else { title = "BECALMED"; tc = kText; sub = "the voyage took too long"; }
     } else if (curMode == MODE_TEAMS) {
         if (winTeam < 0) { title = "A DRAW"; tc = kText; }
@@ -2086,6 +2133,9 @@ void Game::Reconcile() {
     s.crewed = (ns->flags & SF_CREW) != 0;
     s.maxHp = ns->maxHp;
     s.team = ns->team;
+    s.held = 0.0f;
+    for (const NetMonster& m : sn.monsters)
+        if (m.type == MON_KRAKEN && m.target == myId && (m.state == MS_STRIKE || m.state == MS_HOLD)) s.held = m.state == MS_HOLD ? 1.0f : Clamp(m.t / 2.5f, 0.0f, 1.0f);
     s.lastFireSeq = ackedFireSeq;
     s.pending.clear();
     // ...and replay the inputs the server hasn't seen yet
@@ -2481,6 +2531,11 @@ void Game::PlayEvent(const GameEvent& e) {
                 sfx::PlayFlat(sfx::Confirm, 0.85f, 0.6f);
                 floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("SUNK %s", TextToUpper(NameOf(e.b).c_str())), ui::kGold, 2.6f});
             }
+            if (e.a == KILLER_MONSTER + MON_KRAKEN || e.a == KILLER_MONSTER + MON_MEGALODON) {
+                Feed3(NameOf(e.b), e.a == KILLER_MONSTER + MON_KRAKEN ? "  was dragged under by the KRAKEN" : "  was torn apart by the MEGALODON", "", TeamOf(e.b), ui::kRed);
+                if (e.b == myId) flash = fmaxf(flash, 0.5f);
+                break;
+            }
             if (InEye(e.pos)) {  // the maelstrom took it
                 if (e.a == NO_SHIP || e.a == e.b) Feed3(NameOf(e.b), "  was swallowed by the maelstrom", "", TeamOf(e.b), ui::kText);
                 else Feed3(NameOf(e.a), "  fed the maelstrom  ", NameOf(e.b), TeamOf(e.a), TeamOf(e.b));
@@ -2679,21 +2734,109 @@ void Game::PlayEvent(const GameEvent& e) {
             sfx::Play(sfx::Creak, e.pos, 0.7f, 1.3f);
             if ((int)e.b == crewId) Feed(TextFormat("Hole patched  +%.0f hull", e.value), ui::kGreen);
             break;
+        case EventType::Monster: {
+            const bool kraken = e.b == MON_KRAKEN, mine = e.a == myId;
+            const Color kInk = {190, 140, 230, 255};
+            const bool near = myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 450.0f;
+            switch (e.flags) {
+                case MEV_SIGHTED:
+                    if (kraken) {
+                        sfx::PlayFlat(sfx::Roar, mine ? 0.5f : 0.3f, 0.55f);
+                        Feed3("The sea goes dark", TextFormat("  under %s, %s...", NameOf(e.a).c_str(), BearingFrom(e.pos).c_str()), "", kInk, ui::kText);
+                        if (mine) Notice("SOMETHING VAST MOVES BENEATH YOU", kInk, 3.5f);
+                    } else {
+                        sfx::PlayFlat(sfx::Chime, 0.6f, 0.45f);
+                        Feed3("A GREAT FIN", TextFormat("  cuts the water %s: MEGALODON!", BearingFrom(e.pos).c_str()), "", ui::kRed, ui::kText);
+                        Notice("MEGALODON", ui::kRed, 3.0f);
+                    }
+                    break;
+                case MEV_RISE: {
+                    sfx::Play(sfx::Roar, e.pos, 1.0f);
+                    sfx::Play(sfx::Slam, e.pos, 1.0f, 0.6f);
+                    AddFoam(e.pos, 8.0f, 50.0f, 10.0f, 1.0f);
+                    for (int i = 0; i < 200; ++i)
+                        Emit(Vector3Add(e.pos, {Rnd(-22, 22), 0.0f, Rnd(-22, 22)}), {Rnd(-5, 5), Rnd(8, 26), Rnd(-5, 5)}, Rnd(1.2f, 2.6f), Rnd(0.6f, 1.6f), 0.8f, {235, 245, 250, 220}, 0);
+                    for (int i = 0; i < 12; ++i) Emit(Vector3Add(e.pos, RandDir(8.0f)), {Rnd(-2, 2), Rnd(2, 5), Rnd(-2, 2)}, 3.0f, 5.0f, 3.0f, {230, 240, 245, 140}, 1);
+                    if (mine) { shake = fmaxf(shake, 2.0f); flash = fmaxf(flash, 0.3f); }
+                    else if (near) shake = fmaxf(shake, 0.8f);
+                    Feed3("THE KRAKEN", TextFormat("  has %s in its arms!", NameOf(e.a).c_str()), "", ui::kRed, ui::kText);
+                    Notice(mine ? "THE KRAKEN HAS YOU!  SHOOT IT OFF!" : TextFormat("THE KRAKEN HAS %s!", TextToUpper(NameOf(e.a).c_str())), ui::kRed, 4.5f);
+                    break;
+                }
+                case MEV_STRIKE:
+                    if (e.a < NumShips()) {
+                        hitFlash[e.a] = 1.0f;
+                        if (view[e.a].present) {
+                            const NetShip& v = view[e.a].s;
+                            auto& hh = hullHits[e.a];
+                            if (hh.size() >= 12) hh.erase(hh.begin());
+                            hh.push_back({WorldToHull(v.pos, v.rot, e.pos, ClassOf(v.cls).scale), Rnd(2.0f, 3.0f)});
+                            if (kraken) krakenSlamLocal = WorldToHull(v.pos, v.rot, e.pos, ScaleOf(e.a));
+                        }
+                    }
+                    for (int i = 0; i < 34; ++i) {
+                        fx::Particle& q = fx.Add(fx::Debris, e.pos, Vector3Add(RandDir(Rnd(5, 13)), {0, Rnd(4, 11), 0}), Rnd(1.2f, 2.6f), Rnd(0.4f, 1.1f), 0, {110, 75, 45, 255});
+                        q.spin = Rnd(-400, 400);
+                    }
+                    for (int i = 0; i < 50; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(6, 16), Rnd(-6, 6)}, Rnd(0.8f, 1.8f), Rnd(0.5f, 1.2f), 0.6f, {235, 245, 250, 220}, 0);
+                    if (kraken) {
+                        krakenSlam = 0.0f;
+                        sfx::Play(sfx::Hit, e.pos, 1.0f, 0.6f);
+                        sfx::Play(sfx::Slam, e.pos, 0.8f, 0.8f);
+                    } else {
+                        sfx::Play(sfx::Bite, e.pos, 1.0f);
+                        sfx::Play(sfx::Slam, e.pos, 0.7f, 1.0f);
+                        AddFoam(e.pos, 3.0f, 16.0f, 5.0f, 1.0f);
+                        if (GetTime() - lastBiteFeed > 6.0) {
+                            lastBiteFeed = GetTime();
+                            Feed3("The megalodon", "  bites  ", NameOf(e.a), ui::kRed, TeamOf(e.a));
+                        }
+                    }
+                    if (mine) {
+                        shake = fmaxf(shake, kraken ? 1.4f : 1.8f);
+                        flash = fmaxf(flash, 0.3f);
+                        floats.push_back({Vector3Add(e.pos, {0, 8, 0}), TextFormat("-%d", (int)roundf(e.value)), ui::kRed, 1.6f});
+                    } else if (near) shake = fmaxf(shake, 0.5f);
+                    break;
+                case MEV_HIT:
+                    monHurt[e.b & 1] = 1.0f;
+                    fx.Explosion(e.pos, e.dir, 0.8f);
+                    if (kraken)  // ink
+                        for (int i = 0; i < 8; ++i) {
+                            fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(e.pos, RandDir(1.5f)), Vector3Add(RandDir(2.5f), {0, -0.5f, 0}), Rnd(3.0f, 5.0f), Rnd(2.0f, 3.5f), 2.5f, {34, 16, 40, 210});
+                            q.drag = 1.2f;
+                        }
+                    else
+                        for (int i = 0; i < 24; ++i) Emit(e.pos, Vector3Add(RandDir(6.0f), {0, Rnd(3, 9), 0}), Rnd(0.6f, 1.4f), Rnd(0.3f, 0.7f), 0.4f, {150, 18, 22, 235}, 0);
+                    sfx::Play(sfx::Hit, e.pos, 0.7f, 0.55f);
+                    if (e.a == myId) {
+                        sfx::PlayFlat(sfx::Confirm, 0.45f, 0.8f);
+                        hitMarker = 0.35f;
+                        hitMarkerGold = true;
+                        floats.push_back({Vector3Add(e.pos, {0, 6, 0}), TextFormat("+%d", (int)roundf(e.value)), ui::kGold, 1.6f});
+                    }
+                    break;
+                case MEV_SLAIN:
+                    sfx::Play(kraken ? sfx::Roar : sfx::Sink, e.pos, 1.0f, kraken ? 1.35f : 1.0f);
+                    AddFoam(e.pos, 4.0f, 22.0f, 7.0f, 1.0f);
+                    Feed3(NameOf(e.a), kraken ? "  slew the KRAKEN!" : "  killed the MEGALODON!", "", TeamOf(e.a), ui::kGold);
+                    Notice(kraken ? "THE KRAKEN IS SLAIN" : "THE MEGALODON IS DEAD", ui::kGold, 4.0f);
+                    if (e.a == myId) {
+                        sfx::PlayFlat(sfx::Treasure, 0.7f);
+                        floats.push_back({Vector3Add(e.pos, {0, 18, 0}), kraken ? "KRAKEN SLAIN!" : "MEGALODON SLAIN!", ui::kGold, 3.0f});
+                    }
+                    break;
+                case MEV_GONE:
+                    Feed(kraken ? "The kraken sinks back into the deep..." : "The megalodon has had its fill. The fin is gone.", ui::kDim);
+                    break;
+            }
+            break;
+        }
         case EventType::Respawn:
             if (curMode == MODE_VOYAGE && (e.flags & 1) && GetTime() - lastSighting > 4.0) {  // pirates turning up (one call per band)
                 lastSighting = GetTime();
                 // where, from our own deck: ahead, astern, off the port or starboard bow / quarter, abeam
-                const bool mine = myId >= 0 && myId < NumShips() && view[myId].present;
-                Vector3 mp = mine ? view[myId].s.pos : e.pos;
-                Vector3 mf = mine ? Vector3RotateByQuaternion({0, 0, 1}, view[myId].s.rot) : Vector3{0, 0, 1};
-                float rel = (atan2f(e.pos.x - mp.x, e.pos.z - mp.z) - atan2f(mf.x, mf.z)) * RAD2DEG;
-                while (rel > 180.0f) rel -= 360.0f;
-                while (rel < -180.0f) rel += 360.0f;
-                const char* side = rel > 0.0f ? "port" : "starboard";  // (hull +x is port)
-                float ar = fabsf(rel);
-                std::string where = ar < 25.0f ? "dead ahead" : ar > 155.0f ? "astern" : ar < 70.0f ? TextFormat("off the %s bow", side)
-                                    : ar < 110.0f ? TextFormat("to %s", side) : TextFormat("off the %s quarter", side);
-                Feed3("PIRATES SIGHTED", TextFormat("  %s, %.1f km", where.c_str(), Vector3Distance(mp, e.pos) / 1000.0f), "", ui::kRed, ui::kText);
+                Feed3("PIRATES SIGHTED", "  " + BearingFrom(e.pos), "", ui::kRed, ui::kText);
                 sfx::PlayFlat(sfx::Chime, 0.7f, 0.6f);
             }
             if (e.a == myId) camInit = false;
@@ -3294,6 +3437,7 @@ void Game::RenderWorld(float dt, bool menu) {
     lanternPts.clear();
     DrawShips(menu, false, {}, 0.0f);
     if (!menu) DrawFigures();
+    if (!menu && !monView.empty()) DrawMonsters(dt);
 
     renderer.Water();
 
@@ -3771,8 +3915,10 @@ void Game::DrawHUD() {
             pirates += view[id].present && view[id].s.team == 1 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0;
         float togo = fmaxf(0.0f, pred.RouteLength() - sMe);
         int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
-        std::string t = TextFormat("SAFE HARBOUR %.1f km   \xC2\xB7   RESERVE %d   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d   \xC2\xB7   %d:%02d",
-                                   togo / 1000.0f, teamScore[0], pirates, teamScore[1], el / 60, el % 60);
+        const bool noReserve = curDifficulty == voyage::DEADLY;  // (Deadly: none at all, sunk is out)
+        std::string t = TextFormat("%s   \xC2\xB7   SAFE HARBOUR %.1f km   \xC2\xB7   %s   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d   \xC2\xB7   %d:%02d",
+                                   TextToUpper(voyage::kDifficultyNames[curDifficulty]), togo / 1000.0f,
+                                   noReserve ? "NO RESERVE" : TextFormat("RESERVE %d", teamScore[0]), pirates, teamScore[1], el / 60, el % 60);
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
@@ -4324,17 +4470,12 @@ void Game::DrawMenu() {
     Label("GAME", x + 2, y, 11, kDim);
     Segmented({x, y + 18, fw, 40}, kModeNames, MODE_COUNT, modeSel);
     y += row;
-    if (modeSel == MODE_VOYAGE) {  // the voyage: its own sea; skills and fleets as usual
-        static const char* const kSea[] = {"Passage  \xC2\xB7  9 km"};
-        static const char* const kSkills[] = {"Off", "On"};
+    if (modeSel == MODE_VOYAGE) {  // the voyage: its own sea (the Passage, 9 km); how hard, and fleets as usual (skills: next row)
         static const char* const kFleets[] = {"Solo", "Fleets"};
-        const float sw = 100.0f, aw = fw - sw - 128 - 16;
-        int one = 0;
-        Label("SEA   \xC2\xB7   CO-OP", x + 2, y, 11, kDim);
-        Label("SKILLS", x + aw + 10, y, 11, kDim);
+        static const char* const kHow[] = {"FEWER PIRATES", "CO-OP", "MORE PIRATES", "SUNK IS OUT"};
+        Label(TextFormat("DIFFICULTY   \xC2\xB7   %s", kHow[diffSel]), x + 2, y, 11, kDim);
         Label("SHIPS", x + mw + 10, y, 11, kDim);
-        Segmented({x, y + 18, aw, 40}, kSea, 1, one);
-        Segmented({x + aw + 8, y + 18, sw, 40}, kSkills, 2, skillSel);
+        Segmented({x, y + 18, mw, 40}, voyage::kDifficultyNames, voyage::DIFFICULTIES, diffSel);
         Segmented({x + mw + 8, y + 18, 128, 40}, kFleets, 2, fleetSel);
     } else if (modeSel == MODE_RACE) {  // a race: which course (dash and hook are always on, and nobody sails with a fleet)
         static const char* const kCourses[] = {"Any", "Strait", "Serpent", "Hairpin", "Zigzag"};
@@ -4356,10 +4497,18 @@ void Game::DrawMenu() {
     {  // how the ships handle
         static const char* const kHandling[] = {"Arcade", "Realistic"};
         static const char* const kOnOff[] = {"Off", "On"};
-        Label(handlingSel ? "HANDLING   \xC2\xB7   REAL, NO JUMPS" : "HANDLING   \xC2\xB7   OVER THE TOP", x + 2, y, 11, kDim);
         Label("FRIENDLY FIRE", x + mw + 10, y, 11, kDim);
-        Segmented({x, y + 18, mw, 40}, kHandling, 2, handlingSel);
         Segmented({x + mw + 8, y + 18, 128, 40}, kOnOff, 2, ffSel);
+        if (modeSel == MODE_VOYAGE) {  // (the voyage's row above holds the difficulty: the skills come down here)
+            const float sw = 100.0f, aw = fw - sw - 128 - 16;
+            Label("HANDLING", x + 2, y, 11, kDim);
+            Label("SKILLS", x + aw + 10, y, 11, kDim);
+            Segmented({x, y + 18, aw, 40}, kHandling, 2, handlingSel);
+            Segmented({x + aw + 8, y + 18, sw, 40}, kOnOff, 2, skillSel);
+        } else {
+            Label(handlingSel ? "HANDLING   \xC2\xB7   REAL, NO JUMPS" : "HANDLING   \xC2\xB7   OVER THE TOP", x + 2, y, 11, kDim);
+            Segmented({x, y + 18, mw, 40}, kHandling, 2, handlingSel);
+        }
     }
     y += row;
     // which ships captains may sail, and whether everyone plays from the deck
@@ -5335,9 +5484,26 @@ void Game::Frame() {
             rv.target = Vector3Add(mid, {0, 3.0f, 0});
             rv.up = {0, 1, 0};
         }
+        if (const char* mc = getenv("BS_MONCAM"); mc && !monView.empty()) {  // (testing the monsters' looks: "distance height degrees")
+            float dist = 60.0f, hgt = 18.0f, deg = 30.0f;
+            sscanf(mc, "%f %f %f", &dist, &hgt, &deg);
+            const NetMonster& m = monView.back();
+            Vector3 at = {m.pos.x, Ocean().Height(m.pos.x, m.pos.z) + 4.0f, m.pos.z};
+            float base = m.heading + PI;  // (from in front of it)
+            if (m.type == MON_KRAKEN && m.target >= 0 && m.target < NumShips() && view[m.target].present) {
+                at = Vector3Lerp(at, view[m.target].s.pos, 0.4f);
+                at.y = Ocean().Height(at.x, at.z) + 6.0f;
+                base = atan2f(m.pos.x - view[m.target].s.pos.x, m.pos.z - view[m.target].s.pos.z);
+            }
+            float a = base + deg * DEG2RAD;
+            rv.target = at;
+            rv.pos = Vector3Add(at, {sinf(a) * dist, hgt, cosf(a) * dist});
+            rv.up = {0, 1, 0};
+        }
         RenderWorld(dt, false);
         DrawLanternHalos(false);
         if (prof) mark[6] = GetTime();
+        DrawMonsterLabels();
         DrawHUD();
         if (prof) {
             mark[7] = GetTime();
@@ -5458,7 +5624,7 @@ void Game::YardCamera() {
 static int RunDedicated(const Options& o) {
     GameServer srv;
     uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
-    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic, o.friendlyFire)) return 1;
+    if (!srv.Start(o.port, o.bots, seed, o.timeOfDay, o.weather, o.mode, o.fleets, (uint8_t)o.allowedCls, o.deckOnly, o.skills, o.arena, o.realistic, o.friendlyFire, o.difficulty)) return 1;
     printf("Dedicated server running. Press Enter to stop.\n");
     getchar();
     srv.Stop();
@@ -5502,4 +5668,121 @@ int main(int argc, char** argv) {
     CloseWindow();
     NetShutdown();
     return 0;
+}
+
+// Where a point lies from our own deck, as a lookout calls it: dead ahead, astern, off the port bow, to starboard...
+std::string Game::BearingFrom(Vector3 p) const {
+    const bool mine = myId >= 0 && myId < NumShips() && view[myId].present;
+    Vector3 mp = mine ? view[myId].s.pos : p;
+    Vector3 mf = mine ? Vector3RotateByQuaternion({0, 0, 1}, view[myId].s.rot) : Vector3{0, 0, 1};
+    float rel = (atan2f(p.x - mp.x, p.z - mp.z) - atan2f(mf.x, mf.z)) * RAD2DEG;
+    while (rel > 180.0f) rel -= 360.0f;
+    while (rel < -180.0f) rel += 360.0f;
+    const char* side = rel > 0.0f ? "port" : "starboard";  // (hull +x is port)
+    float ar = fabsf(rel);
+    std::string where = ar < 25.0f ? "dead ahead" : ar > 155.0f ? "astern" : ar < 70.0f ? TextFormat("off the %s bow", side)
+                        : ar < 110.0f ? TextFormat("to %s", side) : TextFormat("off the %s quarter", side);
+    return where + TextFormat(", %.1f km", Vector3Distance(mp, p) / 1000.0f);
+}
+
+// The sea monsters: the kraken round the ship it holds (or deep under one), the megalodon swimming; the sea they churn
+void Game::DrawMonsters(float dt) {
+    krakenSlam += dt;
+    for (float& h : monHurt) h = fmaxf(0.0f, h - dt * 4.0f);
+    const OceanCPU& oc = Ocean();
+    const float now = (float)GetTime();
+    auto chance = [&](float perSec) { return Rnd(0.0f, 1.0f) < perSec * dt; };
+    for (const NetMonster& m : monView) {
+        if (m.type == MON_KRAKEN) {
+            KrakenPose p;
+            p.time = now;
+            p.hurt = monHurt[0];
+            p.side = m.side;
+            p.heading = m.heading;
+            p.rise = m.state == MS_STALK ? 0.0f : m.state == MS_STRIKE ? Clamp(m.t / 2.5f, 0.0f, 1.0f) : m.state == MS_HOLD ? 1.0f
+                     : m.state == MS_GONE ? Clamp(1.0f - m.t / 2.5f, 0.0f, 1.0f) : Clamp(1.0f - m.t / 8.0f, 0.0f, 1.0f);
+            p.dead = m.state == MS_DEAD ? Clamp(m.t / 2.0f, 0.0f, 1.0f) : 0.0f;
+            const bool hasShip = m.target >= 0 && m.target < NumShips() && view[m.target].present;
+            p.holding = hasShip && (m.state == MS_STRIKE || m.state == MS_HOLD || (m.state == MS_GONE && m.t < 2.5f) || (m.state == MS_DEAD && m.t < 3.0f));
+            if (p.holding) {  // alongside her as she is on screen (the server puts it in the same spot)
+                const NetShip& s = view[m.target].s;
+                p.shipPos = s.pos;
+                p.shipRot = s.rot;
+                p.shipScale = ScaleOf(m.target);
+                Vector3 port = Vector3RotateByQuaternion({1, 0, 0}, s.rot);
+                Vector2 ph = Vector2Normalize({port.x, port.z});
+                float off = (hull::maxHalfBeam * p.shipScale + monster::krakenBerth) * (m.side == 0 ? 1.0f : -1.0f);
+                p.body = {s.pos.x + ph.x * off, 0.0f, s.pos.z + ph.y * off};
+                p.heading = atan2f(s.pos.x - p.body.x, s.pos.z - p.body.z);
+                p.slamAt = HullToWorld(s.pos, s.rot, krakenSlamLocal, p.shipScale);
+                if (m.target == myId) {  // her timbers groaning in its grip
+                    shake = fmaxf(shake, 0.25f);
+                    if (chance(1.2f)) sfx::PlayFlat(sfx::Creak, 0.8f, Rnd(0.6f, 0.9f));
+                }
+            } else p.body = {m.pos.x, 0.0f, m.pos.z};
+            p.body.y = oc.Height(p.body.x, p.body.z) - m.depth;
+            p.slam = krakenSlam;
+            if (m.depth < 34.0f) monArt.DrawKraken(renderer, p);
+            // the sea over it boils as it comes up; round it, white water, and its arms streaming
+            if (m.state == MS_STALK && m.depth < 32.0f && chance(6.0f)) {
+                Vector3 q = {p.body.x + Rnd(-24, 24), 0.0f, p.body.z + Rnd(-24, 24)};
+                q.y = oc.Height(q.x, q.z);
+                AddFoam(q, 1.0f, Rnd(3, 7), 3.0f, 0.5f);
+                for (int i = 0; i < 4; ++i) Emit(q, {Rnd(-1, 1), Rnd(1, 3), Rnd(-1, 1)}, 0.8f, 0.4f, 0.3f, {225, 235, 240, 200}, 0);
+            }
+            if (p.rise > 0.3f && p.dead < 1.0f) {
+                if (chance(6.0f)) {
+                    float a = Rnd(0, 2 * PI);
+                    Vector3 q = {p.body.x + sinf(a) * 16.0f, 0.0f, p.body.z + cosf(a) * 16.0f};
+                    q.y = oc.Height(q.x, q.z);
+                    AddFoam(q, 1.5f, Rnd(4, 9), 3.0f, 0.6f);
+                }
+                for (const Vector3& tip : monArt.armTips)
+                    if (tip.y > oc.Height(tip.x, tip.z) + 2.0f && chance(0.8f)) Emit(tip, {Rnd(-0.5f, 0.5f), -1.0f, Rnd(-0.5f, 0.5f)}, 1.5f, 0.35f, 0.2f, {225, 235, 240, 200}, 0);
+            }
+        } else {
+            SharkPose s;
+            s.time = now;
+            s.hurt = monHurt[1];
+            s.heading = m.heading;
+            s.speed = m.speed;
+            s.belly = m.state == MS_DEAD;
+            s.jaw = m.state == MS_STRIKE ? Clamp((m.t - 0.5f) / 1.0f, 0.0f, 1.0f) : 0.0f;
+            s.mid = {m.pos.x, oc.Height(m.pos.x, m.pos.z) - m.depth - 1.3f, m.pos.z};
+            if (s.belly) s.mid.y = oc.Height(m.pos.x, m.pos.z) - m.depth + 0.6f;
+            if (m.depth < 20.0f) monArt.DrawShark(renderer, s);
+            if (m.depth < 1.4f && !s.belly) {  // the fin's wake, and spray on the charge
+                Vector3 fin = {m.pos.x + sinf(m.heading) * 2.0f, 0.0f, m.pos.z + cosf(m.heading) * 2.0f};
+                fin.y = oc.Height(fin.x, fin.z);
+                if (chance(14.0f)) AddFoam(fin, 0.6f, 2.4f, 2.6f, 0.55f);
+                if (m.speed > 13.0f && chance(30.0f))
+                    Emit(fin, {Rnd(-2, 2) + sinf(m.heading) * m.speed * 0.3f, Rnd(2, 5), Rnd(-2, 2) + cosf(m.heading) * m.speed * 0.3f}, 0.8f, 0.35f, 0.3f, {230, 240, 245, 210}, 0);
+            }
+        }
+    }
+}
+
+// The monsters over the water: what it is and how much of it is left
+void Game::DrawMonsterLabels() {
+    using namespace ui;
+    for (const NetMonster& m : monView) {
+        const bool kraken = m.type == MON_KRAKEN;
+        bool shown = kraken ? (m.state == MS_STRIKE || m.state == MS_HOLD) : (m.depth < 2.0f && m.state != MS_DEAD);
+        if (!shown) continue;
+        Vector3 at = {m.pos.x, Ocean().Height(m.pos.x, m.pos.z) + (kraken ? 22.0f : 7.0f), m.pos.z};
+        if (kraken && m.target >= 0 && m.target < NumShips() && view[m.target].present) at = Vector3Add(view[m.target].s.pos, {0.0f, 44.0f, 0.0f});
+        if (Vector3Distance(at, rv.pos) > 1800.0f) continue;
+        Vector2 sp;
+        if (!rv.Project(at, sp)) continue;
+        const char* name = kraken ? "THE KRAKEN" : "MEGALODON";
+        Text(name, sp.x, sp.y - 26, 18, kRed, true, Center);
+        Bar({sp.x - 60, sp.y - 4, 120, 6}, m.hp, kRed, {0, 0, 0, 150});
+    }
+    if (noticeT > 0.0f) {
+        noticeT -= GetFrameTime();
+        float a = Clamp(noticeT / 0.8f, 0.0f, 1.0f);
+        const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+        Text(notice.c_str(), W * 0.5f + 2, H * 0.24f + 3, 40, Fade(BLACK, 0.5f * a), true, Center);
+        Text(notice.c_str(), W * 0.5f, H * 0.24f, 40, Fade(noticeC, a), true, Center);
+    }
 }

@@ -109,6 +109,28 @@ The host picks the game in the menu:
   with none left a sunk ship is out until the next voyage. Every human captain afloat in the safe harbour (and
   nobody waiting to rejoin) wins it; every ship sunk loses it. Takes about 6-10 minutes in Arcade, half an hour in
   Realistic. Works with fleets, skills, crew, friendly fire and both handlings.
+  The host picks a **difficulty**:
+
+  | | Pirates | Reserve per captain | First pirates |
+  |---|---|---|---|
+  | **Easy** | 60% as many, less speed to catch up, smaller ships, their gunners miss more | 3 (at least 5) | after 50 s |
+  | **Normal** | as above | 2 (at least 3) | after 35 s |
+  | **Hard** | 35% more, faster to catch up, bigger ships, bands come sooner | 1 (at least 2) | after 25 s |
+  | **Deadly** | 70% more, faster still, mostly frigates and ships of the line | none: sunk is out | after 15 s |
+
+  **Sea monsters.** Not every voyage meets them (the harder the voyage, the likelier):
+  - **The kraken** (rare: 8% of voyages on Easy, 15% Normal, 22% Hard, 35% Deadly). The sea goes dark under a convoy
+    ship; then it rises alongside, wraps her in its arms and drags her low in the water, nearly stopped, crushing her
+    hull and smashing its free arms down on her deck. Left alone she goes down in about 25 seconds. Shoot it off her:
+    its body lies right alongside, so her own broadside on that side bears on it point-blank, and the rest of the
+    convoy can come round and pour shot into it (careful: a miss can hit her). It has more hull than a ship of the line
+    and grows tougher with every captain. If it sinks her and is still hungry it goes for another. It lets go after a
+    while, and it never takes a ship in harbour.
+  - **The megalodon** (25% / 35% / 45% / 55%): a fin cuts the water and circles a ship, then the charge, the jaws open,
+    and a bite that tears a chunk out of her hull and throws her about. Then it dives, comes round and does it again,
+    half a dozen times before it has had its fill. Shoot it when the fin is up.
+
+  Slaying one counts as a kill. They roar, bite, ink and bleed; a banner and the feed tell everyone where they are.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and
@@ -180,7 +202,7 @@ The game is `build/broadside.exe`.
 
 `broadside.exe --simtest` runs the headless physics checks and a bot match in every game mode.
 Hosting from the command line: `broadside.exe --host --mode teams --fleets --bots 3`
-(also `--mode voyage`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
+(also `--mode voyage --difficulty easy|normal|hard|deadly`, `--classes cutter,frigate`, `--deck-only`, `--skills`, `--realistic`, `--no-friendly-fire`, `--arena maelstrom`, for a race `--arena any|strait|serpent|hairpin|zigzag`, `--time night`, `--weather storm`).
 Join as crew: `broadside.exe --join <address> --crew`, or practise as crew with `--practice --bots 3 --crew`.
 
 ### Ship model

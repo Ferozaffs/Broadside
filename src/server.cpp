@@ -11,7 +11,7 @@ static const char* kBotNames[] = {"Cpt. Bilgewater", "Mad Meg", "Admiral Soggy",
 static constexpr int kBotNameCount = sizeof(kBotNames) / sizeof(kBotNames[0]);
 
 bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, int weather, int mode, bool fleets, uint8_t allowedCls,
-                       bool deckOnly, bool skills, int arena, bool realistic, bool friendlyFire) {
+                       bool deckOnly, bool skills, int arena, bool realistic, bool friendlyFire, int difficulty) {
     Stop();
     if (!NetInit()) return false;
     if (!net.Start(port, kMaxPeers)) {
@@ -28,6 +28,7 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     world.skills = skills || mode == MODE_RACE;  // (dash and hook are what a race is about)
     world.realistic = realistic;
     world.friendlyFire = friendlyFire;
+    world.difficulty = (uint8_t)(difficulty >= 0 && difficulty < voyage::DIFFICULTIES ? difficulty : voyage::NORMAL);
     for (int i = 0; i < bots; ++i) {  // (as many as there are berths: past the list the names come round again, numbered)
         std::string nm = kBotNames[i % kBotNameCount];
         if (i >= kBotNameCount) nm += " " + std::to_string(i / kBotNameCount + 1);
@@ -141,6 +142,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         w.Put(world.arena);
         w.Put((uint16_t)(crewId >= 0 ? crewId : NO_SHIP));
         w.Put((uint8_t)(world.realistic ? 1 : 0));
+        w.Put(world.difficulty);
         net.Send(peer, w.buf.data(), w.buf.size(), true);
         for (int i = 0; i < world.ShipCount() && i < (int)announced.size(); ++i)
             if (world.ships[i].active && announced[i] && (i != id || crewId >= 0)) SendPlayerInfo(i, (int)peer);

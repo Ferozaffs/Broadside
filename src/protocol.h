@@ -13,7 +13,7 @@ constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 enum MsgType : uint8_t {
     MSG_HELLO = 1,        // C->S  version, name, class, role, livery (u16 length + Livery::Encode)
     MSG_INPUT = 2,        // C->S  input (unreliable)
-    MSG_WELCOME = 3,      // S->C  your id, ocean seed, time of day, weather, mode, fleets, server time
+    MSG_WELCOME = 3,      // S->C  your id, ocean seed, time of day, weather, mode, fleets, server time, ..., realistic, difficulty
     MSG_SNAPSHOT = 4,     // S->C  world state (unreliable)
     MSG_PLAYER_INFO = 5,  // S->C  id, isBot, name, leader, livery (u16 length, 0: none)
     MSG_PLAYER_LEFT = 6,  // S->C  id
@@ -202,6 +202,13 @@ struct NetLeak {
     Vector3 local{};
 };
 
+struct NetMonster {  // a sea monster (the voyage)
+    uint8_t slot = 0, type = 0, state = 0, side = 0, strikes = 0;
+    int16_t target = -1;
+    float heading = 0, depth = 0, hp = 1, t = 0, speed = 0;
+    Vector3 pos{};
+};
+
 struct Snapshot {
     double time = 0;
     uint32_t tick = 0;
@@ -211,6 +218,7 @@ struct Snapshot {
     std::vector<NetCrate> chests;  // pirate booty (type unused)
     std::vector<NetCrew> crew;
     std::vector<NetLeak> leaks;
+    std::vector<NetMonster> monsters;
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
     float matchClock = 0;
@@ -343,6 +351,25 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
             w.Put((int16_t)Clamp(l.local.z * 100.0f, -32000.f, 32000.f));
         }
     }
+    uint8_t nm = 0;
+    for (const Monster& m : world.monsters) nm += m.active ? 1 : 0;
+    w.Put(nm);
+    for (int k = 0; k < MON_TYPES; ++k) {
+        const Monster& m = world.monsters[k];
+        if (!m.active) continue;
+        w.Put((uint8_t)k);
+        w.Put(m.type);
+        w.Put(m.state);
+        w.Put(m.side);
+        w.Put(m.strikes);
+        w.Put(m.target);
+        w.Put((int16_t)(remainderf(m.heading, 2.0f * PI) * 5000.0f));
+        w.Put((int16_t)Clamp(m.depth * 100.0f, -32000.f, 32000.f));
+        w.PutU8f(m.hp / fmaxf(m.maxHp, 1.0f));
+        w.Put((uint16_t)Clamp(m.t * 100.0f, 0.0f, 65000.0f));
+        w.Put((int16_t)Clamp(m.speed * 100.0f, -32000.f, 32000.f));
+        w.PutVec3(m.pos);
+    }
 }
 
 inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
@@ -447,6 +474,22 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         l.local.x = r.Get<int16_t>() / 100.0f;
         l.local.y = r.Get<int16_t>() / 100.0f;
         l.local.z = r.Get<int16_t>() / 100.0f;
+    }
+    uint8_t nm = r.Get<uint8_t>();
+    s.monsters.resize(r.ok ? nm : 0);
+    for (auto& m : s.monsters) {
+        m.slot = r.Get<uint8_t>();
+        m.type = r.Get<uint8_t>();
+        m.state = r.Get<uint8_t>();
+        m.side = r.Get<uint8_t>();
+        m.strikes = r.Get<uint8_t>();
+        m.target = r.Get<int16_t>();
+        m.heading = r.Get<int16_t>() / 5000.0f;
+        m.depth = r.Get<int16_t>() / 100.0f;
+        m.hp = r.GetU8f();
+        m.t = r.Get<uint16_t>() / 100.0f;
+        m.speed = r.Get<int16_t>() / 100.0f;
+        m.pos = r.GetVec3();
     }
     return r.ok;
 }

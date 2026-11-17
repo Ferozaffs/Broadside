@@ -13,6 +13,7 @@
 // Ships (captains plus their fleets) and crewmen have no fixed number: the lists grow as they join. Ids travel in
 // 16 bits with the top values kept as markers (NO_SHIP, HOOK_ROCK), so the only ceiling is ~32000 at once.
 constexpr uint16_t NO_SHIP = 0xFFFF;   // event a / b, hook target: nobody
+constexpr uint16_t KILLER_MONSTER = 0xFFF0;  // Kill event a: sunk by a sea monster (+ its MonsterType)
 constexpr int SHIP_ID_LIMIT = 32000;
 constexpr int CREW_ID_LIMIT = 32000;
 constexpr float SIM_DT = 1.0f / 60.0f;
@@ -226,13 +227,83 @@ namespace voyage {
 constexpr float passageA = 1550.0f, passageB = 4900.0f;  // m: the coastline's half width and half length
 constexpr float exponent = 4.0f;                         // its shape: |x/A|^n + |z/B|^n = 1 (4: an oblong with round corners)
 constexpr int startHarbour = 0, endHarbour = 1, haven = 2;
-constexpr int reserve = 3;              // ships the convoy can lose and still rejoin (shared; at least this, two per captain)
 constexpr float fortRange = 550.0f;     // m round the haven and the far harbour the pirates won't come
-constexpr float graceTime = 35.0f;      // s after leaving before the first pirates show up
 constexpr float spawnMin = 1050.0f;     // m from the nearest convoy ship a pirate turns up (out of sight in the haze)
 constexpr float despawn = 2700.0f;      // a pirate this far from every convoy ship for a while gives up the chase
-constexpr float pirateCatchUp = 0.35f;  // pirates far from their prey sail this much faster (they know these waters)
+// how hard the host makes it (World::difficulty)
+enum Difficulty : uint8_t { EASY, NORMAL, HARD, DEADLY, DIFFICULTIES };
+struct Level {
+    int reservePer, reserveMin, joiner;  // ships in reserve: per captain who sets out, at least, and one more per captain joining under way
+    float pirates;                       // how many hunt the convoy at once (x the normal number)
+    float gap;                           // x the time between bands
+    float grace;                         // s after leaving before the first pirates show up
+    float catchUp;                       // pirates far from their prey sail this much faster (they know these waters)
+    float bigger;                        // shifts the pirates' ships toward the bigger classes (as if this much further on)
+    float aimErr;                        // rad of scatter in the pirates' aim
+    float kraken, megalodon;             // chance a voyage meets each sea monster
+    float monster;                       // how tough and how savage the monsters are (x)
+};
+inline constexpr Level kLevels[DIFFICULTIES] = {
+    {3, 5, 1, 0.6f, 1.4f, 50.0f, 0.20f, -0.20f, 0.06f, 0.08f, 0.25f, 0.7f},   // easy: fewer, slower, worse gunners, three ships each in reserve
+    {2, 3, 1, 1.0f, 1.0f, 35.0f, 0.35f, 0.0f, 0.0f, 0.15f, 0.35f, 1.0f},      // normal
+    {1, 2, 1, 1.35f, 0.8f, 25.0f, 0.45f, 0.15f, 0.0f, 0.22f, 0.45f, 1.2f},    // hard: one ship each in reserve, more and bigger pirates
+    {0, 0, 0, 1.7f, 0.65f, 15.0f, 0.55f, 0.30f, 0.0f, 0.35f, 0.55f, 1.4f},    // deadly: no reserve at all, sunk is out
+};
+inline const char* const kDifficultyNames[DIFFICULTIES] = {"Easy", "Normal", "Hard", "Deadly"};
 }  // namespace voyage
+// Sea monsters (the voyage; not every one meets them). The kraken rises under a convoy ship, wraps it in its arms
+// alongside and drags it down, smashing at the deck, until enough shot drives it off. The megalodon circles a ship,
+// its fin cutting the water, then charges and bites, dives, and comes round again.
+enum MonsterType : uint8_t { MON_KRAKEN = 0, MON_MEGALODON = 1, MON_TYPES };
+enum MonsterState : uint8_t {
+    MS_STALK = 0,   // deep, closing on its prey (kraken: under it; megalodon: circling it, fin out)
+    MS_STRIKE = 1,  // kraken: rising, arms coming up round the hull; megalodon: the charge
+    MS_HOLD = 2,    // kraken: holding its prey; megalodon: diving away after a bite
+    MS_GONE = 3,    // sinking back into the deep (driven off, or done)
+    MS_DEAD = 4,    // slain: floats a while, then sinks
+};
+enum MonsterEvent : uint8_t {  // EventType::Monster flags; b = the MonsterType, a = the ship (NO_SHIP: none)
+    MEV_SIGHTED = 1,  // closing on ship a
+    MEV_RISE = 2,     // kraken: broke the surface round ship a
+    MEV_STRIKE = 3,   // kraken: an arm smashed down on a / megalodon: bit a (value = damage)
+    MEV_HIT = 4,      // a's ball hit it (value = damage)
+    MEV_SLAIN = 5,    // a sank it
+    MEV_GONE = 6,     // dived and left
+};
+namespace monster {
+constexpr float krakenHp = 170.0f, krakenHpPerCaptain = 55.0f;
+constexpr float krakenGrip = 0.025f;     // of her hull a second it crushes out of the ship it holds (any ship: ~25 s to save her)
+constexpr float krakenSlam = 0.07f;      // of her hull: an arm smashing down on the deck
+constexpr float krakenSlamEvery = 4.5f;  // s
+constexpr float krakenHold = 55.0f;      // s it holds on at most before it lets go
+constexpr float krakenSize = 1.8f;       // how big it's drawn (1: a mantle 17 m tall)
+constexpr float krakenBerth = 15.0f;     // m beyond her side its body lies
+constexpr float krakenReach = 17.0f;     // m: the radius its body can be hit in
+constexpr float sharkHp = 110.0f, sharkHpPerCaptain = 35.0f;
+constexpr float sharkLength = 24.0f;     // m
+constexpr float sharkBite = 6.0f, sharkBiteHull = 0.12f;  // a bite: this, and this much of her hull more
+constexpr float sharkCircle = 75.0f;     // m round its prey
+constexpr float sharkSpeed = 10.0f, sharkCharge = 21.0f;  // m/s
+constexpr int sharkBites = 6;            // then it's had its fill
+}  // namespace monster
+struct Monster {
+    bool active = false;
+    uint8_t type = MON_KRAKEN, state = MS_STALK;
+    Vector3 pos{};           // kraken: its body; megalodon: its middle (y: the sea surface there less `depth`)
+    float heading = 0.0f;    // rad, the way it faces (atan2(x, z))
+    float speed = 0.0f;
+    float depth = 30.0f;     // m below the surface (kraken: its body's top; megalodon: its back)
+    float hp = 1.0f, maxHp = 1.0f;
+    float t = 0.0f;          // s in this state
+    float life = 0.0f;       // s since it turned up
+    float timer = 0.0f;      // kraken: to the next slam; megalodon: to the charge
+    int16_t target = -1;     // the ship it's after
+    uint8_t side = 0;        // kraken: alongside its prey to port (0) or starboard (1)
+    uint8_t strikes = 0;     // slams / bites so far
+    uint8_t victims = 0;     // kraken: ships it has dragged under
+    float circle = 0.0f;     // megalodon: where round its prey it is (rad)
+    float dir = 1.0f;        // megalodon: which way round
+};
 struct Harbour {
     float x, z;  // where ships tie up (the pier runs from here to the island behind it)
     float ang;   // the way out to the pier and the island behind it (on the Isles: the bearing from the arena centre)
@@ -432,6 +503,7 @@ struct Ship {
     std::vector<PendingShot> pending;
     // bot brain
     float botTimer = 0.0f;
+    float held = 0.0f;  // a kraken's grip on her, 0..1 (set every tick; the client's prediction gets it from the snapshot)
     int botSide = 0;
 };
 
@@ -465,6 +537,7 @@ enum class EventType : uint8_t {
     OrderGiven = 22, // a = ship, b = Order
     RaceGate = 23,   // a = ship, b = gates now behind it
     RaceFinish = 24, // a = ship, b = place, value = time (s)
+    Monster = 25,    // flags = MonsterEvent, a = ship (or NO_SHIP), b = MonsterType, value = damage
 };
 constexpr uint8_t EF_CRIPPLE = 64;  // (Kill in a race: crippled, not sunk; shares the bit with EF_DENY, which only chests use)
 enum EventFlags : uint8_t { EF_PLUNGING = 1, EF_AIRSHOT = 2, EF_CRUSH = 4, EF_SKIP = 8, EF_CLEAN = 16, EF_ROCK = 32, EF_DENY = 64, EF_RAKE = 128 };  // BigAir: b = spin in half turns, EF_CLEAN = landed facing the way it travels
@@ -556,6 +629,10 @@ public:
     float voyageBest = 0.0f;    // furthest any convoy ship has got along the route (m)
     float havenS = 0.0f;        // how far along the route the haven lies
     int voyageWinner = -1;      // (for EndRound) 0 the convoy made it, 1 the pirates took it
+    Monster monsters[MON_TYPES];         // the voyage's sea monsters (one of each at most)
+    float monsterAt[MON_TYPES] = {-1, -1};  // how far along the route each turns up (-1: not this voyage)
+    bool MonsterShootable(const Monster& m) const;  // near enough the surface for shot to reach it
+    Vector3 MonsterAimPoint(const Monster& m) const;
     bool RaceHeld() const { return mode == MODE_RACE && matchState == 0 && raceClock < tune::raceCountdown; }
     float DashCooldown() const { return mode == MODE_RACE ? tune::raceDashCooldown : tune::dashCooldown; }
     float HookCooldown() const { return mode == MODE_RACE ? tune::raceHookCooldown : tune::hookCooldown; }
@@ -566,6 +643,9 @@ public:
     bool skills = false;             // host: dash and grappling hook
     bool friendlyFire = true;        // host: balls hurt your own side too (bots hold fire with a friend in the way either way)
     bool realistic = false;          // host: real ship handling (speeds, turning, no jumps); the wind still blows where it likes
+    uint8_t difficulty = voyage::NORMAL;  // host: the voyage's (voyage::kLevels)
+    const voyage::Level& Diff() const { return voyage::kLevels[difficulty < voyage::DIFFICULTIES ? difficulty : voyage::NORMAL]; }
+    int StartReserve(int captains) const { return Diff().reservePer * captains > Diff().reserveMin ? Diff().reservePer * captains : Diff().reserveMin; }
     bool Real() const { return realistic; }  // (any mode, any arena, skills or not: the host's call)
     void UpdateHooks(float dt);
     bool predicting = false;
@@ -617,6 +697,10 @@ private:
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
     void SpawnRaider(Vector2 at, float heading, int cls);
+    void RollMonsters();
+    void UpdateMonsters(float dt);
+    void MonsterDamage(Ship& v, float amount, int type);
+    bool BallHitsMonster(const Ball& b, Vector3 prev, int& which, Vector3& at);
     bool PlaceInConvoy(Ship& s);  // voyage respawn: astern of the convoy ship furthest along (false: none afloat)
     void PlaceInHarbour(Ship& s, int h, int slot);
     void PlaceOnGrid(Ship& s);

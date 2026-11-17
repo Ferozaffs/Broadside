@@ -24,6 +24,8 @@ enum Id {
     Sink,        // a ship going down
     Confirm,     // your shot landed (a knock and a bell tick)
     Step,        // a boot on deck planking (crew)
+    Roar,        // the kraken: a long, deep, wet growl
+    Bite,        // the megalodon's jaws in a hull: a thump and splintering timber
     Count
 };
 

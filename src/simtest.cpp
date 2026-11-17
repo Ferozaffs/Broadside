@@ -249,6 +249,8 @@ static int VoyageTest() {
     double built = GetTimeNow() - t0;
     g.realistic = getenv("BS_REAL") != nullptr;
     g.skills = getenv("BS_SKILLS") != nullptr;
+    if (const char* e = getenv("BS_DIFF")) g.difficulty = (uint8_t)atoi(e);  // 0 easy .. 3 deadly
+    printf("voyage difficulty: %s\n", voyage::kDifficultyNames[g.difficulty]);
     int islands = 0, stacks = 0;
     for (const Rock& k : g.rocks) (k.stack ? stacks : islands)++;
     printf("voyage seed %u: arena %d, %d islands + %d stacks, harbours %zu (start %.0f %.0f, end %.0f %.0f, haven %.0f %.0f at s %.0f), route %.0f m, built in %.0f ms\n",
@@ -268,6 +270,7 @@ static int VoyageTest() {
         return 0;
     }
     std::vector<Vector2> trail;
+    int monsterHits[2] = {0, 0};
     int rockPirate = 0, rockConvoy = 0, convoyLost = 0, piratesSunk = 0, spawned = 0, rockHits = 0, hardRock = 0, hits = 0, friendly = 0, maxPirates = 0;
     double sum = 0, worst = 0;
     int ticks = 0, result = -1;
@@ -287,8 +290,17 @@ static int VoyageTest() {
                 else if (g.ships[e.b].leader < 0) {
                     convoyLost++;
                     printf("   t=%4.0f %s sunk at s %.0f by %s (reserve now %d)\n", g.time, g.ships[e.b].name.c_str(), g.RouteS(e.pos.x, e.pos.z),
-                           e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "the rocks", g.teamScore[0]);
+                           e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : e.a == KILLER_MONSTER + MON_KRAKEN ? "THE KRAKEN"
+                                                 : e.a == KILLER_MONSTER + MON_MEGALODON ? "THE MEGALODON" : "the rocks", g.teamScore[0]);
                 }
+            }
+            if (e.type == EventType::Monster) {  // the sea monsters: everything but the hits, which are counted
+                static const char* kWhat[] = {"", "closing on", "RISES under", "strikes", "hit", "SLAIN by", "dives away from"};
+                const Monster& m = g.monsters[e.b < MON_TYPES ? e.b : 0];
+                if (e.flags == MEV_HIT) monsterHits[e.b & 1]++;
+                else
+                    printf("   t=%4.0f %s %s %s (hp %.0f/%.0f, s %.0f, %.0f)\n", g.time, e.b == MON_KRAKEN ? "KRAKEN" : "MEGALODON", kWhat[e.flags % 7],
+                           e.a < g.ShipCount() ? g.ships[e.a].name.c_str() : "-", m.hp, m.maxHp, g.RouteS(e.pos.x, e.pos.z), e.value);
             }
             if (e.type == EventType::Hit) {
                 hits++;
@@ -326,6 +338,7 @@ static int VoyageTest() {
     printf("voyage %s after %.0f s: convoy sunk %d times, %d pirates turned up (most at once %d), %d sunk, %d hits (%d on friends), rock hits %d (%d hard; %d pirate, %d convoy), tick avg %.2f ms worst %.2f ms\n",
            result == 0 ? "MADE HARBOUR" : result == 1 ? "LOST" : "UNFINISHED", result >= 0 ? endT : (float)g.time, convoyLost, spawned, maxPirates,
            piratesSunk, hits, friendly, rockHits, hardRock, rockPirate, rockConvoy, sum / ticks * 1000.0, worst * 1000.0);
+    printf("   monsters: %d hits on the kraken, %d on the megalodon\n", monsterHits[0], monsterHits[1]);
     if (const char* path = getenv("BS_VOYMAP")) {  // a chart: land, the lane, the harbours, where the ships went
         const float px = 10.0f, X0 = -voyage::passageA - 600.0f, Z0 = -voyage::passageB - 600.0f;
         const int W = (int)(2.0f * (voyage::passageA + 600.0f) / px), H = (int)(2.0f * (voyage::passageB + 600.0f) / px);

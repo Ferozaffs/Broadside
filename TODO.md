@@ -449,6 +449,24 @@ Requested by the user on 2026-11-11/12 (work through these in order, autonomousl
 - [x] Tests: BS_VOYAGETEST=1 (BS_CONVOY, BS_SEED, BS_REAL, BS_FLEETS, BS_SKILLS, BS_VOYMIN, BS_VOYMAP=chart.ppm,
   BS_ROCKLOG, BS_VOYNOSAIL), BS_VOYGRACE=s brings the first pirates sooner, BS_PIRATES=n caps them. Results: 4 bot
   captains make harbour in 6-11 min losing 2-10 ships; one alone 9-17 min; Realistic 27 min; tick ~2 ms.
+- [x] Difficulty (host, menu row DIFFICULTY in place of the one-option sea; `--difficulty easy|normal|hard|deadly`;
+  World::difficulty, voyage::kLevels; in MSG_WELCOME). Reserve per captain 3/2/1/0 (at least 5/3/2/0; Deadly: none,
+  joiners bring none), pirates x0.6/1/1.35/1.7, band gaps x1.4/1/0.8/0.65, first band after 50/35/25/15 s, catch-up
+  0.2/0.35/0.45/0.55, class mix shifted -0.2/0/+0.15/+0.3, Easy pirates' aim wanders 0.06 rad. Bot runs (one each):
+  2 captains made it / made it / made it / LOST at 200 s; 4 captains made it (2 lost) / (3) / (4) / LOST at 471 s.
+- [x] Sea monsters (2026-11-17, user: "add kraken should be fearsome but very rare not all games should spawn it.
+  Megladon shark would also be nice"). World::monsters / Monster (sim.h), UpdateMonsters (sim.cpp), rolled when the
+  convoy sails (Level::kraken / megalodon chances, where along the route), NetMonster in the snapshot, EventType::Monster
+  (MEV_*), Kill a = KILLER_MONSTER + type. Kraken: stalks under its prey, rises alongside (2.5 s), holds (Ship::held:
+  dragged low, speed bled away, also in the client's prediction), 2.5% of her hull a second + a 7% slam every ~4.5 s
+  (any class lasts ~25 s), hp 170 + 55 per captain (x Level::monster 0.7/1/1.2/1.4); lets go after 55 s; another
+  victim only if still hungry (half the time, above half health, at most 2, 3 on Hard+). Megalodon: circles at 75 m,
+  fin up, charges at 21 m/s, bite 6 + 12% of her hull, dives 5 s, again; 6 bites or 220 s. Balls hit them (sphere /
+  capsule; the kraken's 17 m round a body 15 m off her side, drawn 1.8x: monster::krakenSize, user: "Kraken looks too
+  small"); convoy bots circle in at a cable to shoot (aiming at the kraken's far side, away from her). Art in
+  monsters.cpp (procedural: mantle, eyes, arms as per-frame tubes wrapping the hull, a lofted swimming shark with fins,
+  gaping jaw, teeth); sfx Roar and Bite synthesised. Tests: BS_KRAKEN=m / BS_MEGALODON=m force one at m metres,
+  BS_NOMONSTERS, BS_MONPOSE (harmless, holds you forever: screenshots), BS_MONCAM="dist height deg" (a camera on it).
 - Protocol 22.
 - Open: no compass or chart in the HUD (the lane and the harbour marker do the job); the bot convoy fights only
   what comes within 300 m.

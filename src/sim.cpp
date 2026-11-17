@@ -1261,7 +1261,8 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     voyagePirates = 0;
     voyageBest = 0.0f;
     voyageWinner = -1;
-    if (mode == MODE_VOYAGE) teamScore[0] = voyage::reserve;
+    for (Monster& m : monsters) m = Monster{};  // (the next voyage rolls its own)
+    if (mode == MODE_VOYAGE) teamScore[0] = StartReserve(1);
     BuildArena();
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
@@ -1352,7 +1353,7 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         }
         if (mode == MODE_VOYAGE) {
             ships[i].team = 0;  // (the convoy; the pirates come later, see UpdateVoyage)
-            if (voyageClock >= 5.0f && !bot) teamScore[0]++;  // a captain joining under way brings a ship
+            if (voyageClock >= 5.0f && !bot) teamScore[0] += Diff().joiner;  // a captain joining under way brings a ship (not on Deadly)
         }
         ships[i].maxHp = MaxHpOf(ships[i]);
         Respawn(ships[i]);
@@ -1704,6 +1705,13 @@ void World::StepShip(Ship& s, float dt) {
         float r = sqrtf(s.pos.x * s.pos.x + s.pos.z * s.pos.z);
         float k = Clamp((maelstrom::eye * 1.4f - r) / (maelstrom::eye * 0.8f), 0.0f, 1.0f);
         targetBuoy *= 1.0f - 0.7f * k;
+    }
+    if (s.held > 0.0f) {  // in a kraken's arms: dragged low in the water, and going nowhere
+        targetBuoy *= 1.0f - 0.3f * s.held;
+        float k = fminf(1.0f, dt * 2.5f * s.held);
+        s.vel.x -= s.vel.x * k;
+        s.vel.z -= s.vel.z * k;
+        s.angVel.y -= s.angVel.y * k;
     }
     s.buoyMul += (targetBuoy - s.buoyMul) * fminf(1.0f, dt * 1.5f);
 
@@ -2239,6 +2247,32 @@ void World::UpdateBalls(float dt) {
             }
             dead = true;
         }
+        int mk;
+        Vector3 mAt;
+        if (!dead && mode == MODE_VOYAGE && BallHitsMonster(b, prev, mk, mAt)) {  // a sea monster
+            Monster& m = monsters[mk];
+            float speedF = Clamp(Vector3Length(b.vel) / 95.0f, 0.2f, 1.3f);
+            float dmg = tune::ballDamage * speedF * b.dmgMul * (b.inWater ? 0.6f : 1.0f);
+            m.hp -= dmg;
+            GameEvent e{EventType::Monster};
+            e.flags = MEV_HIT;
+            e.a = b.owner;
+            e.b = m.type;
+            e.pos = mAt;
+            e.dir = Vector3Normalize(b.vel);
+            e.value = dmg;
+            events.push_back(e);
+            if (b.owner < ShipCount() && ships[b.owner].active) ships[CaptainOf(b.owner)].statDamage += dmg;
+            if (m.hp <= 0.0f && m.state != MS_DEAD) {
+                m.hp = 0.0f;
+                m.state = MS_DEAD;
+                m.t = 0.0f;
+                e.flags = MEV_SLAIN;
+                events.push_back(e);
+                if (b.owner < ShipCount() && ships[b.owner].active) ships[CaptainOf(b.owner)].kills++;
+            }
+            dead = true;
+        }
         if (dead) {
             balls[i] = balls.back();
             balls.pop_back();
@@ -2408,6 +2442,19 @@ void World::BotThink(Ship& s, float dt) {
         if (berthing && flat(goal, s.pos) < 25.0f) in.sail = 0.0f;  // made it: heave to
         fight = target && best < 300.0f && !last;
         if (fight) haveGoal = false;
+        for (const Monster& m : monsters) {  // a sea monster at one of ours: round it at a cable or so, guns bearing
+            if (!MonsterShootable(m) || m.state == MS_DEAD || last || (m.type == MON_KRAKEN && m.target == s.id)) continue;
+            float dm = flat(m.pos, s.pos);
+            if (dm > 750.0f || (target && best < 150.0f)) continue;
+            Vector2 away = Vector2Normalize({s.pos.x - m.pos.x, s.pos.z - m.pos.z});
+            float r = m.type == MON_KRAKEN ? 85.0f : 110.0f, a = atan2f(away.x, away.y) + 0.55f;
+            goal = {m.pos.x + sinf(a) * r, 0.0f, m.pos.z + cosf(a) * r};
+            if (RocksHeight(rocks, goal.x, goal.z) > -8.0f) goal = m.pos;
+            haveGoal = true;
+            fight = false;
+            in.sail = 1.0f;
+            break;
+        }
     } else if (s.pirate) {  // carrying the treasure: run for the cove, shooting on the way
         if (!harbours.empty()) {
             goal = {harbours[cove].x, 0, harbours[cove].z};
@@ -2517,13 +2564,34 @@ void World::BotThink(Ship& s, float dt) {
     }
     // shoot whatever enemy is in reach, whatever we're doing
     const ShipClass& MC = ClassOf(s.cls);
-    if (target && best < (MC.muzzleSpeed < 90.0f ? 460.0f : 520.0f)) {
+    Vector3 tPos{}, tVel{};
+    float tDist = 1e9f;
+    if (target) { tPos = target->pos; tVel = target->vel; tDist = best; }
+    if (mode == MODE_VOYAGE && !s.raider)  // the convoy shoots the monsters too (the closer of it and the nearest pirate)
+        for (const Monster& m : monsters) {
+            if (!MonsterShootable(m) || m.state == MS_DEAD) continue;
+            Vector3 p = MonsterAimPoint(m);
+            float d = Vector3Distance(p, s.pos);
+            if (d < tDist) {
+                tDist = d;
+                tPos = p;
+                tVel = m.type == MON_KRAKEN ? (m.target >= 0 && m.target < ShipCount() ? ships[m.target].vel : Vector3{0, 0, 0})
+                                            : Vector3{sinf(m.heading) * m.speed, 0.0f, cosf(m.heading) * m.speed};
+            }
+        }
+    if (tDist < (MC.muzzleSpeed < 90.0f ? 460.0f : 520.0f)) {
+        const float best = tDist;
         float flight = best / MC.muzzleSpeed;
-        Vector3 lead = Vector3Add(target->pos, Vector3Scale(target->vel, flight));
+        Vector3 lead = Vector3Add(tPos, Vector3Scale(tVel, flight));
         Vector3 d = Vector3Subtract(lead, s.pos);
         float range = sqrtf(d.x * d.x + d.z * d.z);
         float sn = Clamp(tune::gravity * range / (MC.muzzleSpeed * MC.muzzleSpeed), -1.0f, 1.0f);
         float elev = 0.5f * asinf(sn) + atan2f(d.y, range);
+        if (s.raider && Diff().aimErr > 0.0f) {  // (voyage, Easy: the pirates' gunners are no great shots; their aim wanders)
+            const float t = (float)time, yawErr = Diff().aimErr * sinf(t * 0.9f + s.id * 2.1f), c = cosf(yawErr), sn2 = sinf(yawErr);
+            d = {d.x * c + d.z * sn2, d.y, -d.x * sn2 + d.z * c};
+            elev += 0.6f * Diff().aimErr * sinf(t * 1.3f + s.id * 0.7f);
+        }
         in.aim = AimForElevation({d.x, d.z}, elev);
         int side = GunSide(s.cls, s.rot, in.aim);
         Vector3 ab = Vector3RotateByQuaternion(in.aim, QuaternionInvert(s.rot));
@@ -3131,7 +3199,8 @@ void World::StartRound() {
         voyagePirates = 0;
         voyageBest = 0.0f;
         voyageWinner = -1;
-        teamScore[0] = voyage::reserve;
+        for (Monster& m : monsters) m = Monster{};  // (the next voyage rolls its own)
+        teamScore[0] = StartReserve(1);
         for (Crate& c : crates) {
             c.active = false;
             c.timer = 0.5f + 0.4f * c.id;
@@ -3401,6 +3470,7 @@ void World::Step() {
     if (mode == MODE_PIRATE && matchState == 0) UpdateChests(dt);
     if (mode == MODE_RACE && matchState == 0) UpdateRace(dt);
     if (mode == MODE_VOYAGE && matchState == 0) UpdateVoyage(dt);
+    if (mode == MODE_VOYAGE && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
 }
 
@@ -3409,7 +3479,7 @@ void World::Step() {
 // ---- the voyage --------------------------------------------------------------------
 static const char* kPirateNames[] = {"Cpt. Bones", "Cpt. Scurvy", "Cpt. Gallows", "Cpt. Grim", "Cpt. Mako", "Cpt. Rook",
                                      "Cpt. Hatchet", "Cpt. Bilge", "Cpt. Cutlass", "Cpt. Crow", "Cpt. Nails", "Cpt. Brine",
-                                     "Cpt. Kraken", "Cpt. Rattle", "Cpt. Shank", "Cpt. Gull"};
+                                     "Cpt. Squall", "Cpt. Rattle", "Cpt. Shank", "Cpt. Gull"};
 
 void World::PlaceInHarbour(Ship& s, int h, int slot) {
     if (h < 0 || h >= (int)harbours.size()) h = 0;
@@ -3501,6 +3571,7 @@ void World::UpdateVoyage(float dt) {
         voyageWait += dt;
         if (!aboard && voyageWait < 20.0f) return;
     }
+    if (voyageClock <= 0.0f) RollMonsters();
     voyageClock += dt;
     std::vector<const Ship*> afloat;
     int convoy = 0;
@@ -3516,7 +3587,7 @@ void World::UpdateVoyage(float dt) {
         }
     }
     if (!convoy) return;
-    if (voyageClock < 5.0f) teamScore[0] = std::max(voyage::reserve, 2 * convoy);  // (two per captain who sails from the start)
+    if (voyageClock < 5.0f) teamScore[0] = StartReserve(convoy);  // (so many per captain who sails from the start)
     // made it: every (human) convoy ship afloat is in the far harbour, and none is waiting to rejoin
     const Harbour& dest = harbours[voyage::endHarbour];
     bool home = !afloat.empty();
@@ -3542,7 +3613,7 @@ void World::UpdateVoyage(float dt) {
         if (!p.alive) continue;
         float nd = 1e9f;
         for (const Ship* c : afloat) nd = fminf(nd, Vector2Distance({c->pos.x, c->pos.z}, {p.pos.x, p.pos.z}));
-        p.catchUp = Clamp((nd - 150.0f) / 400.0f, 0.0f, 1.0f) * voyage::pirateCatchUp;  // (gaining right up to the last cable or so)
+        p.catchUp = Clamp((nd - 150.0f) / 400.0f, 0.0f, 1.0f) * Diff().catchUp;  // (gaining right up to the last cable or so)
         p.raiderIdle = nd > voyage::despawn ? p.raiderIdle + dt : 0.0f;
         if (p.raiderIdle > 15.0f) {
             RemoveShip(p.id);
@@ -3551,7 +3622,7 @@ void World::UpdateVoyage(float dt) {
         }
         (void)gone;
     }
-    static const float grace = getenv("BS_VOYGRACE") ? (float)atof(getenv("BS_VOYGRACE")) : voyage::graceTime;  // (tests)
+    const float grace = getenv("BS_VOYGRACE") ? (float)atof(getenv("BS_VOYGRACE")) : Diff().grace;  // (tests)
     if (afloat.empty() || voyageClock < grace) return;
     voyageSpawn -= dt;
     if (gone) voyageSpawn = fmaxf(voyageSpawn, 0.5f);  // (a freed slot isn't handed straight on: the clients must hear it left)
@@ -3559,7 +3630,7 @@ void World::UpdateVoyage(float dt) {
     const float prog = Clamp(voyageBest / fmaxf(RouteLength(), 1.0f), 0.0f, 1.0f);
     int escorts = 0;
     for (const Ship& e : ships) escorts += e.active && e.alive && !e.stowed && e.leader >= 0 && e.team == 0;
-    int want = std::min(40, (int)ceilf((1.0f + 1.0f * convoy + 0.3f * escorts) * (0.6f + 0.8f * prog)));
+    int want = std::min(40, (int)ceilf((1.0f + 1.0f * convoy + 0.3f * escorts) * (0.6f + 0.8f * prog) * Diff().pirates));
     if (const char* e = getenv("BS_PIRATES")) want = std::min(want, atoi(e));  // (tests)
     if (pirates >= want) {
         voyageSpawn = 3.0f;
@@ -3593,12 +3664,13 @@ void World::UpdateVoyage(float dt) {
             Vector2 q = {at.x + side.x * off, at.y + side.y * off};
             if (RocksHeight(rocks, q.x, q.y) > -20.0f) q = at;
             float v = RandF();
-            int cls = v < 0.45f - 0.25f * prog ? SC_CUTTER : v < 0.92f - 0.25f * prog ? SC_FRIGATE : SC_LINE;
+            const float big = Clamp(prog + Diff().bigger, -0.4f, 1.4f);  // (further on, or a harder voyage: bigger ships)
+            int cls = v < 0.45f - 0.25f * big ? SC_CUTTER : v < 0.92f - 0.25f * big ? SC_FRIGATE : SC_LINE;
             SpawnRaider(q, toPrey, cls);
         }
         break;
     }
-    voyageSpawn = (9.0f + RandF() * 7.0f) * (1.0f - 0.4f * prog);
+    voyageSpawn = (9.0f + RandF() * 7.0f) * (1.0f - 0.4f * prog) * Diff().gap;
 }
 
 void World::PlaceOnGrid(Ship& s) {
@@ -3663,4 +3735,348 @@ void World::UpdateRace(float dt) {
         s.raceSide = along;
     }
     if (rounds && captains > 0 && home == captains) EndRound(true);
+}
+
+// ---- sea monsters (the voyage) -------------------------------------------------------------
+// Whether this voyage meets the kraken and the megalodon, and where (a fraction of the way along). Rolled as the
+// convoy sails, by the host's difficulty; BS_KRAKEN=m / BS_MEGALODON=m (tests) bring one at m metres for certain.
+void World::RollMonsters() {
+    for (Monster& m : monsters) m = Monster{};
+    const float L = fmaxf(RouteLength(), 1.0f);
+    monsterAt[MON_KRAKEN] = RandF() < Diff().kraken ? 0.35f + 0.5f * RandF() : -1.0f;
+    monsterAt[MON_MEGALODON] = RandF() < Diff().megalodon ? 0.12f + 0.6f * RandF() : -1.0f;
+    if (const char* e = getenv("BS_KRAKEN")) monsterAt[MON_KRAKEN] = (float)atof(e) / L;
+    if (const char* e = getenv("BS_MEGALODON")) monsterAt[MON_MEGALODON] = (float)atof(e) / L;
+    if (getenv("BS_NOMONSTERS")) monsterAt[MON_KRAKEN] = monsterAt[MON_MEGALODON] = -1.0f;
+}
+
+bool World::MonsterShootable(const Monster& m) const {
+    if (!m.active) return false;
+    if (m.type == MON_KRAKEN) return (m.state == MS_STRIKE && m.t > 1.0f) || m.state == MS_HOLD || ((m.state == MS_GONE || m.state == MS_DEAD) && m.depth < 6.0f);
+    return m.depth < 1.8f && m.state != MS_DEAD;
+}
+
+Vector3 World::MonsterAimPoint(const Monster& m) const {
+    if (m.type != MON_KRAKEN) return m.pos;
+    Vector3 p = Vector3Add(m.pos, {0.0f, 6.0f, 0.0f});
+    if (m.target >= 0 && m.target < ShipCount() && ships[m.target].active) {  // its far side, away from the ship it holds
+        Vector2 away = Vector2Normalize({m.pos.x - ships[m.target].pos.x, m.pos.z - ships[m.target].pos.z});
+        p.x += away.x * 8.0f;
+        p.z += away.y * 8.0f;
+    }
+    return p;
+}
+
+// Monster damage: whatever pirate shot her last, it's the monster that sank her
+void World::MonsterDamage(Ship& v, float amount, int type) {
+    if (!v.alive || getenv("BS_MONPOSE")) return;  // (BS_MONPOSE: screenshots, a monster that never lets go and does no harm)
+    v.lastAttacker = -1;
+    Damage(v, amount, -1);
+    if (!v.alive)
+        for (auto it = events.rbegin(); it != events.rend(); ++it)
+            if (it->type == EventType::Kill && it->b == v.id) { it->a = (uint16_t)(KILLER_MONSTER + type); break; }
+}
+
+static float SegSegDist(Vector3 p1, Vector3 q1, Vector3 p2, Vector3 q2, float& sOut) {  // closest approach of two segments
+    Vector3 d1 = Vector3Subtract(q1, p1), d2 = Vector3Subtract(q2, p2), r = Vector3Subtract(p1, p2);
+    float a = Vector3DotProduct(d1, d1), e = Vector3DotProduct(d2, d2), f = Vector3DotProduct(d2, r);
+    float s = 0.0f, t = 0.0f;
+    if (a < 1e-6f && e < 1e-6f) { sOut = 0.0f; return Vector3Distance(p1, p2); }
+    if (a < 1e-6f) t = Clamp(f / e, 0.0f, 1.0f);
+    else {
+        float c = Vector3DotProduct(d1, r);
+        if (e < 1e-6f) s = Clamp(-c / a, 0.0f, 1.0f);
+        else {
+            float b = Vector3DotProduct(d1, d2), den = a * e - b * b;
+            s = den > 1e-6f ? Clamp((b * f - c * e) / den, 0.0f, 1.0f) : 0.0f;
+            t = (b * s + f) / e;
+            if (t < 0.0f) { t = 0.0f; s = Clamp(-c / a, 0.0f, 1.0f); }
+            else if (t > 1.0f) { t = 1.0f; s = Clamp((b - c) / a, 0.0f, 1.0f); }
+        }
+    }
+    sOut = s;
+    return Vector3Distance(Vector3Add(p1, Vector3Scale(d1, s)), Vector3Add(p2, Vector3Scale(d2, t)));
+}
+
+bool World::BallHitsMonster(const Ball& b, Vector3 prev, int& which, Vector3& at) {
+    for (int k = 0; k < MON_TYPES; ++k) {
+        const Monster& m = monsters[k];
+        if (!MonsterShootable(m)) continue;
+        float s;
+        if (m.type == MON_KRAKEN) {
+            Vector3 c = MonsterAimPoint(m);
+            if (SegSegDist(prev, b.pos, c, c, s) > monster::krakenReach) continue;
+        } else {
+            Vector3 f = {sinf(m.heading) * monster::sharkLength * 0.45f, 0.0f, cosf(m.heading) * monster::sharkLength * 0.45f};
+            if (SegSegDist(prev, b.pos, Vector3Subtract(m.pos, f), Vector3Add(m.pos, f), s) > 3.2f) continue;
+        }
+        which = k;
+        at = Vector3Lerp(prev, b.pos, s);
+        return true;
+    }
+    return false;
+}
+
+// a convoy captain afloat for a monster to go after (humans three times as likely), not `notId`, within `range` of `from`
+static Ship* PickPrey(std::deque<Ship>& ships, int notId, Vector3 from, float range, float r01) {
+    static const bool pose = getenv("BS_MONPOSE") != nullptr;
+    if (pose)
+        for (Ship& s : ships)
+            if (s.active && s.alive && !s.isBot && s.leader < 0) return &s;
+    float total = 0.0f;
+    for (Ship& s : ships)
+        if (s.active && s.alive && !s.stowed && s.leader < 0 && !s.raider && s.id != notId && Vector3Distance(s.pos, from) < range) total += s.isBot ? 1.0f : 3.0f;
+    if (total <= 0.0f) return nullptr;
+    float pick = r01 * total;
+    for (Ship& s : ships)
+        if (s.active && s.alive && !s.stowed && s.leader < 0 && !s.raider && s.id != notId && Vector3Distance(s.pos, from) < range) {
+            pick -= s.isBot ? 1.0f : 3.0f;
+            if (pick <= 0.0f) return &s;
+        }
+    return nullptr;
+}
+
+void World::UpdateMonsters(float dt) {
+    for (Ship& s : ships) s.held = 0.0f;
+    auto event = [&](const Monster& m, uint8_t what, int ship, Vector3 pos, float value) {
+        GameEvent e{EventType::Monster};
+        e.flags = what;
+        e.a = (uint16_t)(ship >= 0 ? ship : NO_SHIP);
+        e.b = m.type;
+        e.pos = pos;
+        e.value = value;
+        events.push_back(e);
+    };
+    auto inPort = [&](Vector3 p) {  // the forts: no monster takes a ship in a harbour
+        for (const Harbour& h : harbours)
+            if (Vector2Distance({h.x, h.z}, {p.x, p.z}) < tune::harbourRadius + 150.0f) return true;
+        return false;
+    };
+    int captains = 0;
+    for (const Ship& s : ships) captains += s.active && s.leader < 0 && !s.raider;
+    const float L = RouteLength(), lvl = Diff().monster;
+    for (int k = 0; k < MON_TYPES; ++k) {  // turning up
+        Monster& m = monsters[k];
+        if (m.active || monsterAt[k] < 0.0f || voyageBest < monsterAt[k] * L) continue;
+        Ship* prey = PickPrey(ships, -1, {0, 0, 0}, 1e9f, RandF());
+        if (!prey || inPort(prey->pos)) continue;
+        monsterAt[k] = -1.0f;  // (once a voyage)
+        m = Monster{};
+        m.active = true;
+        m.type = (uint8_t)k;
+        m.target = (int16_t)prey->id;
+        Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, prey->rot);
+        if (k == MON_KRAKEN) {
+            m.maxHp = m.hp = (monster::krakenHp + monster::krakenHpPerCaptain * captains) * lvl;
+            m.side = RandF() < 0.5f ? 0 : 1;
+            m.depth = 32.0f;
+            m.pos = {prey->pos.x + f.x * 180.0f, 0.0f, prey->pos.z + f.z * 180.0f};
+        } else {
+            m.maxHp = m.hp = (monster::sharkHp + monster::sharkHpPerCaptain * captains) * lvl;
+            float a = RandF() * 2.0f * PI;
+            m.pos = {prey->pos.x + sinf(a) * 260.0f, 0.0f, prey->pos.z + cosf(a) * 260.0f};
+            if (RocksHeight(rocks, m.pos.x, m.pos.z) > -15.0f) m.pos = {prey->pos.x - f.x * 220.0f, 0.0f, prey->pos.z - f.z * 220.0f};
+            m.circle = atan2f(m.pos.x - prey->pos.x, m.pos.z - prey->pos.z);
+            m.dir = RandF() < 0.5f ? 1.0f : -1.0f;
+            m.depth = 5.0f;
+            m.timer = 9.0f + RandF() * 6.0f;
+            m.heading = m.circle + m.dir * PI * 0.5f;
+        }
+        m.pos.y = ocean.Height(m.pos.x, m.pos.z) - m.depth;
+        event(m, MEV_SIGHTED, prey->id, m.pos, 0.0f);
+    }
+    for (int k = 0; k < MON_TYPES; ++k) {
+        Monster& m = monsters[k];
+        if (!m.active) continue;
+        m.life += dt;
+        m.t += dt;
+        Ship* prey = m.target >= 0 && m.target < ShipCount() && ships[m.target].active && ships[m.target].alive && !ships[m.target].stowed ? &ships[m.target] : nullptr;
+        auto setState = [&](uint8_t st) { m.state = st; m.t = 0.0f; };
+        auto approach = [&](float& v, float to, float rate) { v += Clamp(to - v, -rate * dt, rate * dt); };
+        if (m.type == MON_KRAKEN) {
+            // where its body lies when it has her: alongside, abreast of her middle
+            auto berth = [&](const Ship& s) {
+                Vector3 port = Vector3RotateByQuaternion({1, 0, 0}, s.rot);
+                Vector2 ph = Vector2Normalize({port.x, port.z});
+                float off = (hull::maxHalfBeam * ClassOf(s.cls).scale + monster::krakenBerth) * (m.side == 0 ? 1.0f : -1.0f);
+                return Vector3{s.pos.x + ph.x * off, 0.0f, s.pos.z + ph.y * off};
+            };
+            switch (m.state) {
+                case MS_STALK: {
+                    if (!prey) {
+                        prey = PickPrey(ships, -1, m.pos, 900.0f, RandF());
+                        if (!prey) { setState(MS_GONE); event(m, MEV_GONE, -1, m.pos, 0.0f); break; }
+                        m.target = (int16_t)prey->id;
+                    }
+                    Vector3 to = berth(*prey);
+                    Vector2 d = {to.x - m.pos.x, to.z - m.pos.z};
+                    float dist = Vector2Length(d), sp = fmaxf(13.0f, Vector3Length(prey->vel) + 6.0f);
+                    if (dist > 0.01f) {
+                        float step = fminf(dist, sp * dt);
+                        m.pos.x += d.x / dist * step;
+                        m.pos.z += d.y / dist * step;
+                        m.heading = atan2f(d.x, d.y);
+                    }
+                    approach(m.depth, dist < 80.0f ? 27.0f : 34.0f, 4.0f);  // (deep: all of it out of sight)
+                    if (inPort(prey->pos)) {  // safe under the forts' guns: it gives up after a while
+                        if (m.t > 25.0f) { setState(MS_GONE); event(m, MEV_GONE, -1, m.pos, 0.0f); }
+                        break;
+                    }
+                    if (dist < 6.0f || (m.t > 35.0f && dist < 60.0f)) {
+                        setState(MS_STRIKE);
+                        event(m, MEV_RISE, prey->id, berth(*prey), 0.0f);
+                    }
+                    break;
+                }
+                case MS_STRIKE:
+                case MS_HOLD: {
+                    if (!prey) {  // she went down (or its hold broke): another, if it's still hungry
+                        if (m.target >= 0 && m.target < ShipCount() && !ships[m.target].alive) m.victims++;
+                        const bool hungry = m.victims < (lvl > 1.1f ? 3 : 2) && m.hp > 0.5f * m.maxHp && m.life < 160.0f && RandF() < 0.5f;
+                        Ship* next = hungry ? PickPrey(ships, m.target, m.pos, 650.0f, RandF()) : nullptr;
+                        if (next) {
+                            m.target = (int16_t)next->id;
+                            setState(MS_STALK);
+                            m.depth = 28.0f;
+                            event(m, MEV_SIGHTED, next->id, m.pos, 0.0f);
+                        } else {
+                            setState(MS_GONE);
+                            event(m, MEV_GONE, -1, m.pos, 0.0f);
+                        }
+                        break;
+                    }
+                    Vector3 to = berth(*prey);
+                    m.pos.x = to.x;
+                    m.pos.z = to.z;
+                    m.heading = atan2f(prey->pos.x - m.pos.x, prey->pos.z - m.pos.z);
+                    if (m.state == MS_STRIKE) {
+                        approach(m.depth, 0.0f, 12.0f);
+                        prey->held = fmaxf(prey->held, Clamp(m.t / 2.5f, 0.0f, 1.0f));
+                        if (m.t >= 2.5f) {
+                            setState(MS_HOLD);
+                            m.timer = 2.0f;
+                        }
+                        break;
+                    }
+                    m.depth = 0.0f;
+                    prey->held = 1.0f;
+                    MonsterDamage(*prey, prey->maxHp * monster::krakenGrip * lvl * dt, MON_KRAKEN);
+                    m.timer -= dt;
+                    if (m.timer <= 0.0f && prey->alive) {  // an arm comes down on her deck
+                        m.timer = monster::krakenSlamEvery * (0.75f + 0.5f * RandF());
+                        m.strikes++;
+                        float zz = (RandF() - 0.5f) * 20.0f * ClassOf(prey->cls).scale;
+                        Vector3 deck = HullToWorld(prey->pos, prey->rot, {m.side == 0 ? -2.0f : 2.0f, 4.0f, zz}, ClassOf(prey->cls).scale);
+                        ApplyImpulse(*prey, {0.0f, -tune::ballKnockback * 1.4f, 0.0f}, deck, {tune::hitPitch, 0.2f, 1.0f});
+                        event(m, MEV_STRIKE, prey->id, deck, prey->maxHp * monster::krakenSlam * lvl);
+                        MonsterDamage(*prey, prey->maxHp * monster::krakenSlam * lvl, MON_KRAKEN);
+                    }
+                    if (m.t > monster::krakenHold && !getenv("BS_MONPOSE")) {  // it has had enough of this one
+                        setState(MS_GONE);
+                        event(m, MEV_GONE, prey->id, m.pos, 0.0f);
+                    }
+                    break;
+                }
+                case MS_GONE:
+                    if (prey) prey->held = fmaxf(prey->held, 1.0f - m.t / 1.5f);
+                    m.depth += 5.0f * dt;
+                    if (m.depth > 40.0f) m.active = false;
+                    break;
+                case MS_DEAD:
+                    m.depth += (m.t < 4.0f ? 0.3f : 2.0f) * dt;
+                    if (m.depth > 30.0f) m.active = false;
+                    break;
+            }
+        } else {
+            // the megalodon: steer for `want`, at `sp`, turning at most `turn` rad/s; it shies off the shoals
+            auto swim = [&](Vector3 want, float sp, float turn) {
+                float h = atan2f(want.x - m.pos.x, want.z - m.pos.z);
+                float look = 26.0f;
+                if (RocksHeight(rocks, m.pos.x + sinf(m.heading) * look, m.pos.z + cosf(m.heading) * look) > -7.0f) {
+                    float l = RocksHeight(rocks, m.pos.x + sinf(m.heading + 0.7f) * look, m.pos.z + cosf(m.heading + 0.7f) * look);
+                    float r = RocksHeight(rocks, m.pos.x + sinf(m.heading - 0.7f) * look, m.pos.z + cosf(m.heading - 0.7f) * look);
+                    h = m.heading + (l < r ? 1.2f : -1.2f);
+                }
+                float dh = remainderf(h - m.heading, 2.0f * PI);
+                m.heading += Clamp(dh, -turn * dt, turn * dt);
+                approach(m.speed, sp, 6.0f);
+                m.pos.x += sinf(m.heading) * m.speed * dt;
+                m.pos.z += cosf(m.heading) * m.speed * dt;
+            };
+            switch (m.state) {
+                case MS_STALK: {
+                    if (!prey) {
+                        prey = PickPrey(ships, -1, m.pos, 1200.0f, RandF());
+                        if (!prey) { setState(MS_GONE); event(m, MEV_GONE, -1, m.pos, 0.0f); break; }
+                        m.target = (int16_t)prey->id;
+                    }
+                    float dist = Vector2Distance({prey->pos.x, prey->pos.z}, {m.pos.x, m.pos.z});
+                    float psp = Vector3Length(prey->vel);
+                    m.circle += m.dir * (fmaxf(psp, monster::sharkSpeed) / monster::sharkCircle) * dt;
+                    Vector3 want = {prey->pos.x + sinf(m.circle) * monster::sharkCircle, 0.0f, prey->pos.z + cosf(m.circle) * monster::sharkCircle};
+                    if (dist > 160.0f) want = Vector3Add(prey->pos, Vector3Scale(prey->vel, 2.0f));
+                    swim(want, dist > 160.0f ? fmaxf(18.0f, psp + 8.0f) : fmaxf(monster::sharkSpeed, psp + 8.0f), 1.0f);
+                    approach(m.depth, dist < 220.0f ? 0.5f : 4.0f, 1.5f);  // the fin comes up as it closes
+                    if (dist < 140.0f && !inPort(prey->pos)) m.timer -= dt;
+                    if (m.timer <= 0.0f) setState(MS_STRIKE);
+                    break;
+                }
+                case MS_STRIKE: {
+                    if (!prey) { setState(MS_HOLD); break; }
+                    Vector3 aim = Vector3Add(prey->pos, Vector3Scale(prey->vel, 0.5f));
+                    swim(aim, monster::sharkCharge + Vector3Length(prey->vel) * 0.6f, 1.1f);
+                    approach(m.depth, 0.9f, 2.0f);
+                    // the bite: its snout into her hull
+                    Vector3 snout = {m.pos.x + sinf(m.heading) * monster::sharkLength * 0.5f, ocean.Height(m.pos.x, m.pos.z) - 1.0f,
+                                     m.pos.z + cosf(m.heading) * monster::sharkLength * 0.5f};
+                    float S = ClassOf(prey->cls).scale;
+                    Vector3 hl = WorldToHull(prey->pos, prey->rot, snout, S);
+                    Vector3 lo = Vector3Subtract(hull::boxMin, {3.0f, 3.0f, 3.0f}), hi = Vector3Add(hull::boxMax, {3.0f, 0.0f, 3.0f});
+                    if (hl.x > lo.x && hl.x < hi.x && hl.y > lo.y && hl.y < hi.y && hl.z > lo.z && hl.z < hi.z) {
+                        float dmg = (monster::sharkBite + monster::sharkBiteHull * prey->maxHp) * lvl;
+                        Vector3 fwd = {sinf(m.heading), 0.0f, cosf(m.heading)};
+                        ApplyImpulse(*prey, Vector3Add(Vector3Scale(fwd, tune::ballKnockback * 0.8f), {0.0f, tune::ballKnockback * 0.9f, 0.0f}), snout,
+                                     {tune::hitPitch, tune::hitYaw, 1.4f});
+                        m.strikes++;
+                        event(m, MEV_STRIKE, prey->id, snout, dmg);
+                        MonsterDamage(*prey, dmg, MON_MEGALODON);
+                        setState(MS_HOLD);
+                    } else if (m.t > 9.0f) setState(MS_HOLD);  // missed her
+                    break;
+                }
+                case MS_HOLD: {  // down and away, then round again
+                    swim({m.pos.x + sinf(m.heading) * 50.0f, 0.0f, m.pos.z + cosf(m.heading) * 50.0f}, 14.0f, 0.3f);
+                    approach(m.depth, 9.0f, 4.0f);
+                    if (m.t > 5.0f) {
+                        if (m.strikes >= monster::sharkBites || m.life > 220.0f) {
+                            setState(MS_GONE);
+                            event(m, MEV_GONE, -1, m.pos, 0.0f);
+                            break;
+                        }
+                        Ship* next = PickPrey(ships, -1, m.pos, 900.0f, RandF());
+                        if (!next) { setState(MS_GONE); event(m, MEV_GONE, -1, m.pos, 0.0f); break; }
+                        m.target = (int16_t)next->id;
+                        m.circle = atan2f(m.pos.x - next->pos.x, m.pos.z - next->pos.z);
+                        m.dir = RandF() < 0.5f ? 1.0f : -1.0f;
+                        m.timer = 6.0f + RandF() * 6.0f;
+                        setState(MS_STALK);
+                    }
+                    break;
+                }
+                case MS_GONE:
+                    swim({m.pos.x + sinf(m.heading) * 50.0f, 0.0f, m.pos.z + cosf(m.heading) * 50.0f}, 12.0f, 0.2f);
+                    m.depth += 3.0f * dt;
+                    if (m.depth > 28.0f) m.active = false;
+                    break;
+                case MS_DEAD:
+                    approach(m.speed, 0.0f, 3.0f);
+                    m.pos.x += sinf(m.heading) * m.speed * dt;
+                    m.pos.z += cosf(m.heading) * m.speed * dt;
+                    m.depth = m.t < 10.0f ? 0.3f : m.depth + 1.5f * dt;  // belly up a while, then down
+                    if (m.depth > 25.0f) m.active = false;
+                    break;
+            }
+        }
+        if (m.active) m.pos.y = ocean.Height(m.pos.x, m.pos.z) - m.depth - (m.type == MON_MEGALODON ? 1.3f : 0.0f);
+    }
 }
