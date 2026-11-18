@@ -61,12 +61,21 @@ private:
         bool ready = false;
     };
     void MakeDyn(Dyn& d, int verts, int tris);
+    // a cephalopod's eye at c looking along `out`: set in under a fold of skin, a dark glossy ball, an amber iris round
+    // a bar of a pupil, a glint (size: the ball's radius)
+    void CephEye(Renderer& r, Vector3 c, Vector3 out, Vector3 up, float size, float hurt, float limp);
     void Upload(Dyn& d, const std::vector<Vector3>& P, const std::vector<Vector3>& N, const std::vector<Color>& C,
                 const std::vector<unsigned short>& I);
     void Tube(Dyn& d, const std::vector<Vector3>& pts, const std::vector<float>& radius, Vector3 inner, float suckers, float time);
     Material mat{};
     Mesh mantle{}, eye{}, pupil{}, tooth{};
     Mesh cube{}, cyl{};
+    // the Sea Fortress in masonry, built the first time it's drawn (the wall and keep about its middle, a tower and two
+    // stumps about their own feet)
+    void BuildFortress(float keepH, float keepR);
+    Mesh fortWall{}, fortKeep{}, fortTower{}, fortStump[2]{};
+    float fortKeepH = 0.0f;
+    bool fortReady = false;
     Dyn arms[9];
     Dyn queenArms[8];
     Dyn serpent;

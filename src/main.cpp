@@ -3396,8 +3396,11 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::BossHit:
-            if (e.b < 8) armHurt[e.b] = 1.0f;
-            else bossHurt = 1.0f;
+            {  // the flash on what was hit: full for your own shot, a hint for everyone else's (a crowd of guns would keep it lit)
+                const float k = e.a == myId ? 1.0f : 0.3f;
+                if (e.b < 8) armHurt[e.b] = fmaxf(armHurt[e.b], k);
+                else bossHurt = fmaxf(bossHurt, k);
+            }
             fx.Explosion(e.pos, e.dir, 0.9f);
             for (int i = 0; i < 6; ++i) {
                 fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(e.pos, RandDir(1.5f)), Vector3Add(RandDir(2.5f), {0, -0.5f, 0}), Rnd(3.0f, 5.0f), Rnd(2.0f, 3.5f), 2.5f, {34, 16, 40, 210});
@@ -6913,7 +6916,7 @@ void Game::DrawTells() {
 void Game::DrawKrakenQueen(float dt) {
     const float now = (float)GetTime();
     const OceanCPU& oc = Ocean();
-    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 7.0f);
     const float rise = bossView.bossState == 0 ? Clamp(bossView.bossT / 4.0f, 0.0f, 1.0f) : 1.0f;
     const float limp = bossView.bossState == 2 ? Clamp((now - bossDownAt) / 3.0f, 0.0f, 1.0f) : 0.0f;
     Vector3 body = bossView.bossPos;
@@ -7034,7 +7037,7 @@ void Game::DrawCurses() {
 
 // The Sea Serpent: drawn along its body as the server has it; the sea where it breaks the surface
 void Game::DrawSerpentBoss(float dt) {
-    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 7.0f);
     std::vector<Vector3> spine;
     for (const NetBossPart& p : bossView.bossParts) spine.push_back(p.pos);
     if (spine.size() < 3) return;
@@ -7055,7 +7058,7 @@ void Game::DrawSerpentBoss(float dt) {
 
 // The Sea Fortress: its stonework, smoke off its fallen towers, and its searchlight over the water
 void Game::DrawFortressBoss(float dt) {
-    bossHurt = fmaxf(0.0f, bossHurt - dt * 4.0f);
+    bossHurt = fmaxf(0.0f, bossHurt - dt * 7.0f);
     std::vector<FortTower> towers;
     for (const NetBossPart& p : bossView.bossParts) {
         towers.push_back({p.root, p.state == 1});

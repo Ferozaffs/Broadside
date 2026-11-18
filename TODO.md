@@ -803,3 +803,13 @@ If the session runs out of tokens, continue when they refresh.
 - [x] HUD scale: the whole HUD drawn in its own units and scaled (rlScalef; RenderView::uiScale divides Project's
   answers, SetMouseScale the mouse): auto from the window height (H / 1000, 0.85..2.2) times the player's own
   (Ctrl = / Ctrl - / Ctrl 0, 70..160%, saved in hud.cfg next to the exe). The upgrade picker sits a little higher.
+
+## Boss art pass (2026-11-18, after the review: the Kraken Queen's cartoon head, the blocky fortress)
+- [x] The Sea Fortress in masonry (MonsterArt::BuildFortress, built once): coursed blocks with a shade each, battered
+  bases, buttresses, string courses, corbelled crowns with merlons, slits and gunports, a lantern house with glazing
+  bars and a cone roof on the keep; broken, blackened stumps with rubble. Greyer stone.
+- [x] The kraken's (and the Queen's) mantle finer, folded, wrinkled and speckled; eyes set in under a lid of skin
+  (MonsterArt::CephEye: a dark ball, a muted amber iris, a bar pupil, a glint) instead of glowing gold balls; the
+  Queen's crown of little red eyes gone; a darker maroon skin.
+- [x] The hit flash: full only for your own shot, a hint for others', and quicker (a crowd of guns kept it lit, tinting
+  the whole boss orange).
