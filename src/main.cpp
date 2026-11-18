@@ -5934,7 +5934,18 @@ void Game::DrawFigures() {
             int anim = swing > 0.25f ? CrewModel::RUN : (figWork ? CrewModel::WORK : CrewModel::IDLE);
             // far off, everyone keeps the same time, so a crowd shares one pose per outfit
             float t = anim == CrewModel::RUN ? phase / 6.2832f * 0.32f : (float)GetTime() + (camD < 50.0f ? figOffset : 0.0f);
-            crewModels[figOutfit % crewOutfits].Draw(foot, q, anim, t, shirt, bot ? Color{214, 208, 192, 255} : Color{46, 52, 70, 255});
+            static std::vector<int> only = [] {  // (filming: BS_OUTFITS="3,4,5" dresses everyone in those outfits)
+                std::vector<int> v;
+                if (const char* e = getenv("BS_OUTFITS"))
+                    for (const char* q = e; *q;) {
+                        v.push_back(atoi(q));
+                        while (*q && *q != ',') ++q;
+                        if (*q) ++q;
+                    }
+                return v;
+            }();
+            const int outfit = only.empty() ? figOutfit % crewOutfits : only[figOutfit % only.size()] % crewOutfits;
+            crewModels[outfit].Draw(foot, q, anim, t, shirt, bot ? Color{214, 208, 192, 255} : Color{46, 52, 70, 255});
             return;
         }
         Matrix R = QuaternionToMatrix(q);
