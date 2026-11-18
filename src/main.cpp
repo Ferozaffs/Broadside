@@ -391,6 +391,9 @@ public:
     std::vector<NetLeak> leakView;
     Vector3 crewLocal{};
     float crewFoot = 3.0f, crewYaw = 0.0f, crewPitch = 0.0f;
+    float crewBob = 0.0f, crewBobAmt = 0.0f;  // crew: the stride's phase and how much the head goes with it (the eye only)
+    Vector3 crewLastLocal{};
+    float crewKick = 0.0f;                    // ...a gun going off beside us: a jolt, dying away
     bool crewPlaced = false;
     float stepAcc = 0.0f;
     double lastLadder = 0.0;
@@ -2645,6 +2648,14 @@ void Game::PlayEvents() {
 void Game::PlayEvent(const GameEvent& e) {
     switch (e.type) {
         case EventType::Fire: {
+            if (IsCrew() && !crewOverboard && Vector3Distance(e.pos, rv.pos) < 9.0f) {  // (crew: a gun beside us - our own, or the next one)
+                crewKick = fmaxf(crewKick, 1.0f - Vector3Distance(e.pos, rv.pos) / 12.0f);
+                shake = fmaxf(shake, 0.25f);
+                // its blast out of the port, a little further out: the smoke rolls away from us rather than over us
+                fx.CannonFire(Vector3Add(e.pos, Vector3Scale(e.dir, 2.5f)), e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
+                sfx::Play(sfx::Cannon, e.pos, 0.55f, 1.0f);
+                break;
+            }
             fx.CannonFire(e.pos, e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
             sfx::Play(sfx::Cannon, e.pos, e.b == 2 ? 0.35f : 0.55f,
                       e.a < NumShips() && view[e.a].present ? (view[e.a].s.cls == SC_LINE ? 0.82f : view[e.a].s.cls == SC_CUTTER ? 1.18f : 1.0f) : 1.0f);
@@ -4247,6 +4258,7 @@ void Game::DrawTracers(const Camera3D& cam) {
         if (b.inWater) continue;
         float d = Vector3Distance(rv.pos, b.pos);
         if (d > 1600.0f || Vector3DotProduct(Vector3Subtract(b.pos, rv.pos), camF) < 0.0f) continue;
+        if (IsCrew() && d < 14.0f) continue;  // (crew: the ball just out of a gun beside us)
         float sp = Vector3Length(b.vel);
         if (sp < 5.0f) continue;
         Vector3 dir = Vector3Scale(b.vel, 1.0f / sp);
@@ -4277,6 +4289,7 @@ void Game::DrawTracers(const Camera3D& cam) {
         if (b.inWater) continue;
         float d = Vector3Distance(rv.pos, b.pos);
         if (d > 1600.0f || Vector3DotProduct(Vector3Subtract(b.pos, rv.pos), camF) < 0.0f) continue;
+        if (IsCrew() && d < 14.0f) continue;
         float size = 1.1f + d * 0.004f;
         // just in front of the ball, so the dark iron doesn't hide its own glow
         Vector3 p = Vector3Add(b.pos, Vector3Scale(Vector3Normalize(Vector3Subtract(rv.pos, b.pos)), 1.2f));
@@ -5984,12 +5997,24 @@ void Game::CrewCamera(float dt) {
             if (clear) { gunSide = t.x; gunIn = in * t.y; break; }
         }
     }
-    Vector3 eye = HullToWorld(S.pos, S.rot, {crewLocal.x + gunIn / sc, crewFoot + (1.65f + gunUp) / sc, crewLocal.z + gunSide / sc}, sc);
+    {  // the head goes with the stride, and a gun going off beside us jolts it
+        const float moved = Vector2Distance({crewLocal.x, crewLocal.z}, {crewLastLocal.x, crewLastLocal.z}) * sc;
+        crewLastLocal = crewLocal;
+        const float v = dt > 1e-4f ? fminf(moved / dt, 8.0f) : 0.0f;
+        crewBobAmt += (Clamp(v / 4.0f, 0.0f, 1.0f) - crewBobAmt) * fminf(1.0f, dt * 6.0f);
+        crewBob += dt * (5.5f + v * 1.2f);
+        crewKick = fmaxf(0.0f, crewKick - dt * 3.5f);
+    }
+    const float bobY = crewOverboard ? 0.0f : 0.045f * crewBobAmt * sinf(crewBob * 2.0f), bobX = crewOverboard ? 0.0f : 0.03f * crewBobAmt * sinf(crewBob);
+    const float kick = crewKick * crewKick;
+    Vector3 eye = HullToWorld(S.pos, S.rot, {crewLocal.x + gunIn / sc + bobX / sc, crewFoot + (1.65f + gunUp + bobY - 0.12f * kick) / sc, crewLocal.z + gunSide / sc}, sc);
     if (crewOverboard) {  // head just above the waves
         yw = swimYaw;
         eye = Vector3Add(swimPos, {0, 1.65f, 0});
     }
-    Vector3 dir = {sinf(yw) * cosf(crewPitch), sinf(crewPitch), cosf(yw) * cosf(crewPitch)};
+    const float pitchK = crewPitch + 0.05f * kick + 0.004f * crewBobAmt * sinf(crewBob * 2.0f + 0.6f);
+    const float ywK = yw + 0.012f * kick * sinf(crewBob * 9.0f);
+    Vector3 dir = {sinf(ywK) * cosf(pitchK), sinf(pitchK), cosf(ywK) * cosf(pitchK)};
     rv.pos = eye;
     rv.target = Vector3Add(eye, Vector3Scale(dir, 60.0f));
     Vector3 shipUp = Vector3RotateByQuaternion({0, 1, 0}, S.rot);
@@ -6198,6 +6223,40 @@ void Game::DrawCrewHUD(float W, float H) {
         Text(TextFormat("%+.0f\xC2\xB0   %.0f m", aimElevDeg, aimRange), c.x, c.y + 56, 17, A(kText, 0.9f), false, Center);
     } else {
         DrawCircleV(c, 2.5f, A(kText, 0.7f));
+    }
+    // where the enemy is: the nearest few, an arrow round the reticle pointing at each that's off the screen, and when
+    // we're at a gun on the wrong side, a word to say so
+    if (alive && matchState == 0 && !crewOverboard) {
+        std::vector<std::pair<float, int>> foes;
+        for (int id = 0; id < NumShips(); ++id)
+            if (view[id].present && (view[id].s.flags & SF_ALIVE) && IsEnemy(id) && view[id].s.leader < 0)
+                foes.push_back({Vector3Distance(view[id].s.pos, S.pos), id});
+        std::sort(foes.begin(), foes.end());
+        const Vector3 camF = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+        const Vector3 camR = Vector3Normalize(Vector3CrossProduct(camF, rv.up)), camU = Vector3CrossProduct(camR, camF);
+        for (size_t k = 0; k < foes.size() && k < 3; ++k) {
+            const NetShip& e = view[foes[k].second].s;
+            if (foes[k].first > 900.0f) break;
+            Vector2 sp;
+            const Vector3 at = Vector3Add(e.pos, {0, 6, 0});
+            const bool on = rv.Project(at, sp) && sp.x > 40 && sp.y > 40 && sp.x < W - 40 && sp.y < H - 40 && Vector3DotProduct(Vector3Subtract(at, rv.pos), camF) > 0;
+            if (on) continue;
+            const Vector3 to = Vector3Subtract(at, rv.pos);
+            const float ax = Vector3DotProduct(to, camR), ay = Vector3DotProduct(to, camU);
+            const float ang = atan2f(-ay, ax), R0 = 70.0f;
+            const Vector2 tip = {c.x + cosf(ang) * (R0 + 10.0f), c.y + sinf(ang) * (R0 + 10.0f)};
+            const Vector2 b0 = {c.x + cosf(ang + 0.13f) * R0, c.y + sinf(ang + 0.13f) * R0}, b1 = {c.x + cosf(ang - 0.13f) * R0, c.y + sinf(ang - 0.13f) * R0};
+            const Color col = A(kRed, k == 0 ? 0.9f : 0.5f);
+            DrawTriangle(tip, b0, b1, col);
+            DrawTriangle(tip, b1, b0, col);
+            if (k == 0) Text(TextFormat("%d m", (int)foes[k].first), c.x + cosf(ang) * (R0 + 26.0f), c.y + sinf(ang) * (R0 + 26.0f) - 7, 12, A(kRed, 0.8f), false, Center);
+        }
+        if (IsGunJob(crewGun) && !foes.empty() && foes[0].first < 700.0f) {  // our gun's side, against where the nearest one lies
+            const Vector3 rel = WorldToHull(S.pos, S.rot, view[foes[0].second].s.pos, C.scale);
+            const bool foePort = rel.x > 0.0f, gunPort = crewGun / MAX_GUNS == 0;
+            if (foePort != gunPort) Label(foePort ? "THE ENEMY IS TO PORT   \xC2\xB7   CROSS THE DECK" : "THE ENEMY IS TO STARBOARD   \xC2\xB7   CROSS THE DECK",
+                                          c.x, c.y + 78, 11, A(kGold, 0.85f), Center);
+        }
     }
     // what's within reach
     if (alive && matchState == 0) {

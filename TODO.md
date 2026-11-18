@@ -824,3 +824,12 @@ If the session runs out of tokens, continue when they refresh.
 - [x] Particles: smoke puffs softer and wispier (a ragged edge), cannon smoke gauzier, smoke never lit brighter than a
   little over the light there is (it glowed in storms); spray drops drawn as short soft streaks along their motion;
   splashes get a column of mist; the waterspout's spray in gauzy sheets.
+
+## Crew mode, client-side only (2026-11-18, "improve crew mode without impacting any other system")
+- [x] Every change behind IsCrew() on the client (no sim, protocol or captain change): the head goes with the stride
+  (a small bob and sway, from how fast we cross the deck), a gun going off beside us jolts the view (a kick that dies
+  away, a little shake); its blast is spawned 2.5 m further out of the port so the smoke rolls away rather than over
+  us; the ball and tracer just out of a gun beside us aren't drawn for the first 14 m (they filled the view).
+- [x] Crew HUD: red arrows round the reticle to the nearest three enemies that are off the screen (the nearest with
+  its range); at a gun on the wrong side, "THE ENEMY IS TO PORT · CROSS THE DECK".
+- [ ] Left alone (they'd touch the sim): walking through the masts, the deck dunked under in big landings.
