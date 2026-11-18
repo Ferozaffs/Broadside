@@ -412,7 +412,7 @@ constexpr float waveSpeed = 22.0f;
 }  // namespace sc
 namespace ic {  // the Ironclad: its states (World::bossState)
 enum State : uint8_t { CRUISE = 1, RECOVER = 3, WINDUP = 4, CHARGE = 5 };
-constexpr float chargeSpeed = 2.7f;  // x its top speed on the charge
+constexpr float chargeSpeed = 3.6f;  // x its top speed on the charge
 constexpr float lane = 18.0f;        // m either side of its charge line
 }  // namespace ic
 namespace aa {  // the Admiral's Armada
@@ -478,7 +478,7 @@ constexpr float endZ = 1260.0f;     // the cliffs that close off each end
 namespace voyage {
 constexpr float passageA = 1550.0f, passageB = 4900.0f;  // m: the coastline's half width and half length
 constexpr float exponent = 4.0f;                         // its shape: |x/A|^n + |z/B|^n = 1 (4: an oblong with round corners)
-constexpr int startHarbour = 0, endHarbour = 1, haven = 2;
+constexpr int startHarbour = 0, endHarbour = 1, haven = 2, haven2 = 3;  // (two havens: a third of the way along, and two thirds)
 constexpr float fortRange = 550.0f;     // m round the haven and the far harbour the pirates won't come
 constexpr float spawnMin = 1050.0f;     // m from the nearest convoy ship a pirate turns up (out of sight in the haze)
 constexpr float despawn = 2700.0f;      // a pirate this far from every convoy ship for a while gives up the chase
@@ -729,7 +729,8 @@ struct Ship {
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
     uint8_t perks[PK_COUNT] = {};  // the Odyssey: upgrades picked so far this run
-    int16_t perkRound = -1;        // ...the round whose pick she's had
+    int16_t perkRound = -1;        // ...the round whose picks she's had (all of them)
+    uint8_t picksLeft = 0;         // ...picks still to make this intermission (two to start a run, one after a round)
     float sinceHit = 0.0f;         // s since she was last hurt (the carpenters work when nobody's shooting)
     float burnT = 0.0f, burnDps = 0.0f;  // ablaze (Hot Shot): s left, hull a second
     int16_t burnBy = -1;           // ...who set her alight
@@ -940,6 +941,7 @@ public:
     bool odyssey = false;
     int odRound = 1;              // how far into the run (1 ..)
     int odBest = 0;               // the furthest any run has got this session
+    int odReached = 0;            // ...and the last run that was lost (0: none yet)
     uint32_t odSeed = 1;          // the run's: its bosses' order, the upgrades offered
     uint8_t odKind = OD_BATTLE;   // what this round is
     bool odWon = false;           // the last round was won (the intermission offers upgrades)
@@ -957,6 +959,9 @@ public:
     int perkUse[PK_COUNT] = {}, comboUse[CB_COUNT] = {};  // (tests: how often each has done its work)
     uint8_t voyageFrom = 0, voyageTo = 1;  // the voyage (and an Odyssey leg): from which harbour, to which (voyage::)
     float VoyageGoalS() const;            // how far along the route its harbour is
+    bool legRoute = false;                // the Odyssey: the route runs from this leg's harbour to the next (its end is the goal)
+    void SetLegRoute(int from, int to);   // ...build it
+    int odPicks = 1;                      // picks each captain makes this intermission
     int rallies = 0;               // small crews (fewer than three captains): times this round a crew may get her going again alone
     float rallyT = 0.0f;           // ...one under way: s until she's going (everyone's disabled meanwhile)
     int Captains() const;          // our side's captains (players and bots)

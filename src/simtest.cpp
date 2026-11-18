@@ -747,6 +747,8 @@ static int PerkTest() {
                 s.perks[kCombos[run.combo].b] = kPerkMax[kCombos[run.combo].b];
             }
             g.TestRoundPowers(s);  // (the round's started: what it gives)
+            s.perkRound = (int16_t)g.odLast;  // (no opening picks: just the upgrade under test)
+            s.picksLeft = 0;
         }
         g.events.clear();
         float t = 0.0f, lost = 0.0f;

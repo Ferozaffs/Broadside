@@ -370,7 +370,8 @@ public:
     int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     int rallies = 0;                  // a small crew's rallies left
     bool odyssey = false;             // the Odyssey (from the snapshot): the run
-    int odRound = 1, odLast = 0, odBest = 0, odKind = 0, odWave = 0, odWaves = 0, voyageFrom = 0, voyageTo = 1;
+    int odRound = 1, odLast = 0, odBest = 0, odReached = 0, odKind = 0, odWave = 0, odWaves = 0, voyageFrom = 0, voyageTo = 1;
+    int legKey = -1;                 // the Odyssey leg whose sea lane the prediction world has
     bool odWon = false;
     uint32_t odSeed = 1;
     std::vector<Vector2> mines;     // the Infernals afloat
@@ -668,7 +669,18 @@ private:
         if (on) pred.rocks.push_back(FortressRock());
     }
     bool BossShot(const NetBall& b) const {  // (boss mode: the Leviathan's or its gunboats')
-        return curMode == MODE_BOSS && b.owner < NumShips() && view[b.owner].present && view[b.owner].s.team == 1;
+        return curMode == MODE_BOSS && !(bossView.hasBoss && bossView.bossKind == BOSS_PIRATES) && b.owner < NumShips() && view[b.owner].present &&
+               view[b.owner].s.team == 1;  // (the Odyssey's pirate waves fire plain iron)
+    }
+    // the Odyssey: the shot of a few upgrades has a colour of its own (Hot Shot burns, Spectral Powder glows green, Witch's
+    // Eye a cold blue); false: plain iron
+    bool PerkShot(const NetBall& b, Color& c0, Color& c1, float& wide) const {
+        if (!odyssey || b.owner >= NumShips() || !view[b.owner].present) return false;
+        const uint8_t* P = view[b.owner].s.perks;
+        if (P[PK_SPECTRAL]) { c0 = {150, 255, 190, 255}; c1 = {40, 200, 120, 255}; wide = 1.5f; return true; }
+        if (P[PK_HOTSHOT]) { c0 = {255, 210, 90, 255}; c1 = {255, 60, 10, 255}; wide = 1.6f; return true; }
+        if (P[PK_HOMING]) { c0 = {170, 220, 255, 255}; c1 = {60, 120, 255, 255}; wide = 1.4f; return true; }
+        return false;
     }
     bool IsCaptain(int id) const { return id >= 0 && id < NumShips() && view[id].s.leader < 0; }
     Color HarbourColor(int i) const {  // flag on the harbour: who may use it
@@ -1165,6 +1177,7 @@ void Game::Interpolate() {
         odRound = sn.odRound;
         odLast = sn.odLast;
         odBest = sn.odBest;
+        odReached = sn.odReached;
         odSeed = sn.odSeed;
         odKind = sn.odKind;
         odWon = sn.odWon != 0;
@@ -1173,6 +1186,13 @@ void Game::Interpolate() {
         odWave = sn.odWave;
         odWaves = sn.odWaves;
         mines = sn.mines;
+        {  // (the Odyssey's leg: its own sea lane, from this leg's harbour to the next, like the server's)
+            const int key = sn.odyssey && pred.arena == ARENA_PASSAGE ? sn.voyageFrom * 16 + sn.voyageTo : -1;
+            if (key != legKey || (key >= 0 && !pred.legRoute)) {
+                legKey = key;
+                if (key >= 0) pred.SetLegRoute(sn.voyageFrom, sn.voyageTo);
+            }
+        }
     }
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
@@ -1648,7 +1668,16 @@ void Game::DrawResults(float W, float H) {
     std::string sub;
     if (odyssey) {  // the run: on to the next round, or over
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
-        if (odWon) { title = TextFormat("ROUND %d CLEARED", odLast); sub = TextFormat("next: round %d, %s   \xC2\xB7   %s", odRound, odRound % 5 == 0 ? "a boss" : odRound % 2 ? "a sea battle" : "a voyage leg", lvl); }
+        if (odWon && odLast == 0 && odReached > 0) {  // (a run lost: the next one starts here)
+            title = "THE RUN IS OVER";
+            tc = kRed;
+            sub = TextFormat("you reached round %d   \xC2\xB7   best this session: round %d   \xC2\xB7   a new run: choose two upgrades to start", odReached, std::max(odBest, odReached));
+        } else if (odWon && odLast == 0) {  // (the very start: just the title and the picker)
+            Text("THE ODYSSEY", W * 0.5f, H * 0.16f, 64, kGold, true, Center);
+            Text(TextFormat("a roguelike run   \xC2\xB7   %s   \xC2\xB7   choose two upgrades to start", lvl), W * 0.5f, H * 0.16f + 74, 20, kDim, false, Center);
+            Text(TextFormat("THE RUN STARTS IN %d", (int)ceilf(fmaxf(matchClock, 0.0f))), W * 0.5f, H - 90, 22, kText, true, Center);
+            return;
+        } else if (odWon) { title = TextFormat("ROUND %d CLEARED", odLast); sub = TextFormat("next: round %d, %s   \xC2\xB7   %s", odRound, odRound % 5 == 0 ? "a boss" : odRound % 2 ? "a sea battle" : "a voyage leg", lvl); }
         else { title = "THE RUN IS OVER"; tc = kRed; sub = TextFormat("you reached round %d   \xC2\xB7   best this session: round %d   \xC2\xB7   %s", odLast, std::max(odBest, odLast), lvl); }
     } else if (curMode == MODE_VOYAGE) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
@@ -4276,6 +4305,11 @@ void Game::DrawTracers(const Camera3D& cam) {
         const bool green = bs && bossView.hasBoss && bossView.bossKind == BOSS_DUTCHMAN;
         Color c0 = bs ? (green ? Color{120, 255, 170, 255} : Color{255, 70, 210, 255}) : Color{255, 150, 60, 255};
         Color c1 = bs ? (green ? Color{40, 200, 120, 255} : Color{180, 40, 255, 255}) : Color{255, 90, 30, 255};
+        float pw = 1.0f;
+        if (!bs && PerkShot(b, c0, c1, pw)) {  // (an upgrade's shot: its colour, a little bolder, whatever the hour)
+            side = Vector3Scale(side, pw);
+            a0 = (unsigned char)(230 * fmaxf(k, 0.7f));
+        }
         rlColor4ub(c0.r, c0.g, c0.b, a0); rlVertex3f(b.pos.x + side.x, b.pos.y + side.y, b.pos.z + side.z);
         rlColor4ub(c0.r, c0.g, c0.b, a0); rlVertex3f(b.pos.x - side.x, b.pos.y - side.y, b.pos.z - side.z);
         rlColor4ub(c1.r, c1.g, c1.b, a1); rlVertex3f(tail.x - side.x * 0.4f, tail.y - side.y * 0.4f, tail.z - side.z * 0.4f);
@@ -4299,6 +4333,15 @@ void Game::DrawTracers(const Camera3D& cam) {
             DrawBillboardRec(cam, fx.glowTex, src, p, {size * 5.5f, size * 5.5f}, Fade(green ? Color{80, 255, 150, 255} : Color{255, 60, 200, 255}, 0.7f * kb));
             DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.0f, size * 2.0f}, Fade(green ? Color{220, 255, 230, 255} : Color{255, 220, 245, 255}, 1.0f * kb));
             continue;
+        }
+        {
+            Color pc0, pc1;
+            float pw = 1.0f;
+            if (PerkShot(b, pc0, pc1, pw)) {  // (an upgrade's shot glows its own colour)
+                DrawBillboardRec(cam, fx.glowTex, src, p, {size * 3.6f, size * 3.6f}, Fade(pc1, 0.75f * fmaxf(k, 0.7f)));
+                DrawBillboardRec(cam, fx.glowTex, src, p, {size * 1.6f, size * 1.6f}, Fade(pc0, 0.9f));
+                continue;
+            }
         }
         DrawBillboardRec(cam, fx.glowTex, src, p, {size * 2.6f, size * 2.6f}, Fade({255, 120, 40, 255}, 0.6f * k));
         DrawBillboardRec(cam, fx.glowTex, src, p, {size * 1.0f, size * 1.0f}, Fade({255, 225, 170, 255}, 1.0f * k));
@@ -4575,8 +4618,8 @@ void Game::DrawHUD() {
             what = me && (me->flags & SF_PIRATE) ? "BANK THE TREASURE HERE" : "PIRATE COVE";
         }
         if (curMode == MODE_VOYAGE) {
-            c = i == voyageTo ? kGold : i == voyage::haven ? kGreen : kDim;
-            what = i == voyageTo ? (i == voyage::haven ? "THE HAVEN   \xC2\xB7   THIS LEG'S HARBOUR" : "SAFE HARBOUR") : i == voyage::haven ? "HAVEN   \xC2\xB7   REPAIRS"
+            c = i == voyageTo ? kGold : (i == voyage::haven || i == voyage::haven2) ? kGreen : kDim;
+            what = i == voyageTo ? (i != voyage::endHarbour ? "THE HAVEN   \xC2\xB7   THIS LEG'S HARBOUR" : "SAFE HARBOUR") : (i == voyage::haven || i == voyage::haven2) ? "HAVEN   \xC2\xB7   REPAIRS"
                  : i == voyageFrom ? "DEPARTURE" : "HARBOUR";
         }
         if (curMode == MODE_RAID) {
@@ -4720,7 +4763,7 @@ void Game::DrawHUD() {
         int pirates = 0;
         for (int id = 0; id < NumShips(); ++id)
             pirates += view[id].present && view[id].s.team == 1 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0;
-        const float goalS = voyageTo == voyage::haven && pred.havenS > 0.0f ? pred.havenS : pred.RouteLength();
+        const float goalS = pred.VoyageGoalS();
         float togo = fmaxf(0.0f, goalS - sMe);
         int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
         int afloat = 0, convoy = 0;
@@ -4731,7 +4774,7 @@ void Game::DrawHUD() {
         }
         std::string t = TextFormat("%s   \xC2\xB7   %s %.1f km   \xC2\xB7   %s   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d%s   \xC2\xB7   %d:%02d",
                                    odyssey ? TextFormat("ROUND %d", odRound) : TextToUpper(voyage::kDifficultyNames[curDifficulty]),
-                                   voyageTo == voyage::haven ? "THE HAVEN" : "SAFE HARBOUR", togo / 1000.0f,
+                                   voyageTo != voyage::endHarbour ? "THE HAVEN" : "SAFE HARBOUR", togo / 1000.0f,
                                    TextFormat("AFLOAT %d / %d", afloat, convoy), pirates, teamScore[1], rallies > 0 ? TextFormat("   \xC2\xB7   RALLIES %d", rallies) : "", el / 60, el % 60);
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
@@ -7512,7 +7555,12 @@ void Game::DrawPerkPicker(float W, float H) {
     PerkOffers(odSeed, odLast, myId, me.perks, offer);
     const int N = PerkOfferCount(me.perks);
     const float cw = fminf(300.0f, (W - 120.0f) / N), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (N * cw + (N - 1) * gap) * 0.5f, y = H - 340.0f;
-    Label(me.picked ? "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON" : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 - %d)", odLast, N), W * 0.5f, y - 24, 13, kGold, Center);
+    int held = 0;
+    for (int p = 0; p < PK_COUNT; ++p) held += me.perks[p];
+    const char* head = me.picked ? (odLast == 0 ? "UPGRADES TAKEN   \xC2\xB7   THE RUN STARTS SOON" : "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON")
+                     : odLast == 0 ? TextFormat("A NEW RUN   \xC2\xB7   CHOOSE %s UPGRADE%s  (1 - %d)", held == 0 ? "TWO" : "ONE MORE", held == 0 ? "S" : "", N)
+                                   : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 - %d)", odLast, N);
+    Label(head, W * 0.5f, y - 24, 13, kGold, Center);
     for (int k = 0; k < N; ++k) {
         if (offer[k] == 255) continue;
         Rectangle r = {x0 + k * (cw + gap), y, cw, ch};

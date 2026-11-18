@@ -171,9 +171,9 @@ The host picks the game in the menu:
     across the bay, throwing everything they pass.
 - **Odyssey** (co-op, roguelike): a run of rounds, each harder than the last. Odd rounds are **sea battles** in the
   bay (the pirate fleet comes round the islands in waves; sink every ship of it), even rounds are **legs of the
-  Passage** (get the convoy from the start harbour to the haven, then from the haven to the far port), and **every
+  Passage** in three legs (the start harbour to the first haven, on to the second, then to the far port), and **every
   fifth round is a boss**, the eight in an order of the run's own, each tougher than the last. After every round you
-  win, each captain picks **one of three upgrades** (1 / 2 / 3, or click; four with the Treasure Map), kept for the whole
+  win (and twice before round 1), each captain picks **one of three upgrades** (1 / 2 / 3, or click; four with the Treasure Map), kept for the whole
   run. 57 of them, and 34 combos. Revives work as in Boss mode.
   - **Steady ones** (stack up to five): Stout Timbers (+20% hull), Drilled Gunners (reload 10% faster), Heavy Shot
     (+15% damage), Clean Hull (+6% speed), Iron Sheathing (take 12% less damage), Ship's Surgeon (bring friends round

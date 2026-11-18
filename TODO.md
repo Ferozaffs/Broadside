@@ -833,3 +833,21 @@ If the session runs out of tokens, continue when they refresh.
 - [x] Crew HUD: red arrows round the reticle to the nearest three enemies that are off the screen (the nearest with
   its range); at a gun on the wrong side, "THE ENEMY IS TO PORT · CROSS THE DECK".
 - [ ] Left alone (they'd touch the sim): walking through the masts, the deck dunked under in big landings.
+
+## Playtest notes (2026-11-19)
+- [x] The Flying Dutchman solid 18 s (20 in its last phase), away 4.5 s (3.5): it phased far too often.
+- [x] The Sea Serpent up 11 s (was 7), under at most 9 s (was 14); hit along its body between pieces (capsules),
+  1.35x the radius, and still hittable 5 m under.
+- [x] The Ironclad's charge: 3.6x its top speed (was 2.7), driven up to it in a couple of seconds.
+- [x] The Odyssey opens with an intermission: two upgrades each before round 1 (and after a lost run, for the next);
+  Ship::picksLeft, World::odPicks; the offers' hash takes the upgrades held, so each pick is a fresh hand; everyone
+  chosen: the round starts in 3 s. World::odReached (snapshot) keeps "THE RUN IS OVER" on the lost run's screen.
+- [x] The Odyssey's voyage in three legs: a second haven on the Passage (harbour 3, opposite side; the first moved to
+  a third of the way), legs start -> haven -> haven2 -> far port, each with its own sea lane (SetLegRoute, on the
+  client too), so the convoy's bots sail into the leg's harbour. The Passage changed for Voyage and Raid too
+  (protocol 27).
+- [x] Voyage pirates: always 10% quicker than their class, much quicker closing in; 55% turn up ahead of the convoy,
+  30% ahead on the beam, 15% astern.
+- [x] Crates: picked up within 13 m of the keel (was 7).
+- [x] The Odyssey's pirate waves fire plain iron (BossShot skips BOSS_PIRATES); coloured shot only from bosses and a
+  few upgrades (Spectral Powder green, Hot Shot fiery, Witch's Eye blue - PerkShot).

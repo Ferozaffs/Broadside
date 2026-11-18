@@ -102,10 +102,11 @@ static void MakePassage(uint32_t seed, std::vector<Rock>& out, std::vector<Harbo
     };
     const float A = voyage::passageA, B = voyage::passageB;
     // the three harbour mouths: where each meets the coast, and the way out to it
-    const float havenZ = g.R(-600.0f, 600.0f), havenSide = g.F() < 0.5f ? -1.0f : 1.0f;
+    const float havenZ = g.R(-2000.0f, -1300.0f), havenSide = g.F() < 0.5f ? -1.0f : 1.0f;
     const float havenX = havenSide * A * powf(1.0f - powf(fabsf(havenZ) / B, voyage::exponent), 1.0f / voyage::exponent);
-    const Vector2 mouth[3] = {{0.0f, -B}, {0.0f, B}, {havenX, havenZ}};
-    const Vector2 outDir[3] = {{0.0f, -1.0f}, {0.0f, 1.0f}, {havenSide, 0.0f}};
+    const float haven2Z = g.R(1300.0f, 2000.0f), haven2X = -havenSide * A * powf(1.0f - powf(fabsf(haven2Z) / B, voyage::exponent), 1.0f / voyage::exponent);
+    const Vector2 mouth[4] = {{0.0f, -B}, {0.0f, B}, {havenX, havenZ}, {haven2X, haven2Z}};
+    const Vector2 outDir[4] = {{0.0f, -1.0f}, {0.0f, 1.0f}, {havenSide, 0.0f}, {-havenSide, 0.0f}};
     auto nearMouth = [&](float x, float z) {
         float d = 1e9f;
         for (const Vector2& m : mouth) d = fminf(d, Vector2Distance(m, {x, z}));
@@ -152,7 +153,7 @@ static void MakePassage(uint32_t seed, std::vector<Rock>& out, std::vector<Harbo
         add(p.x - in.x * (rr * 0.95f + 120.0f), p.y - in.y * (rr * 0.95f + 120.0f), rr, fminf(rr * g.R(0.35f, 0.55f), 230.0f), false);
     }
     // the harbours: walk in from each mouth until the water is open, and tie up a little inside the coast
-    for (int h = 0; h < 3; ++h) {
+    for (int h = 0; h < 4; ++h) {
         Vector2 in = {-outDir[h].x, -outDir[h].y};
         float d = 0.0f;
         for (; d < 700.0f; d += 4.0f)
@@ -1296,7 +1297,16 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     bossPhase = bossPat = 0;
     bossWait = 0.0f;
     BuildArena();
-    if (odyssey) OdysseySetRound(true);
+    if (odyssey) {
+        OdysseySetRound(true);
+        // the run opens with an intermission: two upgrades each to start with
+        matchState = 1;
+        matchClock = tune::intermission + 12.0f;
+        odWon = true;
+        odLast = 0;
+        odPicks = 2;
+        odReached = 0;
+    }
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
         chests[i].id = (uint8_t)i;
@@ -1402,6 +1412,7 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
                 while (*q && *q != ',') ++q;
                 if (*q) ++q;
             }
+        ships[i].picksLeft = (uint8_t)odPicks;
         if (odyssey && !(matchState == 1 && odWon))
             for (int k = 1; k < odRound; ++k) {
                 uint8_t offer[4];
@@ -2445,13 +2456,13 @@ void World::UpdateCrates(float dt) {
         }
         Vector3 cp = {c.x, ocean.Height(c.x, c.z), c.z};
         for (Ship& s : ships) {
-            if (!s.active || !s.alive || s.stowed || s.leader >= 0 || Vector3Distance(s.pos, cp) > 35.0f) continue;
+            if (!s.active || !s.alive || s.stowed || s.leader >= 0 || Vector3Distance(s.pos, cp) > 45.0f) continue;
             // closest point on the keel line (bow to stern at the waterline)
             float S = ClassOf(s.cls).scale;
             Vector3 a = HullToWorld(s.pos, s.rot, {0, 0, -15.5f}, S), b = HullToWorld(s.pos, s.rot, {0, 0, 16.5f}, S);
             Vector3 ab = Vector3Subtract(b, a);
             float t = Clamp(Vector3DotProduct(Vector3Subtract(cp, a), ab) / Vector3DotProduct(ab, ab), 0.0f, 1.0f);
-            if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 7.0f) continue;
+            if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 13.0f) continue;  // (a generous reach: sail near it and it's yours)
             float dur = tune::powerMin + RandF() * (tune::powerMax - tune::powerMin);
             if (s.perks[PK_QUARTER]) {  // (Quartermaster: he knows how to stow it)
                 dur *= 2.0f;
@@ -4224,7 +4235,7 @@ void World::UpdateVoyage(float dt) {
         if (!p.alive) continue;
         float nd = 1e9f;
         for (const Ship* c : afloat) nd = fminf(nd, Vector2Distance({c->pos.x, c->pos.z}, {p.pos.x, p.pos.z}));
-        p.catchUp = Clamp((nd - 150.0f) / 400.0f, 0.0f, 1.0f) * Diff().catchUp;  // (gaining right up to the last cable or so)
+        p.catchUp = 0.1f + Clamp((nd - 80.0f) / 320.0f, 0.0f, 1.0f) * Diff().catchUp * 1.6f;  // (a touch quicker than the convoy always, and much quicker closing in)
         p.raiderIdle = nd > voyage::despawn ? p.raiderIdle + dt : 0.0f;
         if (p.raiderIdle > 15.0f) {
             RemoveShip(p.id);
@@ -4253,9 +4264,10 @@ void World::UpdateVoyage(float dt) {
     Vector2 dir = Vector2Normalize(Vector2Subtract(RouteAt(sp + 30.0f), RouteAt(fmaxf(0.0f, sp - 30.0f))));
     float u = RandF(), rel;
     bool ahead = false;
-    if (u < 0.45f) rel = PI + (RandF() - 0.5f) * 1.6f;                                              // astern
-    else if (u < 0.8f) rel = (RandF() < 0.5f ? 1.0f : -1.0f) * (PI * 0.5f + (RandF() - 0.5f) * 1.0f);  // abeam
-    else { rel = (RandF() - 0.5f) * 1.2f; ahead = true; }                                           // lying in wait
+    // mostly ahead of the convoy, where it has to sail through them; some ahead on the beam, a few coming up astern
+    if (u < 0.15f) rel = PI + (RandF() - 0.5f) * 1.4f;                                               // astern
+    else if (u < 0.45f) rel = (RandF() < 0.5f ? 1.0f : -1.0f) * (PI * 0.32f + (RandF() - 0.5f) * 0.6f);  // ahead on the beam
+    else { rel = (RandF() - 0.5f) * 1.1f; ahead = true; }                                            // lying in wait ahead
     int group = 1 + (RandF() < 0.3f + 0.4f * prog ? 1 : 0) + (RandF() < 0.1f + 0.3f * prog ? 1 : 0);
     group = std::max(1, std::min(group, want - pirates));
     const float base = atan2f(dir.x, dir.y);
@@ -5513,9 +5525,10 @@ bool World::BallHitsBoss(const Ball& b, Vector3 prev, int& part, Vector3& at) {
     if (bossKind == BOSS_SERPENT) {
         for (int i = 0; i < (int)bossParts.size(); ++i) {
             const Vector3& p = bossParts[i].pos;
-            if (p.y < ocean.Height(p.x, p.z) - 3.0f) continue;  // (under the water: out of reach)
+            if (p.y < ocean.Height(p.x, p.z) - 5.0f) continue;  // (deep under the water: out of reach)
             float s;
-            if (SegSegDist(prev, b.pos, p, p, s) < (i == 0 ? ss::headR : ss::bodyR)) {
+            const Vector3 q = i + 1 < (int)bossParts.size() ? bossParts[i + 1].pos : p;  // (the body between this piece and the next)
+            if (SegSegDist(prev, b.pos, p, q, s) < (i == 0 ? ss::headR : ss::bodyR) * 1.35f) {
                 part = i;
                 at = Vector3Lerp(prev, b.pos, s);
                 return true;
@@ -5738,7 +5751,7 @@ void World::UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& 
     switch (bossState) {
         case fd::ARRIVING:
         case fd::PHASED: {
-            if (bossT < (bossState == fd::ARRIVING ? 4.0f : phase == 3 ? 4.5f : 7.0f) || prey.empty()) break;
+            if (bossT < (bossState == fd::ARRIVING ? 4.0f : phase == 3 ? 3.5f : 4.5f) || prey.empty()) break;
             // haunt one of us: come through astern of her
             const Ship* t = prey[(size_t)(RandF() * prey.size()) % prey.size()];
             Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, t->rot);
@@ -5819,7 +5832,7 @@ void World::UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& 
                 e.dir = fwd;
                 events.push_back(e);
             }
-            if (bossT > (phase == 3 ? 13.0f : 11.0f)) enter(fd::FADING, 5);
+            if (bossT > (phase == 3 ? 20.0f : 18.0f)) enter(fd::FADING, 5);  // (solid most of the fight: it phases now and then)
             break;
         }
         case fd::FADING:
@@ -5948,7 +5961,7 @@ void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& p
                     events.push_back(e);
                 }
             }
-            if (bossT > 7.0f + RandF() * 0.05f) {
+            if (bossT > 11.0f + RandF() * 0.05f) {
                 const Ship* c = nearest(head);
                 if (phase >= 3 && c && RandF() < 0.5f) {  // after one of us, to coil round her
                     bossTarget = c->id;
@@ -5961,7 +5974,7 @@ void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& p
         case ss::SUBMERGED:
             bossDepth = fminf(16.0f, bossDepth + 8.0f * dt);
             swim(bossA, 24.0f, 1.2f);
-            if (Vector2Distance({head.x, head.z}, {bossA.x, bossA.z}) < 18.0f || bossT > 14.0f) {
+            if (Vector2Distance({head.x, head.z}, {bossA.x, bossA.z}) < 18.0f || bossT > 9.0f) {
                 bossHeading = atan2f(bossB.x - head.x, bossB.z - head.z);
                 enter(ss::TELL);
                 GameEvent e{EventType::BossTell};
@@ -6610,6 +6623,12 @@ void World::UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& 
         case ic::CHARGE: {
             // anything in its way gets rammed
             Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, I.rot);
+            {  // full steam: it gets up to charging speed in a couple of seconds, whatever the water says
+                const float want = ClassOf(I.cls).topSpeed * ic::chargeSpeed;
+                const float k = fminf(1.0f, dt * 2.2f);
+                I.vel.x += (fwd.x * want - I.vel.x) * k;
+                I.vel.z += (fwd.z * want - I.vel.z) * k;
+            }
             Vector3 bow = HullToWorld(I.pos, I.rot, {0.0f, 0.0f, hull::halfLength * 0.9f}, ClassOf(I.cls).scale);
             for (Ship& s : ships) {
                 if (!s.active || !s.alive || s.stowed || s.team == 1 || s.botTimer < -50.0f) continue;
@@ -6953,7 +6972,9 @@ void World::UpdateRevives(float dt) {
 
 // ---- the Odyssey: a roguelike run of rounds -------------------------------------------------
 void PerkOffers(uint32_t runSeed, int round, int shipId, const uint8_t* have, uint8_t out[4]) {
-    uint32_t h = runSeed ^ ((uint32_t)round * 2654435761u) ^ ((uint32_t)shipId * 40503u + 17u);
+    uint32_t held = 0;
+    for (int p = 0; p < PK_COUNT; ++p) held += have[p];
+    uint32_t h = runSeed ^ ((uint32_t)round * 2654435761u) ^ ((uint32_t)shipId * 40503u + 17u) ^ (held * 2246822519u);  // (a new hand after each pick)
     uint8_t pool[PK_COUNT];
     float wt[PK_COUNT];
     int n = 0;
@@ -6985,7 +7006,15 @@ int World::Captains() const {
     return n;
 }
 
-float World::VoyageGoalS() const { return voyageTo == voyage::haven && havenS > 0.0f ? havenS : RouteLength(); }
+float World::VoyageGoalS() const { return legRoute ? RouteLength() : voyageTo == voyage::haven && havenS > 0.0f ? havenS : RouteLength(); }
+
+// The Odyssey's leg: the sea lane from this leg's harbour to the next (the convoy's bots follow it into harbour)
+void World::SetLegRoute(int from, int to) {
+    if (arena != ARENA_PASSAGE || from < 0 || to < 0 || from >= (int)harbours.size() || to >= (int)harbours.size()) return;
+    route = MakeRoute(rocks, {harbours[from].x, harbours[from].z}, {harbours[to].x, harbours[to].z});
+    havenS = 0.0f;
+    legRoute = true;
+}
 
 void World::GivePerk(Ship& s, int perk) {
     if (perk < 0 || perk >= PK_COUNT || s.perks[perk] >= kPerkMax[perk]) return;
@@ -7018,8 +7047,15 @@ bool World::PickPerk(int shipId, int choice) {
     uint8_t offer[4];
     PerkOffers(odSeed, odLast, s.id, s.perks, offer);
     if (offer[choice] == 255) return false;
-    s.perkRound = (int16_t)odLast;
+    if (s.picksLeft > 0) s.picksLeft--;
+    if (s.picksLeft == 0) s.perkRound = (int16_t)odLast;  // (all made)
     GivePerk(s, offer[choice]);
+    if (matchState == 1 && odWon) {  // everyone's chosen: on with it
+        bool all = true;
+        for (const Ship& o : ships)
+            if (o.active && o.leader < 0 && o.team == 0 && !o.boss && !o.raider && !o.merchant && o.perkRound != odLast) all = false;
+        if (all) matchClock = fminf(matchClock, 3.0f);
+    }
     return true;
 }
 
@@ -7028,6 +7064,8 @@ bool World::PickPerk(int shipId, int choice) {
 void World::OdysseyEnd(bool won) {
     odLast = odRound;
     odWon = won;
+    odPicks = 1;
+    for (Ship& s : ships) s.picksLeft = (uint8_t)odPicks;
     if (won) {
         for (Ship& s : ships)
             if (s.active && s.isBot && s.leader < 0 && s.team == 0 && !s.boss && !s.raider) {
@@ -7042,6 +7080,7 @@ void World::OdysseyEnd(bool won) {
         odRound++;
     } else {
         odBest = std::max(odBest, odRound);
+        odReached = odRound;
         odRound = 1;
         odLeg = 0;
         odSeed = odSeed * 1103515245u + 12345u;
@@ -7049,14 +7088,22 @@ void World::OdysseyEnd(bool won) {
             for (uint8_t& p : s.perks) p = 0;
             s.perkRound = -1;
         }
+        // a new run: two upgrades to start it with, picked in this same intermission
+        odWon = true;
+        odLast = 0;
+        odPicks = 2;
+        for (Ship& s : ships) s.picksLeft = 2;
+        for (Ship& s : ships)
+            if (s.active && s.isBot && s.leader < 0 && s.team == 0 && !s.boss && !s.raider)
+                for (int k = 0; k < 2; ++k) PickPerk(s.id, (int)(RandF() * 3.0f) % 3);
     }
 }
 
 // This round's kind (Init: the first; StartRound: the next): the mode it plays as, its sea, its harbours, its boss.
 void World::OdysseySetRound(bool first) {
-    if (!first && odWon)  // (whoever didn't choose: the first on offer)
+    if (!first && odWon)  // (whoever didn't choose: the first on offer, as many times as they had picks)
         for (Ship& s : ships)
-            if (s.active && s.leader < 0 && s.team == 0 && !s.boss && !s.raider && s.perkRound != odLast) PickPerk(s.id, 0);
+            for (int k = 0; k < 4 && s.active && s.leader < 0 && s.team == 0 && !s.boss && !s.raider && s.perkRound != odLast; ++k) PickPerk(s.id, 0);
     odKind = OdKindOf(odRound);
     const uint8_t newMode = odKind == OD_LEG ? MODE_VOYAGE : MODE_BOSS, newArena = odKind == OD_LEG ? ARENA_PASSAGE : ARENA_ISLES;
     if (!first) {  // the last round's enemies, gone
@@ -7088,11 +7135,13 @@ void World::OdysseySetRound(bool first) {
     roundLength = mode == MODE_VOYAGE ? tune::voyageLength : tune::bossLength;
     voyageFrom = voyage::startHarbour;
     voyageTo = voyage::endHarbour;
-    if (odKind == OD_LEG) {  // start -> haven, haven -> the far port, and round again
-        const bool firstHalf = odLeg % 2 == 0;
-        voyageFrom = firstHalf ? voyage::startHarbour : voyage::haven;
-        voyageTo = firstHalf ? voyage::haven : voyage::endHarbour;
+    legRoute = false;
+    if (odKind == OD_LEG) {  // start -> the first haven -> the second -> the far port, and round again
+        static const int kFrom[3] = {voyage::startHarbour, voyage::haven, voyage::haven2}, kTo[3] = {voyage::haven, voyage::haven2, voyage::endHarbour};
+        voyageFrom = (uint8_t)kFrom[odLeg % 3];
+        voyageTo = (uint8_t)kTo[odLeg % 3];
         odLeg++;
+        SetLegRoute(voyageFrom, voyageTo);
     }
     odBossKind = BOSS_PIRATES;
     if (odKind == OD_BOSS) {  // the run's bosses in an order of its own, none again until all have come

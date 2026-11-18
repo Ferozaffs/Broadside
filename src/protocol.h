@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 26;  // 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 27;  // 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -246,7 +246,7 @@ struct Snapshot {
     uint8_t raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     uint8_t rallies = 0;                  // a small crew's rallies left (boss, voyage)
     bool odyssey = false;                 // the Odyssey: the run
-    uint16_t odRound = 1, odLast = 0, odBest = 0;
+    uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
     uint8_t odKind = 0, odWon = 0, voyageFrom = 0, voyageTo = 1, odWave = 0, odWaves = 0;
     std::vector<Vector2> mines;           // ...the Infernals afloat (x, z)
@@ -450,6 +450,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((uint16_t)world.odRound);
         w.Put((uint16_t)world.odLast);
         w.Put((uint16_t)world.odBest);
+        w.Put((uint16_t)world.odReached);
         w.Put(world.odSeed);
         w.Put(world.odKind);
         w.Put((uint8_t)(world.odWon ? 1 : 0));
@@ -640,6 +641,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.odRound = r.Get<uint16_t>();
         s.odLast = r.Get<uint16_t>();
         s.odBest = r.Get<uint16_t>();
+        s.odReached = r.Get<uint16_t>();
         s.odSeed = r.Get<uint32_t>();
         s.odKind = r.Get<uint8_t>();
         s.odWon = r.Get<uint8_t>();
