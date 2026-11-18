@@ -663,7 +663,7 @@ static int OdysseyTest() {
         }
         g.events.clear();
     }
-    int fxCount[8] = {}, bolts = 0;
+    int fxCount[PFX_KINDS] = {}, bolts = 0;
     static const char* kKind[] = {"SEA BATTLE", "VOYAGE LEG", "BOSS"};
     printf("odyssey seed %u, %s, %d captains: round 1 is a %s (mode %d, arena %d)\n", seed, voyage::kDifficultyNames[g.difficulty], N, kKind[g.odKind], g.mode, g.arena);
     const int T = (int)((getenv("BS_VOYMIN") ? atof(getenv("BS_VOYMIN")) : 60.0f) * 60 * 60);
@@ -688,7 +688,7 @@ static int OdysseyTest() {
             if (e.type == EventType::Wave) printf("   t=%5.0f   wave %d of %d: %.0f pirates (hull x%.2f)\n", g.time, e.b, e.flags, e.value, g.odHullMul);
             if (e.type == EventType::Perked && e.a < g.ShipCount()) printf("   t=%5.0f   %s takes %s (%d)\n", g.time, g.ships[e.a].name.c_str(), kPerkNames[e.b % PK_COUNT], g.ships[e.a].perks[e.b % PK_COUNT]);
             if (e.type == EventType::Kill && (e.flags & EF_DOWNED)) disabled++;
-            if (e.type == EventType::PerkFx && e.flags < 8) fxCount[e.flags]++;
+            if (e.type == EventType::PerkFx && e.flags < PFX_KINDS) fxCount[e.flags]++;
             if (e.type == EventType::BossSlam && e.flags == 4 && e.a < g.ShipCount() && g.ships[e.a].team == 0) bolts++;
             if (e.type == EventType::Revive) (e.flags & 1 ? rallies : revives)++;
         }
@@ -705,6 +705,97 @@ static int OdysseyTest() {
            fxCount[PFX_CHAINED], fxCount[PFX_CHARM], fxCount[PFX_KEG], fxCount[PFX_COMBO], fxCount[PFX_ECHO], fxCount[PFX_PRIZE], bolts);
     printf("odyssey: reached round %d (best %d)\n", std::max(g.odLast, g.odRound), std::max(g.odBest, g.odLast));
     return 0;
+}
+
+// Every upgrade that changes how you fight, and every combo, on its own: three bot captains with it (at its most)
+// through the Odyssey's first sea battle (captain0 disabled at 30 s, so the ones that live on that get their turn);
+// how often it did its work, how long the battle took, the hull it cost us. BS_PERKTEST=1 --simtest (BS_PERKONLY=<id>,
+// BS_COMBOONLY=<id>: just that one)
+static int PerkTest() {
+    struct Run { int perk, combo; };
+    std::vector<Run> runs = {{-1, -1}};  // (the first: none, to measure the rest by)
+    auto listed = [](const char* env, int v) {  // ("19,20,25")
+        const char* e = getenv(env);
+        if (!e) return false;
+        for (const char* q = e; *q;) {
+            if (atoi(q) == v) return true;
+            while (*q && *q != ',') ++q;
+            if (*q) ++q;
+        }
+        return false;
+    };
+    const bool some = getenv("BS_PERKONLY") || getenv("BS_COMBOONLY");
+    for (int p = PK_HOTSHOT; p < PK_COUNT; ++p)
+        if (!some || listed("BS_PERKONLY", p)) runs.push_back({p, -1});
+    for (int c = 0; c < CB_COUNT; ++c)
+        if (!some || listed("BS_COMBOONLY", c)) runs.push_back({-1, c});
+    int problems = 0;
+    float baseT = getenv("BS_PERKBASE") ? (float)atof(getenv("BS_PERKBASE")) : 0.0f;
+    const int from = getenv("BS_PERKFROM") ? atoi(getenv("BS_PERKFROM")) : 0, to = getenv("BS_PERKTO") ? atoi(getenv("BS_PERKTO")) : 9999;  // (a slice of the runs)
+    for (int ri = 0; ri < (int)runs.size(); ++ri) {
+        if (ri < from || ri >= to) continue;
+        const Run& run = runs[ri];
+        World g;
+        g.rounds = true;
+        g.Init(1, 0, 0, MODE_ODYSSEY, false, ARENA_ISLES);
+        for (int i = 0; i < 3; ++i) g.AddShip(TextFormat("captain%d", i), true);
+        for (Ship& s : g.ships) {
+            if (!s.active || s.leader >= 0 || s.team != 0) continue;
+            if (run.perk >= 0) s.perks[run.perk] = kPerkMax[run.perk];
+            if (run.combo >= 0) {
+                s.perks[kCombos[run.combo].a] = kPerkMax[kCombos[run.combo].a];
+                s.perks[kCombos[run.combo].b] = kPerkMax[kCombos[run.combo].b];
+            }
+            g.TestRoundPowers(s);  // (the round's started: what it gives)
+        }
+        g.events.clear();
+        float t = 0.0f, lost = 0.0f;
+        int kills = 0, downs = 0, balls = 0;
+        bool won = false, ended = false, downed = false;
+        for (int i = 0; i < 60 * 240 && !ended; ++i) {
+            float hp0 = 0.0f;
+            for (const Ship& s : g.ships) hp0 += s.active && s.team == 0 && s.leader < 0 ? s.hp : 0.0f;
+            g.Step();
+            float hp1 = 0.0f;
+            for (const Ship& s : g.ships) hp1 += s.active && s.team == 0 && s.leader < 0 ? s.hp : 0.0f;
+            lost += fmaxf(0.0f, hp0 - hp1);
+            balls = std::max(balls, (int)g.balls.size());
+            if (g.matchState == 0) t += 1.0f / 60.0f;
+            if (!downed && t > 30.0f) {  // (captain0 knocked out: twice, a charm or not)
+                Ship& c = g.ships[0];
+                if (c.alive) g.TestKnockOut(c);
+                if (c.alive && c.invulnT > 0.0f) c.invulnT = 0.0f, g.TestKnockOut(c);
+                downed = true;
+            }
+            for (const GameEvent& e : g.events) {
+                if (e.type == EventType::Kill && e.b < g.ShipCount() && g.ships[e.b].raider) kills++;
+                if (e.type == EventType::Kill && (e.flags & EF_DOWNED)) downs++;
+                if (e.type == EventType::MatchEnd) {
+                    ended = true;
+                    won = e.b == 0;
+                }
+            }
+            g.events.clear();
+        }
+        int uses = run.perk >= 0 ? g.perkUse[run.perk] : run.combo >= 0 ? g.comboUse[run.combo] : 0;
+        bool checked = run.perk >= 0 || run.combo >= 0;
+        if (run.perk == PK_MAP) {  // (the Treasure Map: a fourth card)
+            uint8_t have[PK_COUNT] = {}, offer[4];
+            have[PK_MAP] = 1;
+            PerkOffers(7, 3, 0, have, offer);
+            uses = offer[3] != 255;
+            checked = true;
+        }
+        const bool fail = checked && uses == 0;
+        problems += fail;
+        if (run.perk < 0 && run.combo < 0) baseT = t;
+        printf("%-4s %-22s %6d uses   battle %4.0f s (%+4.0f%%) %s   %2d kills, %d disabled, %4.0f hull lost, most shot afloat %d\n", fail ? "FAIL" : checked ? "ok" : "-",
+               run.perk >= 0 ? kPerkNames[run.perk] : run.combo >= 0 ? kCombos[run.combo].name : "(no upgrades)", uses, t, baseT > 0.0f ? 100.0f * (t - baseT) / baseT : 0.0f,
+               won ? "won " : ended ? "LOST" : "    ", kills, downs, lost, balls);
+        fflush(stdout);
+    }
+    printf("perks: %d with problems\n", problems);
+    return problems ? 1 : 0;
 }
 
 static int BossTest() {
@@ -818,6 +909,7 @@ static int BossTest() {
 int RunSimTest() {
     if (getenv("BS_BOSSTEST")) return BossTest();
     if (getenv("BS_ODYSSEYTEST")) return OdysseyTest();
+    if (getenv("BS_PERKTEST")) return PerkTest();
     if (getenv("BS_QATEST")) return QaTest();
     if (getenv("BS_SPAWNTEST")) return SpawnTest();
     if (getenv("BS_HARBOURTEST")) return HarbourTest();

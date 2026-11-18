@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 26;  // 26: the Odyssey (perks, rallies, its block), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 26;  // 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -175,6 +175,7 @@ struct NetShip {
     uint8_t perks[PK_COUNT] = {};  // the Odyssey: her upgrades
     bool picked = false;           // ...and this round's pick made
     bool burning = false, chained = false, charmed = false;  // ablaze, rigging torn, untouchable (the upgrades at work)
+    bool warded = false, marked = false, smoked = false;     // nettings rigged, the Black Spot on her, smoke pouring off her
     uint16_t banked = 0;
     uint8_t raceGate = 0, racePlace = 0;  // race: gates behind it / finishing place (0: racing)
     float raceTime = 0, slowTimer = 0;    // race: time over the line / s left crippled
@@ -248,6 +249,7 @@ struct Snapshot {
     uint16_t odRound = 1, odLast = 0, odBest = 0;
     uint32_t odSeed = 1;
     uint8_t odKind = 0, odWon = 0, voyageFrom = 0, voyageTo = 1, odWave = 0, odWaves = 0;
+    std::vector<Vector2> mines;           // ...the Infernals afloat (x, z)
     float matchClock = 0;
     float raceClock = 0;  // race: s since the round started (the countdown is the first raceCountdown of it)
 };
@@ -280,12 +282,18 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.PutU8f(s.bankTimer / tune::bankTime);  // pirate: unloading progress
         w.Put((uint8_t)((s.downed ? 1 : 0) | (s.harbourWork ? 2 : 0) | (world.odyssey && s.perkRound == world.odLast ? 4 : 0) | (s.burnT > 0.0f ? 8 : 0) |
                         (s.chainT > 0.0f ? 16 : 0) | (s.invulnT > 0.0f ? 32 : 0)));
-        {
-            uint64_t pk = 0;
-            for (int p = 0; p < PK_COUNT; ++p) pk |= (uint64_t)(s.perks[p] & 7) << (3 * p);
-            w.Put(pk);
+        {  // her upgrades: the ones she has, and how many of each
+            uint8_t np = 0;
+            for (int p = 0; p < PK_COUNT; ++p) np += s.perks[p] > 0;
+            w.Put(np);
+            for (int p = 0; p < PK_COUNT; ++p)
+                if (s.perks[p]) {
+                    w.Put((uint8_t)p);
+                    w.Put(s.perks[p]);
+                }
         }
-        w.PutU8f(s.reviveT / World::ReviveTimeOf(s));
+        w.Put((uint8_t)((s.perks[PK_NETTING] && s.wardT <= 0.0f ? 1 : 0) | (s.markT > 0.0f ? 2 : 0) | (s.smokeT > 0.0f ? 4 : 0)));
+        w.PutU8f(fmaxf(s.reviveT / World::ReviveTimeOf(s), world.SelfRevives(s) ? s.selfT / World::SelfReviveTime(s) : 0.0f));
         w.PutU8f(s.harbourCd / tune::harbourCooldown);
         w.Put((uint16_t)std::min(s.banked, 65535));
         w.PutU8f(s.hp / s.maxHp);
@@ -449,6 +457,12 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(world.voyageTo);
         w.Put((uint8_t)world.odWave);
         w.Put((uint8_t)world.odWaves0);
+        const uint8_t nm = (uint8_t)std::min<size_t>(world.mines.size(), 64);
+        w.Put(nm);
+        for (uint8_t k = 0; k < nm; ++k) {
+            w.Put(world.mines[k].pos.x);
+            w.Put(world.mines[k].pos.z);
+        }
     }
 }
 
@@ -482,8 +496,16 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
             sh.burning = (st & 8) != 0;
             sh.chained = (st & 16) != 0;
             sh.charmed = (st & 32) != 0;
-            uint64_t pk = r.Get<uint64_t>();
-            for (int p = 0; p < PK_COUNT; ++p) sh.perks[p] = (uint8_t)((pk >> (3 * p)) & 7);
+            for (uint8_t& p : sh.perks) p = 0;
+            const uint8_t np = r.Get<uint8_t>();
+            for (int k = 0; k < np && r.ok; ++k) {
+                const uint8_t p = r.Get<uint8_t>(), c = r.Get<uint8_t>();
+                if (p < PK_COUNT) sh.perks[p] = c;
+            }
+            const uint8_t st2 = r.Get<uint8_t>();
+            sh.warded = (st2 & 1) != 0;
+            sh.marked = (st2 & 2) != 0;
+            sh.smoked = (st2 & 4) != 0;
         }
         sh.revive = r.GetU8f();
         sh.harbourCd = r.GetU8f() * tune::harbourCooldown;
@@ -625,6 +647,12 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.voyageTo = r.Get<uint8_t>();
         s.odWave = r.Get<uint8_t>();
         s.odWaves = r.Get<uint8_t>();
+        const uint8_t nm = r.Get<uint8_t>();
+        s.mines.resize(r.ok ? nm : 0);
+        for (Vector2& m : s.mines) {
+            m.x = r.Get<float>();
+            m.y = r.Get<float>();
+        }
     }
     return r.ok;
 }

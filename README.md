@@ -173,25 +173,71 @@ The host picks the game in the menu:
   bay (the pirate fleet comes round the islands in waves; sink every ship of it), even rounds are **legs of the
   Passage** (get the convoy from the start harbour to the haven, then from the haven to the far port), and **every
   fifth round is a boss**, the eight in an order of the run's own, each tougher than the last. After every round you
-  win, each captain picks **one of three upgrades** (1 / 2 / 3, or click), kept for the whole run. Revives work as in
-  Boss mode.
+  win, each captain picks **one of three upgrades** (1 / 2 / 3, or click; four with the Treasure Map), kept for the whole
+  run. 57 of them, and 34 combos. Revives work as in Boss mode.
   - **Steady ones** (stack up to five): Stout Timbers (+20% hull), Drilled Gunners (reload 10% faster), Heavy Shot
-    (+15% damage), Clean Hull (+6% speed), Iron Sheathing (12% less damage), Ship's Surgeon (bring friends round
-    faster, come back stronger), Carpenters (mend your hull when nobody's shooting at you).
-  - **Ones that change how you fight**: Hot Shot (your hits set ships ablaze), Grenado Shells (your shot bursts: near
-    misses hurt too), Chain Shot (hits tear their rigging, they sail slower), Double-Shotted (a chance a broadside fires
-    twice), Prize Crew (every kill: hull back, guns reloaded), Lucky Charm (survive a killing blow on 1 hull, a moment
-    untouchable, once a round), Desperado (below 40% hull: much more damage, faster reload), Lightning Rod (your hits
-    may call down lightning), Spectral Powder (your shot goes through islands and friends), Ram Prow (rams: triple
-    damage, none to you), Powder Kegs (disabled? you blow up and take them with you), Quartermaster (crate power-ups
-    last twice as long, and one to start every round).
-  - **Combos**, when you hold both halves: **Firestorm** (Hot Shot + Grenado: bursts set everything ablaze), **Storm
-    Surge** (Lightning Rod + Chain Shot: struck ships are chained, chained ships struck twice as often), **Devil's
-    Luck** (Lucky Charm + Desperado: every kill gives a spent charm back), **Plunderer** (Prize Crew + Double-Shotted:
-    after every kill your next broadside fires twice), **Juggernaut** (Ram Prow + Iron Sheathing: your rams mend your
-    hull), **Kamikaze** (Ram Prow + Powder Kegs: ramming sets off a keg and you live), **Will-o'-the-Wisp** (Spectral
-    Powder + Hot Shot: fire leaps from ship to ship), **Arsenal** (Quartermaster + Double-Shotted: two power-ups to
-    start every round). An upgrade that would complete a combo turns up more often, and its card says so. Lose a round and the run
+    (+15% damage), Clean Hull (+6% speed), Iron Sheathing (take 12% less damage), Ship's Surgeon (bring friends round
+    faster, come back stronger), Carpenters (mend your hull when out of the fight).
+  - **The first twelve that change how you fight**: Hot Shot (your hits set ships ablaze), Grenado Shells (your shot
+    bursts: near misses hurt too), Chain Shot (hits tear their rigging: they sail slower), Double-Shotted (a chance a
+    broadside fires twice), Prize Crew (every kill: hull back, guns reloaded), Lucky Charm (survive a killing blow,
+    once a round), Desperado (below 40% hull: much more damage, faster reload), Lightning Rod (your hits may call down
+    lightning), Spectral Powder (your shot goes through islands and friends), Ram Prow (rams: triple damage, none to
+    you), Powder Kegs (disabled? you blow up and take them with you), Quartermaster (crate power-ups last twice as
+    long, one each round).
+  - **The guns**: Grapeshot (every gun fires extra pellets, fanned wide), Witch's Eye (your shot bends toward the
+    nearest enemy), Skipping Shot (every skip off the water: the ball hits harder), Shrapnel (a hit throws fragments
+    into ships nearby), Long Nines (the further your shot flies, the harder it hits), Point Blank (close in (70 m),
+    much harder hits), Swivel Guns (your bow chaser fires three, reloads faster), Ricochet (a hit bounces on to the
+    next enemy), Mortar Deck (a deck mortar shells the nearest enemy, by itself), Both Barrels (fire one broadside and
+    the other goes too).
+  - **The hull**: Return Fire (hit? a gun may fire straight back), Brass Plating (a chance shot glances off, back at
+    them), Boarding Nettings (stops one hit outright, ready again soon), Never Say Die (disabled? your own crew gets
+    you going, once a round), Salvage Crew (damage you deal mends your hull), Smoke Pots (hit? smoke pours off you:
+    they can't aim).
+  - **The sailing**: Fair Winds (every kill: a burst of speed), Fire Wake (your wake burns: cross it and catch fire),
+    Running Fight (the faster you sail, the harder you hit), Steady As She Goes (all but stopped: faster reload,
+    harder hits).
+  - **The kills, and the crew**: Magazine Hit (ships you sink blow up and hurt their friends), Bounty Hunter (every
+    kill: a crate's power-up), Press Gang (every kill: a stouter hull for the round), Rousing Shanty (a kill reloads
+    and mends friends nearby), Avenger (a friend disabled: rapid fire and barrage), Admiral's Pennant (you and friends
+    near you take less damage).
+  - **Curses**: The Black Spot (hits mark them: everyone hits them harder), Grappling Shot (hits haul them toward
+    you), Canister Shot (hits cut down their gun crews: slower guns), Cursed Hull (enemies close to you lose hull
+    every second), Siren's Song (enemies are drawn toward you), Trident (a surge rolls out from you, flinging them
+    away), Infernals (you drop mines astern: they go up close by).
+  - **And the rest**: Lucky Shot (a chance a ball hits four times as hard), Treasure Map (a 4th upgrade to choose
+    from; combos come up more), Double Charges (+30% damage, but reload 15% slower), Ambush (your first broadside
+    after a lull: double damage), Blood in the Water (harder hits on ships below half hull).
+  - **Combos**, when you hold both halves: **Firestorm** (Hot Shot + Grenado Shells: your bursts set everything they
+    catch ablaze), **Storm Surge** (Lightning Rod + Chain Shot: struck ships are chained, chained ships struck twice
+    as often), **Devil's Luck** (Lucky Charm + Desperado: every kill gives you back a spent charm), **Plunderer**
+    (Prize Crew + Double-Shotted: after every kill your next broadside fires twice), **Juggernaut** (Ram Prow + Iron
+    Sheathing: your rams mend your own hull), **Kamikaze** (Ram Prow + Powder Kegs: ramming sets off a keg, and you
+    live), **Will-o'-the-Wisp** (Spectral Powder + Hot Shot: fire leaps from ship to ship), **Arsenal** (Quartermaster
+    + Double-Shotted: start every round with two power-ups), **Cluster Shot** (Grapeshot + Grenado Shells: every
+    pellet bursts too), **Seeker Swarm** (Grapeshot + Witch's Eye: your pellets hunt them three times as hard),
+    **Shatterstorm** (Shrapnel + Grenado Shells: the fragments burst too, and there are more), **Pinball** (Ricochet +
+    Brass Plating: shot that glances off you ricochets on; every bounce hits harder), **Thunderhead** (Mortar Deck +
+    Lightning Rod: every mortar shell calls down lightning), **Get Over Here** (Grappling Shot + Point Blank: haul
+    three times as hard; point blank reaches twice as far), **Black Death** (The Black Spot + Cursed Hull: the curse
+    finds marked ships anywhere, and the mark spreads), **Riptide** (Siren's Song + Trident: your surges hit three
+    times as hard, and chain them), **Siren's Trap** (Siren's Song + Infernals: your mines drift toward them),
+    **Undying** (Never Say Die + Lucky Charm: your crew has you going in 5 s, at full hull), **Bloodthirst** (Salvage
+    Crew + Blood in the Water: triple the salvage from ships below half hull), **Whirlwind** (Both Barrels + Swivel
+    Guns: every gun you have fires at once), **Retribution** (Return Fire + Boarding Nettings: a hit your nettings
+    stop is answered with three), **Martyr** (Avenger + Powder Kegs: a friend disabled: a keg goes off where she
+    lies), **Deadeye** (Long Nines + Lucky Shot: shot that's flown 200 m is always lucky), **Chain of Fire** (Magazine
+    Hit + Hot Shot: the blasts set everything they catch ablaze), **Berserker** (Double Charges + Desperado: below 40%
+    hull, double charges reload fast), **Ghost Ship** (Ambush + Smoke Pots: an ambush every 2 s, in a cloak of smoke),
+    **Dismasted** (Canister Shot + Chain Shot: chained ships' guns fall silent), **Fleet Admiral** (Admiral's Pennant
+    + Rousing Shanty: the shanty reaches every friend; the pennant twice as far), **Comet** (Fire Wake + Clean Hull:
+    your wake burns twice as wide and twice as hot), **Hit and Run** (Fair Winds + Running Fight: kills reload your
+    guns; fair winds last twice as long), **Man-o'-War** (Press Gang + Stout Timbers: press gangs bring twice the
+    hull, and mend it), **Pirate King** (Bounty Hunter + Quartermaster: every bounty is all three power-ups), **Depth
+    Charge** (Skipping Shot + Grenado Shells: every skip off the water bursts), **Gun Platform** (Steady As She Goes +
+    Mortar Deck: hove to, the mortar fires three times as fast). An upgrade that would complete a combo turns up more
+    often, and its card says so. Lose a round and the run
   is over: the results show how far you got (and the best this session), and a new run starts from round 1. Every
   round brings more pirates, bigger ships, stouter hulls and sharper gunners; bosses get more hull and attack faster.
   The host's difficulty sets where it starts.

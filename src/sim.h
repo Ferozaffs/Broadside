@@ -209,7 +209,11 @@ enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RA
 // pick after each one won. Lose a round and the run is over.
 constexpr uint8_t MODE_ODYSSEY = 7;
 enum OdysseyKind : uint8_t { OD_BATTLE = 0, OD_LEG = 1, OD_BOSS = 2 };
-enum PerkFxKind : uint8_t { PFX_ABLAZE = 1, PFX_CHAINED, PFX_CHARM, PFX_KEG, PFX_COMBO, PFX_ECHO, PFX_PRIZE };
+enum PerkFxKind : uint8_t {
+    PFX_ABLAZE = 1, PFX_CHAINED, PFX_CHARM, PFX_KEG, PFX_COMBO, PFX_ECHO, PFX_PRIZE,
+    PFX_DEFLECT, PFX_WARD, PFX_CRIT, PFX_SURGE, PFX_MINE, PFX_BLAST, PFX_UP, PFX_MARK, PFX_AMBUSH, PFX_BOUNTY,
+    PFX_KINDS
+};
 // the upgrades: picked one at a time between rounds, kept for the run, each stacking up to its kPerkMax. The first
 // seven make the ship better at what she does; the rest change what she does - and pairs of them make combos (kCombos)
 enum Perk : uint8_t {
@@ -226,13 +230,70 @@ enum Perk : uint8_t {
     PK_RAM,       // rams: three times the damage, none to us
     PK_KEGS,      // disabled: she blows up and takes them with her
     PK_QUARTER,   // crate power-ups twice as long, and one to start every round
+    // -- the guns
+    PK_GRAPE,     // every gun fires extra pellets, fanned wide (each a share of a ball)
+    PK_HOMING,    // Witch's Eye: the shot bends toward the nearest of theirs
+    PK_SKIP,      // every skip off the water, the ball hits harder
+    PK_SHRAPNEL,  // a hit throws fragments into whatever's near
+    PK_LONG,      // Long Nines: the further it's flown, the harder it hits
+    PK_POINT,     // Point Blank: close in, much harder
+    PK_SWIVEL,    // the bow chaser fires three, and reloads faster
+    PK_RICOCHET,  // a ball that hits bounces on to the next of theirs
+    PK_MORTAR,    // a mortar on deck lobs a shell at the nearest of theirs every few seconds, by itself
+    PK_BOTH,      // Both Barrels: one broadside fires the other too
+    // -- the hull
+    PK_RETURN,    // hit: a chance a gun fires straight back
+    PK_BRASS,     // a chance a ball glances off and flies back where it came from
+    PK_NETTING,   // stops a hit outright, ready again a few seconds on
+    PK_NEVERDIE,  // disabled: her own crew gets her going again, once a round (a stack)
+    PK_SALVAGE,   // the hull she knocks off them mends hers
+    PK_SMOKE,     // hit: smoke pours off her, and they can't lay their guns on her
+    // -- the sailing
+    PK_FAIRWIND,  // every kill, a burst of speed
+    PK_FIREWAKE,  // her wake burns: whoever crosses it catches fire
+    PK_RUNNING,   // the faster she sails, the harder she hits
+    PK_STEADY,    // hove to (all but stopped): faster reload, harder hits
+    // -- the kills
+    PK_MAGAZINE,  // ships she sinks blow up, and their friends close by take it
+    PK_BOUNTY,    // every kill, a crate's power-up
+    PK_PRESS,     // every kill, a stouter hull for the round
+    PK_SHANTY,    // every kill reloads the friends near her and mends them a little
+    PK_AVENGER,   // a friend disabled: rapid fire and barrage a while
+    PK_PENNANT,   // the Admiral's Pennant: friends near her (and she) take less damage
+    // -- curses
+    PK_SPOT,      // the Black Spot: her hits mark them, and a marked ship takes more from everyone
+    PK_GRAPPLE,   // hits haul them toward her
+    PK_CANISTER,  // hits cut down their gun crews: their guns are slower
+    PK_CURSED,    // enemies close to her rot: hull lost every second
+    PK_SIREN,     // the Siren's Song: enemies are drawn to her
+    PK_TRIDENT,   // every few seconds a surge rolls out from her, flinging them away
+    PK_MINES,     // Infernals: she drops mines astern that go up when they come close
+    // -- the rest
+    PK_LUCKY,     // a chance a ball hits four times as hard
+    PK_MAP,       // the Treasure Map: a fourth upgrade to choose from, and combos come up more
+    PK_OVERLOAD,  // Double Charges: much harder hits, slower reload
+    PK_AMBUSH,    // her first broadside after a lull hits twice as hard
+    PK_BLOOD,     // Blood in the Water: harder on ships that are already hurt
     PK_COUNT
 };
 constexpr int perkMax = 5;
-inline constexpr uint8_t kPerkMax[PK_COUNT] = {5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 2, 3, 3, 1, 3, 3, 1};
+inline constexpr uint8_t kPerkMax[PK_COUNT] = {5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 2, 3, 3, 1, 3, 3, 1,
+                                               2, 2, 3, 2, 3, 3, 2, 3, 3, 1,
+                                               3, 2, 3, 2, 3, 2,
+                                               2, 2, 3, 3,
+                                               2, 2, 2, 2, 2, 2,
+                                               2, 2, 3, 3, 2, 3, 3,
+                                               3, 1, 3, 2, 3};
 inline const char* const kPerkNames[PK_COUNT] = {"Stout Timbers", "Drilled Gunners", "Heavy Shot", "Clean Hull", "Iron Sheathing", "Ship's Surgeon", "Carpenters",
                                                 "Hot Shot", "Grenado Shells", "Chain Shot", "Double-Shotted", "Prize Crew", "Lucky Charm", "Desperado",
-                                                "Lightning Rod", "Spectral Powder", "Ram Prow", "Powder Kegs", "Quartermaster"};
+                                                "Lightning Rod", "Spectral Powder", "Ram Prow", "Powder Kegs", "Quartermaster",
+                                                "Grapeshot", "Witch's Eye", "Skipping Shot", "Shrapnel", "Long Nines", "Point Blank", "Swivel Guns",
+                                                "Ricochet", "Mortar Deck", "Both Barrels",
+                                                "Return Fire", "Brass Plating", "Boarding Nettings", "Never Say Die", "Salvage Crew", "Smoke Pots",
+                                                "Fair Winds", "Fire Wake", "Running Fight", "Steady As She Goes",
+                                                "Magazine Hit", "Bounty Hunter", "Press Gang", "Rousing Shanty", "Avenger", "Admiral's Pennant",
+                                                "The Black Spot", "Grappling Shot", "Canister Shot", "Cursed Hull", "Siren's Song", "Trident", "Infernals",
+                                                "Lucky Shot", "Treasure Map", "Double Charges", "Ambush", "Blood in the Water"};
 inline const char* const kPerkLines[PK_COUNT] = {"+20% hull", "reload 10% faster", "+15% damage", "+6% speed", "take 12% less damage",
                                                 "bring friends round faster, come back stronger", "mend your hull when out of the fight",
                                                 "your hits set ships ablaze", "your shot bursts: near misses hurt too",
@@ -240,11 +301,36 @@ inline const char* const kPerkLines[PK_COUNT] = {"+20% hull", "reload 10% faster
                                                 "every kill: hull back, guns reloaded", "survive a killing blow, once a round",
                                                 "below 40% hull: much more damage, faster reload", "your hits may call down lightning",
                                                 "your shot goes through islands and friends", "rams: triple damage, none to you",
-                                                "disabled? you blow up and take them with you", "crate power-ups last twice as long, one each round"};
+                                                "disabled? you blow up and take them with you", "crate power-ups last twice as long, one each round",
+                                                "every gun fires extra pellets, fanned wide", "your shot bends toward the nearest enemy",
+                                                "every skip off the water: the ball hits harder", "a hit throws fragments into ships nearby",
+                                                "the further your shot flies, the harder it hits", "close in (70 m), much harder hits",
+                                                "your bow chaser fires three, reloads faster", "a hit bounces on to the next enemy",
+                                                "a deck mortar shells the nearest enemy, by itself", "fire one broadside and the other goes too",
+                                                "hit? a gun may fire straight back", "a chance shot glances off, back at them",
+                                                "stops one hit outright, ready again soon", "disabled? your own crew gets you going, once a round",
+                                                "damage you deal mends your hull", "hit? smoke pours off you: they can't aim",
+                                                "every kill: a burst of speed", "your wake burns: cross it and catch fire",
+                                                "the faster you sail, the harder you hit", "all but stopped: faster reload, harder hits",
+                                                "ships you sink blow up and hurt their friends", "every kill: a crate's power-up",
+                                                "every kill: a stouter hull for the round", "a kill reloads and mends you and friends near you",
+                                                "a friend disabled: rapid fire and barrage", "you and friends near you take less damage",
+                                                "hits mark them: everyone hits them harder", "hits haul them toward you",
+                                                "hits cut down their gun crews: slower guns", "enemies near you (90 m) lose hull every second",
+                                                "enemies are drawn toward you", "a surge rolls out from you, flinging them away",
+                                                "you drop mines astern: they go up close by", "a chance a ball hits four times as hard",
+                                                "a 4th upgrade to choose from; combos come up more", "+30% damage, but reload 15% slower",
+                                                "your first broadside after a lull: double damage", "harder hits on ships below half hull"};
 inline bool PerkMechanical(int p) { return p >= PK_HOTSHOT; }
 // two upgrades that work together: both taken, the combo's on
 struct Combo { uint8_t a, b; const char* name; const char* line; };
-enum ComboId : uint8_t { CB_FIRESTORM = 0, CB_SURGE, CB_DEVIL, CB_PLUNDER, CB_JUGGERNAUT, CB_KAMIKAZE, CB_WISP, CB_ARSENAL, CB_COUNT };
+enum ComboId : uint8_t {
+    CB_FIRESTORM = 0, CB_SURGE, CB_DEVIL, CB_PLUNDER, CB_JUGGERNAUT, CB_KAMIKAZE, CB_WISP, CB_ARSENAL,
+    CB_CLUSTER, CB_SWARM, CB_SHATTER, CB_PINBALL, CB_THUNDER, CB_GETOVER, CB_BLACKDEATH, CB_RIPTIDE, CB_TRAP,
+    CB_UNDYING, CB_BLOODTHIRST, CB_WHIRLWIND, CB_RETRIB, CB_MARTYR, CB_DEADEYE, CB_INFERNO, CB_BERSERK,
+    CB_GHOST, CB_DISMAST, CB_ADMIRAL, CB_COMET, CB_HITRUN, CB_MANOWAR, CB_PIRATEKING, CB_DEPTH, CB_PLATFORM,
+    CB_COUNT
+};
 inline const Combo kCombos[CB_COUNT] = {
     {PK_HOTSHOT, PK_GRENADO, "Firestorm", "your bursts set everything they catch ablaze"},
     {PK_LIGHTNING, PK_CHAIN, "Storm Surge", "struck ships are chained, chained ships struck twice as often"},
@@ -254,6 +340,32 @@ inline const Combo kCombos[CB_COUNT] = {
     {PK_RAM, PK_KEGS, "Kamikaze", "ramming sets off a keg, and you live"},
     {PK_SPECTRAL, PK_HOTSHOT, "Will-o'-the-Wisp", "fire leaps from ship to ship"},
     {PK_QUARTER, PK_ECHO, "Arsenal", "start every round with two power-ups"},
+    {PK_GRAPE, PK_GRENADO, "Cluster Shot", "every pellet bursts too"},
+    {PK_GRAPE, PK_HOMING, "Seeker Swarm", "your pellets hunt them three times as hard"},
+    {PK_SHRAPNEL, PK_GRENADO, "Shatterstorm", "the fragments burst too, and there are more"},
+    {PK_RICOCHET, PK_BRASS, "Pinball", "shot that glances off you ricochets on; every bounce hits harder"},
+    {PK_MORTAR, PK_LIGHTNING, "Thunderhead", "every mortar shell calls down lightning"},
+    {PK_GRAPPLE, PK_POINT, "Get Over Here", "haul three times as hard; point blank reaches twice as far"},
+    {PK_SPOT, PK_CURSED, "Black Death", "the curse finds marked ships anywhere, and the mark spreads"},
+    {PK_SIREN, PK_TRIDENT, "Riptide", "your surges hit three times as hard, and chain them"},
+    {PK_SIREN, PK_MINES, "Siren's Trap", "your mines drift toward them"},
+    {PK_NEVERDIE, PK_CHARM, "Undying", "your crew has you going in 5 s, at full hull"},
+    {PK_SALVAGE, PK_BLOOD, "Bloodthirst", "triple the salvage from ships below half hull"},
+    {PK_BOTH, PK_SWIVEL, "Whirlwind", "every gun you have fires at once"},
+    {PK_RETURN, PK_NETTING, "Retribution", "a hit your nettings stop is answered with three"},
+    {PK_AVENGER, PK_KEGS, "Martyr", "a friend disabled: a keg goes off where she lies"},
+    {PK_LONG, PK_LUCKY, "Deadeye", "shot that's flown 200 m is always lucky"},
+    {PK_MAGAZINE, PK_HOTSHOT, "Chain of Fire", "the blasts set everything they catch ablaze"},
+    {PK_OVERLOAD, PK_DESPERADO, "Berserker", "below 40% hull, double charges reload fast"},
+    {PK_AMBUSH, PK_SMOKE, "Ghost Ship", "an ambush every 2 s, in a cloak of smoke"},
+    {PK_CANISTER, PK_CHAIN, "Dismasted", "chained ships' guns fall silent"},
+    {PK_PENNANT, PK_SHANTY, "Fleet Admiral", "the shanty reaches every friend; the pennant twice as far"},
+    {PK_FIREWAKE, PK_SPEED, "Comet", "your wake burns twice as wide and twice as hot"},
+    {PK_FAIRWIND, PK_RUNNING, "Hit and Run", "kills reload your guns; fair winds last twice as long"},
+    {PK_PRESS, PK_HULL, "Man-o'-War", "press gangs bring twice the hull, and mend it"},
+    {PK_BOUNTY, PK_QUARTER, "Pirate King", "every bounty is all three power-ups"},
+    {PK_SKIP, PK_GRENADO, "Depth Charge", "every skip off the water bursts"},
+    {PK_STEADY, PK_MORTAR, "Gun Platform", "hove to, the mortar fires three times as fast"},
 };
 inline bool HasCombo(const uint8_t* perks, int c) { return perks[kCombos[c].a] > 0 && perks[kCombos[c].b] > 0; }
 // the combo taking this upgrade would complete (-1: none)
@@ -262,8 +374,9 @@ inline int CompletesCombo(const uint8_t* perks, int p) {
         if (!HasCombo(perks, c) && ((kCombos[c].a == p && perks[kCombos[c].b]) || (kCombos[c].b == p && perks[kCombos[c].a]))) return c;
     return -1;
 }
-// three to choose from: the same on the server and on every client (the run's seed, the round, the ship), none maxed
-void PerkOffers(uint32_t runSeed, int round, int shipId, const uint8_t* have, uint8_t out[3]);
+inline int PerkOfferCount(const uint8_t* have) { return 3 + (have[PK_MAP] ? 1 : 0); }  // (the Treasure Map: a fourth)
+// three (or four) to choose from: the same on the server and on every client (the run's seed, the round, the ship), none maxed
+void PerkOffers(uint32_t runSeed, int round, int shipId, const uint8_t* have, uint8_t out[4]);
 // (boss: co-op against one of the bosses below, picked by the host or at random each round)
 enum BossKind : uint8_t {
     BOSS_LEVIATHAN = 0,  // a man-o'-war three times over, firing patterns of shot
@@ -523,6 +636,7 @@ struct PendingShot {
     bool ownAim = false;            // crew mode: a crewman laid this gun himself...
     Vector3 aim{};                  // ...this way
     int16_t crew = -1;              // (and gets the credit)
+    bool pellet = false;            // Grapeshot: a pellet, a share of a ball
 };
 
 // ---- crew mode ----------------------------------------------------------------
@@ -624,6 +738,17 @@ struct Ship {
     uint8_t charmUsed = 0;         // ...charms spent this round
     float kegCd = 0.0f;            // Kamikaze: s until a ram can set off another keg
     bool plunder = false;          // Plunderer: the next broadside fires twice
+    float mortarT = 0.0f;          // Mortar Deck: s to the next shell
+    float wardT = 0.0f;            // Boarding Nettings: s until they're rigged again (0: ready)
+    float selfT = 0.0f;            // Never Say Die: s her own crew have been at it
+    uint8_t selfUsed = 0;          // ...times this round
+    float smokeT = 0.0f;           // Smoke Pots: s of smoke left
+    float markT = 0.0f, markMul = 1.0f;  // the Black Spot on her: s left, and what she takes for it
+    int16_t markBy = -1;           // ...whose
+    float pressBonus = 0.0f;       // Press Gang: hull gained this round (a fraction)
+    float ambushT = 0.0f;          // Ambush: s of this broadside's guns still firing double
+    float sinceFire = 99.0f;       // s since her last broadside (Ambush)
+    float surgeT = 0.0f, mineT = 0.0f, wakeT = 0.0f, auraT = 0.0f;  // Trident, Infernals, Fire Wake, Cursed Hull / Siren: their clocks
     float reviveT = 0.0f; // ...s of that so far
     int revived = 0;      // ...times she's been brought round this round (each takes half as long again as the last)
     float harbourCd = 0.0f;   // s until a harbour will repair her again
@@ -681,6 +806,12 @@ struct Ball {
     int skips = 0;
     int16_t crew = -1;  // crew mode: the crewman who fired it
     float splash = 0.0f;  // boss mode: a mortar shell, bursting where it lands with this radius (m)
+    // the Odyssey's upgrades at work on it
+    Vector3 origin{};     // where it was fired from (Long Nines, Point Blank)
+    uint16_t ignore = 0xFFFF;  // a ship it can't hit (the one it just came off: fragments, ricochets)
+    uint8_t bounces = 0;  // Ricochet: hits it can still bounce on from
+    float homing = 0.0f;  // Witch's Eye: how hard it bends (rad/s)
+    bool pellet = false, frag = false, crit = false, mortar = false, ambush = false;
     bool ghost = false;   // boss mode: the Flying Dutchman's spectral shot (passes through islands)
     Vector3 pos{}, vel{};
 };
@@ -819,6 +950,11 @@ public:
     int odWave = 0, odWaves0 = 0;  // the wave we're on, of how many
     float odWaveT = 0.0f;          // s since it came
     float odHullMul = 1.0f;        // the pirates' hulls, this deep in the run
+    struct Mine { Vector3 pos{}; int16_t owner = -1; float t = 0.0f; };
+    std::vector<Mine> mines;       // Infernals: afloat, waiting
+    struct FirePatch { Vector2 p{}; int16_t owner = -1; float t = 0.0f, life = 6.0f, r = 14.0f; };
+    std::vector<FirePatch> fireWake;  // Fire Wake: the sea alight astern of her, a few seconds a patch
+    int perkUse[PK_COUNT] = {}, comboUse[CB_COUNT] = {};  // (tests: how often each has done its work)
     uint8_t voyageFrom = 0, voyageTo = 1;  // the voyage (and an Odyssey leg): from which harbour, to which (voyage::)
     float VoyageGoalS() const;            // how far along the route its harbour is
     int rallies = 0;               // small crews (fewer than three captains): times this round a crew may get her going again alone
@@ -849,6 +985,24 @@ public:
     void KegBlast(Ship& s);
     void CallLightning(Ship& target, int by);
     void OnPerkHit(Ship& target, int owner, Vector3 at, float dmg, bool burst);  // a hit by one of ours: what her upgrades do
+    float PerkDamageMul(const Ball& b, Vector3 at, float targetHpFrac);   // what her upgrades make of a hit
+    void BallPerks(const Ball& b, Ship& target, Vector3 at);  // ...and what they do after it (fragments, ricochets, return fire)
+    std::vector<Ball> ballQueue;   // shot the upgrades fire, into the sea at the end of UpdateBalls (it can't grow while it runs)
+    bool SelfRevives(const Ship& s) const { return s.downed && s.perks[PK_NEVERDIE] > s.selfUsed; }  // Never Say Die: she'll be back
+    static float SelfReviveTime(const Ship& s) { return HasCombo(s.perks, CB_UNDYING) ? 5.0f : 20.0f - 6.0f * (s.perks[PK_NEVERDIE] - 1); }
+    bool PerkFoe(const Ship& O, Vector3 from, float range, Vector3& at, int* ship = nullptr) const;  // the nearest of theirs
+    void LaunchAt(const Ship& O, Vector3 from, Vector3 to, float dmgMul, uint16_t ignore, uint8_t bounces, float speed = 85.0f);
+    void Blast(Vector3 at, int owner, float r, float dmg, bool ignite, int skip = -1);  // a blast: everything of theirs in it
+    void OnPerkKill(Ship& killer, Ship& victim);
+    void OnFriendDown(Ship& v);
+    void UpdateShipPerks(Ship& s, float dt);
+    void UpdateMines(float dt);
+    void UpdateSelfRevive(Ship& s, float dt);
+    void UsePerk(int p) { if (p >= 0 && p < PK_COUNT) perkUse[p]++; }
+    void UseCombo(int c) { if (c >= 0 && c < CB_COUNT) comboUse[c]++; }
+    void TestKnockOut(Ship& s) { Damage(s, 1e6f, -1); }  // (tests)
+    void TestRoundPowers(Ship& s) { GiveRoundPowers(s); }
+    void PerkFxAt(int kind, int a, int b, Vector3 pos, float value = 0.0f);
     void GiveRoundPowers(Ship& s);  // Quartermaster (and Arsenal): a power-up or two to start the round with
     float bossHpNow = 0.0f, bossHpMax = 1.0f;  // its hull (the Leviathan: its ship's; the others keep their own)
     Vector3 bossPos{};                    // where it is

@@ -367,6 +367,8 @@ public:
     int odRound = 1, odLast = 0, odBest = 0, odKind = 0, odWave = 0, odWaves = 0, voyageFrom = 0, voyageTo = 1;
     bool odWon = false;
     uint32_t odSeed = 1;
+    std::vector<Vector2> mines;     // the Infernals afloat
+    void DrawMines();
     void DrawPerkPicker(float W, float H);
     void PickPerkUi(int k);
     bool curSkills = false;
@@ -1149,6 +1151,7 @@ void Game::Interpolate() {
         voyageTo = sn.odyssey ? sn.voyageTo : voyage::endHarbour;
         odWave = sn.odWave;
         odWaves = sn.odWaves;
+        mines = sn.mines;
     }
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
@@ -1271,10 +1274,10 @@ void Game::UpdateInput(float dt) {
         else DisableCursor();
     }
     if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
-    for (int c = 0; c < SC_PLAYABLE; ++c)
+    for (int c = 0; c < std::max((int)SC_PLAYABLE, 4); ++c)
         if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) {
             if (odyssey && matchState == 1 && odWon) PickPerkUi(c);  // (the Odyssey, between rounds: the upgrades)
-            else PickClass(c);
+            else if (c < SC_PLAYABLE) PickClass(c);
         }
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
@@ -2823,6 +2826,64 @@ void Game::PlayEvent(const GameEvent& e) {
                 case PFX_ECHO:
                     if (mine) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "DOUBLE-SHOTTED!", ui::kGold, 1.2f});
                     break;
+                case PFX_DEFLECT:  // Brass Plating: it glanced off
+                    for (int i = 0; i < 16; ++i) fx.Add(fx::Spark, e.pos, Vector3Add(RandDir(Rnd(8, 18)), {0, Rnd(2, 8), 0}), 0.35f, 0.3f, 0, {255, 214, 120, 255});
+                    sfx::Play(sfx::RockHit, e.pos, 0.7f, 1.6f);
+                    if (e.a == myId || e.b == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), e.a == myId ? "CLANG! RIGHT BACK AT THEM" : "DEFLECTED!", {255, 214, 120, 255}, 1.4f});
+                    break;
+                case PFX_WARD:  // Boarding Nettings: stopped dead
+                    for (int i = 0; i < 12; ++i) {
+                        fx::Particle& q = fx.Add(fx::Debris, e.pos, Vector3Add(RandDir(Rnd(3, 8)), {0, Rnd(2, 6), 0}), Rnd(0.8f, 1.6f), Rnd(0.3f, 0.6f), 0, {200, 180, 140, 255});
+                        q.spin = Rnd(-300, 300);
+                    }
+                    if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 12, 0}), "THE NETTINGS HOLD", {200, 220, 255, 255}, 1.4f});
+                    break;
+                case PFX_CRIT:  // Lucky Shot
+                    fx.Add(fx::Flash, e.pos, {0, 0, 0}, 0.25f, 18.0f, 0, ui::kGold);
+                    for (int i = 0; i < 20; ++i) fx.Add(fx::Spark, e.pos, Vector3Add(RandDir(Rnd(6, 16)), {0, Rnd(4, 10), 0}), Rnd(0.5f, 1.0f), 0.3f, 0, ui::kGold);
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "LUCKY SHOT! x4", ui::kGold, 1.4f});
+                    break;
+                case PFX_SURGE: {  // Trident: a ring of sea thrown outward
+                    const float r = e.value > 0.0f ? e.value : 60.0f;
+                    AddFoam(e.pos, 3.0f, r, 6.0f, 1.0f);
+                    for (int i = 0; i < 90; ++i) {
+                        const float a = Rnd(0.0f, 2.0f * PI), d = Rnd(0.3f, 1.0f) * r;
+                        Vector3 p = {e.pos.x + sinf(a) * d, Ocean().Height(e.pos.x + sinf(a) * d, e.pos.z + cosf(a) * d), e.pos.z + cosf(a) * d};
+                        Emit(p, {sinf(a) * Rnd(8, 16), Rnd(6, 16), cosf(a) * Rnd(8, 16)}, Rnd(0.8f, 1.6f), Rnd(0.8f, 1.6f), 0.6f, {225, 240, 250, 220}, 0);
+                    }
+                    sfx::Play(sfx::Slam, e.pos, 0.8f, 1.2f);
+                    if (myId >= 0 && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < r) shake = fmaxf(shake, 0.5f);
+                    break;
+                }
+                case PFX_MINE:  // Infernals: one went up
+                    for (int i = 0; i < 60; ++i) Emit(e.pos, {Rnd(-6, 6), Rnd(12, 30), Rnd(-6, 6)}, Rnd(1.0f, 2.2f), Rnd(0.8f, 1.6f), 0.6f, {235, 245, 250, 220}, 0);
+                    AddFoam(e.pos, 3.0f, 26.0f, 5.0f, 1.0f);
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "MINE!", {255, 150, 60, 255}, 1.2f});
+                    break;
+                case PFX_BLAST:  // a blast (Magazine Hit, Depth Charge, the Infernals, Martyr)
+                    if (e.value >= 30.0f) fx.BigExplosion(e.pos);
+                    else fx.Explosion(e.pos, {0, 1, 0}, Clamp(e.value / 10.0f, 1.0f, 2.5f));
+                    sfx::Play(sfx::Slam, e.pos, e.value >= 30.0f ? 0.9f : 0.5f, e.value >= 30.0f ? 0.7f : 1.1f);
+                    if (myId >= 0 && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < e.value * 2.5f) shake = fmaxf(shake, e.value >= 30.0f ? 1.0f : 0.4f);
+                    break;
+                case PFX_UP:  // Press Gang / Rousing Shanty
+                    if (e.b == PK_PRESS && mine) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("PRESS GANG: +%d%% HULL", (int)roundf(e.value * 100.0f)), ui::kGreen, 1.6f});
+                    if (e.b == PK_SHANTY && mine) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "A SHANTY! GUNS LOADED", ui::kGreen, 1.6f});
+                    break;
+                case PFX_MARK:  // the Black Spot
+                    for (int i = 0; i < 10; ++i) Emit(Vector3Add(e.pos, {0, 6, 0}), {Rnd(-2, 2), Rnd(2, 5), Rnd(-2, 2)}, Rnd(1.0f, 1.8f), Rnd(1.0f, 2.0f), 1.0f, {20, 16, 18, 220}, 1);
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "THE BLACK SPOT", {200, 190, 200, 255}, 1.2f});
+                    break;
+                case PFX_AMBUSH:
+                    if (mine && e.value <= 0.0f) floats.push_back({Vector3Add(e.pos, {0, 18, 0}), "AMBUSH! DOUBLE DAMAGE", {255, 120, 90, 255}, 1.2f});
+                    break;
+                case PFX_BOUNTY:  // Bounty Hunter (255: all three), Avenger (254)
+                    if (mine) {
+                        const char* what = e.b == 254 ? "AVENGE HER! RAPID FIRE + BARRAGE" : e.b == 255 ? "PIRATE KING! EVERY POWER-UP" : TextFormat("BOUNTY: %s", TextToUpper(Scenery::PowerName(e.b)));
+                        floats.push_back({Vector3Add(e.pos, {0, 20, 0}), what, e.b == 254 ? Color{255, 120, 90, 255} : ui::kGold, 1.8f});
+                        sfx::PlayFlat(sfx::Chime, 0.7f, 1.2f);
+                    }
+                    break;
                 case PFX_PRIZE:
                     if (mine) {
                         floats.push_back({Vector3Add(e.pos, {0, 18, 0}), "PRIZE! HULL BACK, GUNS LOADED", ui::kGreen, 2.0f});
@@ -2843,6 +2904,13 @@ void Game::PlayEvent(const GameEvent& e) {
             else if (e.a < NumShips() && view[e.a].present && !(view[e.a].s.flags & SF_BOT)) Feed3(NameOf(e.a), TextFormat("  takes %s", kPerkNames[e.b % PK_COUNT]), "", TeamOf(e.a), ui::kText);
             break;
         case EventType::Revive:
+            if (e.flags & 2) {  // Never Say Die
+                Feed3(NameOf(e.a), "  never says die!", "", TeamOf(e.a), ui::kGreen);
+                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "NEVER SAY DIE!", ui::kGreen, 2.6f});
+                fx.Add(fx::Flash, Vector3Add(e.pos, {0, 6, 0}), {0, 0, 0}, 0.3f, 24.0f, 0, ui::kGreen);
+                sfx::PlayFlat(sfx::Confirm, 0.9f, 0.7f);
+                break;
+            }
             if (e.flags & 1) {  // a small crew's rally
                 Feed3(NameOf(e.a), "'s crew gets her going again!", "", TeamOf(e.a), ui::kGreen);
                 if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "YOUR CREW RALLIES", ui::kGreen, 2.6f});
@@ -4036,6 +4104,7 @@ void Game::RenderWorld(float dt, bool menu) {
         }
     }
     DrawCrates(menu);
+    if (!menu) DrawMines();
     if (!menu && curMode == MODE_RACE) DrawRaceGates(false);
 
     // ships
@@ -4831,15 +4900,31 @@ void Game::DrawHUD() {
         Label(t.c_str(), 24 + 14, H - 24 - 134 - 18, 11, kGreen);
     }
     // ---- the Odyssey: our upgrades, over the status card ----
-    if (me && odyssey) {
-        std::string t;
+    if (me && odyssey) {  // (top left, under the connection line: clear of the power-up timers; as many lines as it takes)
+        const float maxW = Clamp(W * 0.5f - 400.0f - 24.0f, 260.0f, 620.0f);  // (clear of the boss bar, top centre)
+        float y = 50.0f;
+        auto lines = [&](const std::vector<std::string>& items, const char* head, Color c) {
+            std::string line = head;
+            for (const std::string& it : items) {
+                std::string next = line + (line == head ? "" : "   \xC2\xB7   ") + it;
+                if (line != head && MeasureLabel(next.c_str(), 10).x > maxW) {
+                    Label(line.c_str(), 24, y, 10, c);
+                    y += 14.0f;
+                    line = it;
+                } else line = next;
+            }
+            if (line != head && !line.empty()) {
+                Label(line.c_str(), 24, y, 10, c);
+                y += 16.0f;
+            }
+        };
+        std::vector<std::string> ups, cos;
         for (int p = 0; p < PK_COUNT; ++p)
-            if (me->perks[p]) t += TextFormat("%s%s%s", t.empty() ? "" : "   Â·   ", TextToUpper(kPerkNames[p]), me->perks[p] > 1 ? TextFormat(" x%d", me->perks[p]) : "");
-        if (!t.empty()) Label(t.c_str(), 24, 50, 10, kGold);  // (top left, under the connection line: clear of the power-up timers)
-        std::string c;
+            if (me->perks[p]) ups.push_back(std::string(TextToUpper(kPerkNames[p])) + (me->perks[p] > 1 ? TextFormat(" x%d", me->perks[p]) : ""));
         for (int k = 0; k < CB_COUNT; ++k)
-            if (HasCombo(me->perks, k)) c += TextFormat("%s%s", c.empty() ? "COMBOS   " : "   \xC2\xB7   ", TextToUpper(kCombos[k].name));
-        if (!c.empty()) Label(c.c_str(), 24, 66, 10, {150, 200, 255, 255});
+            if (HasCombo(me->perks, k)) cos.push_back(TextToUpper(kCombos[k].name));
+        lines(ups, "", kGold);
+        lines(cos, "COMBOS   ", {150, 200, 255, 255});
     }
     // ---- status card ----
     if (me) {
@@ -6886,6 +6971,22 @@ void Game::DrawSearchlight(const Camera3D& cam) {
     EndBlendMode();
 }
 
+// The Infernals afloat: a black iron sphere riding the swell, a red lamp blinking on it
+void Game::DrawMines() {
+    const float tt = (float)GetTime();
+    for (size_t k = 0; k < mines.size(); ++k) {
+        const Vector2 m = mines[k];
+        const Vector3 p = {m.x, Ocean().Height(m.x, m.y) + 0.4f, m.y};
+        DrawSphere(p, 1.5f, {14, 14, 16, 255});
+        for (int i = 0; i < 5; ++i) {  // its horns
+            const Vector3 d = i < 2 ? Vector3{(i ? 1.0f : -1.0f), 0, 0} : i < 4 ? Vector3{0, 0, (i == 3 ? 1.0f : -1.0f)} : Vector3{0, 1, 0};
+            DrawCylinderEx(Vector3Add(p, Vector3Scale(d, 1.2f)), Vector3Add(p, Vector3Scale(d, 2.1f)), 0.22f, 0.12f, 6, {30, 26, 22, 255});
+        }
+        const bool on = fmodf(tt * 2.0f + k * 0.37f, 1.0f) < 0.35f;
+        if (on) fx.Lantern(Vector3Add(p, {0, 2.3f, 0}), 1.6f + Vector3Distance(rv.pos, p) * 0.003f, {255, 60, 40, 230});
+    }
+}
+
 // The Armada's fire ships: alight from end to end
 void Game::FireshipFx(float dt) {
     for (int id = 0; id < NumShips(); ++id) {  // the upgrades at work: Hot Shot's fires, the Lucky Charm's glow, Chain Shot's torn canvas
@@ -6901,6 +7002,44 @@ void Game::FireshipFx(float dt) {
             fx::Particle& q = fx.Add(fx::Debris, HullToWorld(s.pos, s.rot, {Rnd(-3, 3), Rnd(14, 24), Rnd(-6, 6)}, ScaleOf(id)), Vector3Add(s.vel, {Rnd(-2, 2), -1.0f, Rnd(-2, 2)}),
                                      Rnd(1.0f, 2.0f), Rnd(0.8f, 1.4f), 0, {214, 204, 180, 255});
             q.spin = Rnd(-300, 300);
+        }
+        if (s.smoked && Rnd(0.0f, 1.0f) < dt * 14.0f) {  // Smoke Pots: billowing off her
+            fx::Particle& q = fx.Add(fx::Smoke, HullToWorld(s.pos, s.rot, {Rnd(-5, 5), Rnd(3, 8), Rnd(-14, 14)}, ScaleOf(id)), Vector3Add(s.vel, {Rnd(-2, 2), Rnd(1, 3), Rnd(-2, 2)}),
+                                     Rnd(3.0f, 5.0f), Rnd(5.0f, 9.0f), 3.0f, {200, 204, 208, 200});
+            q.drag = 0.5f;
+        }
+        if (s.marked && Rnd(0.0f, 1.0f) < dt * 5.0f) {  // the Black Spot: a dark wisp over her
+            fx::Particle& q = fx.Add(fx::Smoke, Vector3Add(s.pos, {Rnd(-3, 3), Rnd(22, 28), Rnd(-3, 3)}), {0, 1.0f, 0}, Rnd(1.5f, 2.5f), Rnd(2.0f, 3.0f), 1.0f, {12, 10, 12, 220});
+            q.drag = 1.0f;
+        }
+        const float sp2 = s.vel.x * s.vel.x + s.vel.z * s.vel.z;
+        if (s.perks[PK_FIREWAKE]) {  // Fire Wake: the sea astern of her alight, a trail that burns a few seconds
+            static std::vector<std::vector<Vector4>> trails;  // (per ship: x, z, the time it was laid, how wide)
+            if ((int)trails.size() < NumShips()) trails.resize(NumShips());
+            std::vector<Vector4>& tr = trails[id];
+            const float now = (float)GetTime(), wide = HasCombo(s.perks, CB_COMET) ? 1.6f : 1.0f, life = HasCombo(s.perks, CB_COMET) ? 9.0f : 6.0f;
+            if (sp2 > 16.0f && (tr.empty() || now - tr.back().z > 0.5f)) {
+                const Vector3 p = HullToWorld(s.pos, s.rot, {0.0f, 0.0f, -24.0f}, ScaleOf(id));
+                tr.push_back({p.x, p.z, now, wide});
+            }
+            while (!tr.empty() && now - tr.front().z > life) tr.erase(tr.begin());
+            for (const Vector4& f : tr) {  // (flames licking up off the water, dying down as the patch burns out)
+                const float age = (now - f.z) / life;
+                Vector3 p = {f.x + Rnd(-7, 7) * f.w, 0.0f, f.y + Rnd(-7, 7) * f.w};
+                p.y = Ocean().Height(p.x, p.z) + 0.3f;
+                fx.ShipFire(p, 0.45f * f.w * (1.0f - age), dt, {0, 0, 0});
+            }
+        }
+        if (s.perks[PK_CURSED] && Rnd(0.0f, 1.0f) < dt * 10.0f) {  // Cursed Hull: a ghostly green mist about her
+            const float a = Rnd(0.0f, 2.0f * PI), d = Rnd(20.0f, 55.0f);
+            Vector3 p = {s.pos.x + sinf(a) * d, 0.0f, s.pos.z + cosf(a) * d};
+            p.y = Ocean().Height(p.x, p.z) + 1.0f;
+            fx::Particle& q = fx.Add(fx::Smoke, p, {0, 0.6f, 0}, Rnd(2.5f, 4.0f), Rnd(4.0f, 7.0f), 1.5f, {120, 230, 160, 90});
+            q.drag = 1.0f;
+        }
+        if (s.warded && Rnd(0.0f, 1.0f) < dt * 2.0f) {  // the nettings rigged: a glint along her rail
+            fx::Particle& q = fx.Add(fx::Spark, HullToWorld(s.pos, s.rot, {Rnd(-5, 5), 8.0f, Rnd(-12, 12)}, ScaleOf(id)), {0, 0.5f, 0}, 0.6f, 0.35f, 0, {200, 220, 255, 255});
+            q.drag = 1.0f;
         }
     }
     if (curMode != MODE_BOSS || !bossView.hasBoss || bossView.bossKind != BOSS_ARMADA) return;
@@ -7091,11 +7230,12 @@ void Game::DrawPerkPicker(float W, float H) {
     using namespace ui;
     if (!odyssey || !odWon || matchState != 1 || myId < 0 || myId >= NumShips() || !view[myId].present || crewId >= 0) return;
     const NetShip& me = view[myId].s;
-    uint8_t offer[3];
+    uint8_t offer[4];
     PerkOffers(odSeed, odLast, myId, me.perks, offer);
-    const float cw = fminf(300.0f, (W - 120.0f) / 3.0f), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (3 * cw + 2 * gap) * 0.5f, y = H - 300.0f;
-    Label(me.picked ? "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON" : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 / 2 / 3)", odLast), W * 0.5f, y - 24, 13, kGold, Center);
-    for (int k = 0; k < 3; ++k) {
+    const int N = PerkOfferCount(me.perks);
+    const float cw = fminf(300.0f, (W - 120.0f) / N), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (N * cw + (N - 1) * gap) * 0.5f, y = H - 300.0f;
+    Label(me.picked ? "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON" : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 - %d)", odLast, N), W * 0.5f, y - 24, 13, kGold, Center);
+    for (int k = 0; k < N; ++k) {
         if (offer[k] == 255) continue;
         Rectangle r = {x0 + k * (cw + gap), y, cw, ch};
         const bool hot = !me.picked && CheckCollisionPointRec(GetMousePosition(), r);
@@ -7103,17 +7243,19 @@ void Game::DrawPerkPicker(float W, float H) {
         if (hot) DrawRectangleRoundedLines(r, 12.0f / r.height * 2.0f, 8, kGold);
         Text(TextFormat("%d", k + 1), r.x + 16, r.y + 12, 18, kGold, true);
         const Color special = {150, 200, 255, 255};
-        Text(kPerkNames[offer[k]], r.x + 42, r.y + 12, 20, me.picked ? kDim : PerkMechanical(offer[k]) ? special : kText, true);
-        Text(kPerkLines[offer[k]], r.x + 16, r.y + 42, 15, kDim, false);
+        const float nameSz = Measure(kPerkNames[offer[k]], 20, true).x > cw - 58 ? 17.0f : 20.0f, lineSz = Measure(kPerkLines[offer[k]], 15).x > cw - 28 ? 13.0f : 15.0f;  // (the long ones a size down)
+        Text(kPerkNames[offer[k]], r.x + 42, r.y + 12 + (20.0f - nameSz) * 0.5f, nameSz, me.picked ? kDim : PerkMechanical(offer[k]) ? special : kText, true);
+        Text(kPerkLines[offer[k]], r.x + 16, r.y + 42, lineSz, kDim, false);
         const int have = me.perks[offer[k]], combo = CompletesCombo(me.perks, offer[k]);
         if (combo >= 0) {
             Label(TextFormat("COMPLETES  %s", TextToUpper(kCombos[combo].name)), r.x + 16, r.y + 64, 11, kGold);
-            Text(kCombos[combo].line, r.x + 16, r.y + 78, 12, A(kGold, 0.8f), false);
+            Text(kCombos[combo].line, r.x + 16, r.y + 78, Measure(kCombos[combo].line, 12).x > cw - 28 ? 10.5f : 12.0f, A(kGold, 0.8f), false);
         } else {
             for (int c = 0; c < CB_COUNT; ++c)  // (half a combo: what it would go with)
                 if ((kCombos[c].a == offer[k] || kCombos[c].b == offer[k]) && !HasCombo(me.perks, c)) {
                     const int other = kCombos[c].a == offer[k] ? kCombos[c].b : kCombos[c].a;
-                    Label(TextFormat("+ %s = %s", TextToUpper(kPerkNames[other]), TextToUpper(kCombos[c].name)), r.x + 16, r.y + 66, 10, A(special, 0.8f));
+                    const std::string on = TextToUpper(kPerkNames[other]), cn = TextToUpper(kCombos[c].name);  // (TextToUpper shares one buffer)
+                    Label(TextFormat("+ %s = %s", on.c_str(), cn.c_str()), r.x + 16, r.y + 66, 10, A(special, 0.8f));
                     break;
                 }
             Label(have ? TextFormat("YOU HAVE %d   \xC2\xB7   UP TO %d", have, kPerkMax[offer[k]]) : PerkMechanical(offer[k]) ? "NEW   \xC2\xB7   CHANGES HOW YOU FIGHT" : "NEW",

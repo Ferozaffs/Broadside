@@ -753,3 +753,19 @@ If the session runs out of tokens, continue when they refresh.
   "COMPLETES <COMBO>" or "+ <OTHER> = <COMBO>"; the HUD lists the upgrades and the combos. Burning ships flame (the
   fire ship's fire), the charmed sparkle gold, the chained shed canvas; bolts are drawn outside the Storm Caller's
   fight now. Snapshot: perks packed into 64 bits, burning / chained / charmed in the state byte.
+
+## Three times the upgrades (2026-11-18, user: "Need more powerups like 3x the amount")
+- [x] 38 more (57 in all), and 26 more combos (34): the guns (Grapeshot, Witch's Eye, Skipping Shot, Shrapnel, Long
+  Nines, Point Blank, Swivel Guns, Ricochet, Mortar Deck, Both Barrels), the hull (Return Fire, Brass Plating, Boarding
+  Nettings, Never Say Die, Salvage Crew, Smoke Pots), the sailing (Fair Winds, Fire Wake, Running Fight, Steady As She
+  Goes), the kills (Magazine Hit, Bounty Hunter, Press Gang, Rousing Shanty, Avenger, Admiral's Pennant), curses (the
+  Black Spot, Grappling Shot, Canister Shot, Cursed Hull, Siren's Song, Trident, Infernals), and Lucky Shot, Treasure
+  Map (a fourth card), Double Charges, Ambush, Blood in the Water.
+- [x] The extra guns (Grapeshot, Swivel Guns, Both Barrels / Whirlwind) are queued as PendingShots without dice, so
+  the client predicts their recoil; ReloadTime takes Steady / Double Charges / Berserker / Swivel. Shot the upgrades
+  fire mid-UpdateBalls (fragments, ricochets, return fire, deflections, mortar shells) goes through World::ballQueue
+  (balls can't grow while it's iterated). Ball: origin, ignore, bounces, homing, pellet / frag / crit / mortar / ambush.
+- [x] Snapshot: perks as a list (id, stacks), a second state byte (nettings rigged, marked, smoked), the mines in the
+  Odyssey block. The HUD's upgrade list wraps (and its separator was mojibake: fixed).
+- [x] BS_PERKTEST=1 --simtest: each upgrade and combo alone through the first sea battle - how often it did its work
+  (World::perkUse / comboUse), the battle's length against none.
