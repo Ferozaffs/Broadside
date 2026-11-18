@@ -1176,7 +1176,9 @@ Vector3 LeakStation(Vector3 l) {
 
 float ReloadTime(const Ship& s, int side) {
     if (side == 2) return tune::chaserReload * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f);
-    return ClassOf(s.cls).reload * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f) * (s.pirate ? tune::pirateReload : 1.0f);
+    const float desperate = s.perks[PK_DESPERADO] && s.hp < s.maxHp * 0.4f ? 1.0f - 0.2f * s.perks[PK_DESPERADO] : 1.0f;
+    return ClassOf(s.cls).reload * (s.power[PU_RELOAD] > 0.0f ? tune::rapidReload : 1.0f) * (s.pirate ? tune::pirateReload : 1.0f) *
+           fmaxf(0.3f, (1.0f - 0.1f * s.perks[PK_RELOAD]) * desperate);
 }
 
 bool StepBall(Ball& b, const OceanCPU& ocean, float dt, bool* splashed, bool* skipped) {
@@ -1223,6 +1225,19 @@ float World::RandF() {
 }
 
 void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mode_, bool fleets_, uint8_t arena_) {
+    odyssey = mode_ == MODE_ODYSSEY;  // (a run of rounds, each played as one of the other modes)
+    odRound = 1;
+    odLast = 0;
+    odWon = false;
+    odLeg = 0;
+    odSeed = seed * 2246822519u + 7u;
+    if (odyssey) {
+        odKind = OdKindOf(1);
+        mode_ = odKind == OD_LEG ? MODE_VOYAGE : MODE_BOSS;
+        arena_ = odKind == OD_LEG ? ARENA_PASSAGE : ARENA_ISLES;
+    }
+    voyageFrom = voyage::startHarbour;
+    voyageTo = voyage::endHarbour;
     weather = weather_;
     arena = arena_;
     raceRotate = false;
@@ -1278,6 +1293,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     bossPhase = bossPat = 0;
     bossWait = 0.0f;
     BuildArena();
+    if (odyssey) OdysseySetRound(true);
     for (int i = 0; i < tune::chestSlots; ++i) {
         chests[i] = Crate{};
         chests[i].id = (uint8_t)i;
@@ -1372,6 +1388,16 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         if (mode == MODE_BOSS) {
             ships[i].team = 0;  // (all of us against the Leviathan)
         }
+        if (odyssey && getenv("BS_ODPERKS")) {  // (tests, screenshots: this many of the upgrades that change how you fight)
+            const int n = atoi(getenv("BS_ODPERKS"));
+            for (int k = 0; k < n; ++k) ships[i].perks[PK_HOTSHOT + (i * 7 + k * 5) % (PK_COUNT - PK_HOTSHOT)]++;
+        }
+        if (odyssey && !(matchState == 1 && odWon))
+            for (int k = 1; k < odRound; ++k) {
+                uint8_t offer[3];
+                PerkOffers(odSeed, k, i, ships[i].perks, offer);
+                if (offer[0] != 255) ships[i].perks[offer[0]]++;
+            }
         ships[i].maxHp = MaxHpOf(ships[i]);
         Respawn(ships[i]);
         if (fleets) SpawnFleet(ships[i]);
@@ -1409,7 +1435,7 @@ void World::Respawn(Ship& s) {
             int slot = 0;
             for (const Ship& o : ships)
                 if (o.active && o.leader < 0 && !o.raider && o.id < s.id) ++slot;
-            int h = voyageBest > havenS + 50.0f && havenS > 0.0f && harbours.size() > (size_t)voyage::haven ? voyage::haven : voyage::startHarbour;
+            int h = voyageFrom == voyage::startHarbour && voyageBest > havenS + 50.0f && havenS > 0.0f && harbours.size() > (size_t)voyage::haven ? voyage::haven : voyageFrom;
             PlaceInHarbour(s, h, slot);
         }
         voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
@@ -1496,7 +1522,11 @@ void World::Respawn(Ship& s) {
     s.lost = false;
     s.downed = false;
     s.reviveT = 0.0f;
+    s.revived = 0;
     s.harbourCd = 0.0f;
+    s.burnT = s.burnDps = s.chainT = s.invulnT = s.kegCd = 0.0f;
+    s.charmUsed = 0;
+    s.plunder = false;
     s.harbourWork = false;
     s.booty = 0;
     s.deadTimer = 0;
@@ -1513,6 +1543,7 @@ void World::Respawn(Ship& s) {
     for (Leak& l : s.leaks) l = Leak{};
     for (auto& side : s.gunReload) for (float& g : side) g = 0.0f;
     if (mode == MODE_RACE) PlaceOnGrid(s);
+    if (odyssey) GiveRoundPowers(s);
     GameEvent e{EventType::Respawn};
     e.a = s.id;
     e.pos = s.pos;
@@ -1523,12 +1554,27 @@ void World::Respawn(Ship& s) {
 
 void World::Damage(Ship& v, float amount, int attacker) {
     if (!v.alive || matchState != 0 || RaceHeld()) return;  // (nothing counts on the start line)
+    if (v.invulnT > 0.0f) return;  // (Lucky Charm: a moment untouchable)
     if (mode == MODE_BOSS && v.boss && bossKind == BOSS_ARMADA) {  // the line shields the Admiral
         int line = 0;
         for (const Ship& l : ships) line += l.active && l.alive && l.formation >= 0;
         amount *= line >= 3 ? 0.33f : line >= 1 ? 0.66f : 1.0f;
     }
     if (!friendlyFire && attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // (host option)
+    if (v.perks[PK_ARMOUR]) amount *= powf(0.88f, (float)v.perks[PK_ARMOUR]);
+    if (amount > 0.0f) v.sinceHit = 0.0f;
+    if (v.hp - amount <= 0.0f && v.perks[PK_CHARM] > v.charmUsed && mode != MODE_RACE) {  // Lucky Charm: not this time
+        v.charmUsed++;
+        v.hp = 1.0f;
+        v.invulnT = 3.0f;
+        GameEvent c{EventType::PerkFx};
+        c.a = v.id;
+        c.b = v.id;
+        c.flags = PFX_CHARM;
+        c.pos = v.pos;
+        events.push_back(c);
+        return;
+    }
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
     if (mode == MODE_RACE && v.slowTimer > 0.0f) v.hp = fmaxf(v.hp, 1.0f);  // (crippled already: no piling on)
@@ -1573,7 +1619,24 @@ void World::Damage(Ship& v, float amount, int attacker) {
             v.reviveT = 0.0f;
             v.held = 0.0f;
             v.hooked = -1;
+            v.burnT = v.chainT = 0.0f;
         }
+        if (byEnemy) {  // the upgrades that live on a kill: Prize Crew, and its Plunderer / Devil's Luck combos
+            Ship& K = ships[CaptainOf(killer)];
+            if (K.perks[PK_PRIZE] && K.alive) {
+                K.hp = fminf(K.maxHp, K.hp + K.maxHp * (0.05f + 0.1f * K.perks[PK_PRIZE]));
+                for (float& r : K.reload) r = 0.0f;
+                if (HasCombo(K.perks, CB_PLUNDER)) K.plunder = true;
+                GameEvent pz{EventType::PerkFx};
+                pz.a = K.id;
+                pz.b = v.id;
+                pz.flags = PFX_PRIZE;
+                pz.pos = K.pos;
+                events.push_back(pz);
+            }
+            if (HasCombo(K.perks, CB_DEVIL) && K.charmUsed > 0) K.charmUsed--;
+        }
+        if (v.perks[PK_KEGS]) KegBlast(v);  // (Powder Kegs: she takes them with her)
         if (mode == MODE_VOYAGE && v.raider) teamScore[1]++;  // pirates sunk (by anyone, the rocks included)
         GameEvent e{EventType::Kill};
         e.a = (uint16_t)(killer >= 0 ? killer : NO_SHIP);
@@ -1630,6 +1693,21 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
                     s.pending.push_back({0.07f * i + 0.03f, side, i, -0.04f, 0.012f, false});
                     s.pending.push_back({0.07f * i + 0.05f, side, i, 0.04f, -0.008f, false});
                 }
+            }
+            if (authoritative && s.perks[PK_ECHO] && !s.pending.empty() && (s.plunder || RandF() < 0.25f * s.perks[PK_ECHO])) {  // Double-Shotted: and again
+                const size_t n0 = s.pending.size();
+                for (size_t k = 0; k < n0; ++k) {
+                    PendingShot q = s.pending[k];
+                    q.delay += 0.45f;
+                    s.pending.push_back(q);
+                }
+                s.plunder = false;
+                GameEvent ec{EventType::PerkFx};
+                ec.a = s.id;
+                ec.b = s.id;
+                ec.flags = PFX_ECHO;
+                ec.pos = s.pos;
+                events.push_back(ec);
             }
         }
     }
@@ -1723,7 +1801,13 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     if (nextBallId == 0) nextBallId = 1;
     b.owner = s.id;
     b.airShot = s.submerged <= 0.0f;
-    b.dmgMul = side == 2 ? tune::chaserDamage : ClassOf(s.cls).damage;
+    b.dmgMul = (side == 2 ? tune::chaserDamage : ClassOf(s.cls).damage) * (1.0f + 0.15f * s.perks[PK_SHOT]) *
+               (s.perks[PK_DESPERADO] && s.hp < s.maxHp * 0.4f ? 1.0f + 0.3f * s.perks[PK_DESPERADO] : 1.0f);
+    if (s.perks[PK_GRENADO]) {  // (it bursts where it lands, too)
+        b.splash = 10.0f + 5.0f * s.perks[PK_GRENADO];
+        b.splashMul = 0.4f;
+    }
+    if (s.perks[PK_SPECTRAL]) b.ghost = true;  // (through islands; and friends, below)
     b.crew = shot.crew;
     b.pos = muzzle;
     b.vel = v;
@@ -1878,12 +1962,13 @@ void World::StepShip(Ship& s, float dt) {
         // speed controller along the keel; still pushes a little in the air (it's that kind of game)
         Vector2 fh = Vector2Normalize({fwd.x, fwd.z});
         float windDot = fh.x * oceanParams.windDir.x + fh.y * oceanParams.windDir.y;
-        float top = C.topSpeed * (s.trimmed ? tune::trimSpeed : 1.0f);
+        float top = C.topSpeed * (s.trimmed ? tune::trimSpeed : 1.0f) * (1.0f + 0.06f * s.perks[PK_SPEED]);
         if (s.leader >= 0 && ships[s.leader].active)  // escorts pace their captain, whatever he sails
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
+        if (s.chainT > 0.0f) top *= 0.65f;  // (Chain Shot: her rigging in tatters)
         if (s.formation >= 0) top *= 1.3f;  // (the Armada's line: getting between us and the Admiral)
         if (s.boss && bossKind == BOSS_IRONCLAD && bossState == ic::CHARGE) top *= ic::chargeSpeed;  // (full steam)
         if (s.boss && bossKind == BOSS_DUTCHMAN && bossState != fd::SOLID) top *= 1.8f;  // (ethereal: nothing holds it back)
@@ -2079,13 +2164,30 @@ void World::Collisions() {
                         bool crush = fabsf(n.y) > 0.5f;
                         Ship& top = n.y > 0 ? A : B;
                         Ship& bottom = n.y > 0 ? B : A;
+                        // Ram Prow: hers lands three times (and more) as hard, and none of it comes back
+                        auto ramOut = [](const Ship& x) { return x.perks[PK_RAM] ? 2.0f + x.perks[PK_RAM] : 1.0f; };
+                        auto ramIn = [](const Ship& x) { return x.perks[PK_RAM] ? 0.0f : 1.0f; };
+                        float toA, toB;
                         if (crush) {  // weight tells: a ship of the line dropped on a cutter is the end of the cutter
                             float heavy = sqrtf(Phys(top.cls).mass / Phys(bottom.cls).mass);
-                            Damage(bottom, dmg * 2.0f * heavy, top.id);
-                            Damage(top, dmg * 0.3f, bottom.id);
+                            const float toBottom = dmg * 2.0f * heavy * ramOut(top) * ramIn(bottom), toTop = dmg * 0.3f * ramOut(bottom) * ramIn(top);
+                            toA = &A == &top ? toTop : toBottom;
+                            toB = &B == &top ? toTop : toBottom;
+                            Damage(bottom, toBottom, top.id);
+                            Damage(top, toTop, bottom.id);
                         } else {
-                            Damage(A, dmg, B.id);
-                            Damage(B, dmg, A.id);
+                            toA = dmg * ramOut(B) * ramIn(A);
+                            toB = dmg * ramOut(A) * ramIn(B);
+                            Damage(A, toA, B.id);
+                            Damage(B, toB, A.id);
+                        }
+                        for (Ship* r : {&A, &B}) {
+                            if (!r->perks[PK_RAM] || !r->alive) continue;
+                            if (HasCombo(r->perks, CB_JUGGERNAUT)) r->hp = fminf(r->maxHp, r->hp + 0.3f * (r == &A ? toB : toA));  // (her timbers take the strain)
+                            if (HasCombo(r->perks, CB_KAMIKAZE) && r->kegCd <= 0.0f) {  // (and a keg goes off at the bow)
+                                r->kegCd = 15.0f;
+                                KegBlast(*r);
+                            }
                         }
                         GameEvent e{EventType::Ram};
                         e.a = top.id;
@@ -2216,6 +2318,7 @@ void World::UpdateCrates(float dt) {
             float t = Clamp(Vector3DotProduct(Vector3Subtract(cp, a), ab) / Vector3DotProduct(ab, ab), 0.0f, 1.0f);
             if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 7.0f) continue;
             float dur = tune::powerMin + RandF() * (tune::powerMax - tune::powerMin);
+            if (s.perks[PK_QUARTER]) dur *= 2.0f;  // (Quartermaster: he knows how to stow it)
             s.power[c.type] = fmaxf(s.power[c.type], dur);
             GameEvent e{EventType::Pickup};
             e.a = s.id;
@@ -2260,7 +2363,7 @@ void World::UpdateBalls(float dt) {
                 if (b.owner < ShipCount() && ships[b.owner].active && !Enemies(ships[b.owner], sh)) continue;
                 float d = Vector2Distance({sh.pos.x, sh.pos.z}, {b.pos.x, b.pos.z}) - hull::maxHalfBeam * ClassOf(sh.cls).scale;
                 if (d > b.splash) continue;
-                float dmg = tune::ballDamage * b.dmgMul * (1.0f - 0.6f * Clamp(d / b.splash, 0.0f, 1.0f));
+                float dmg = tune::ballDamage * b.dmgMul * b.splashMul * (1.0f - 0.6f * Clamp(d / b.splash, 0.0f, 1.0f));
                 GameEvent h{EventType::Hit};
                 h.a = b.owner;
                 h.b = sh.id;
@@ -2271,6 +2374,7 @@ void World::UpdateBalls(float dt) {
                 events.push_back(h);
                 ApplyImpulse(sh, {0.0f, tune::ballKnockback * 0.8f, 0.0f}, Vector3Add(sh.pos, {(b.pos.x - sh.pos.x) * 0.2f, 0.0f, (b.pos.z - sh.pos.z) * 0.2f}));
                 Damage(sh, dmg, b.owner);
+                OnPerkHit(sh, b.owner, b.pos, dmg, true);
             }
         }
         // hit test against every ship (owner only after the ball has cleared the hull)
@@ -2280,6 +2384,7 @@ void World::UpdateBalls(float dt) {
             if (s == b.owner && (b.age < 0.4f || sh.boss)) continue;  // (the Leviathan's shot leaves from inside its own long hull)
             if (sh.boss && !BossSolid()) continue;  // (the Dutchman, ethereal: shot goes through)
             if (!friendlyFire && s != b.owner && ships[b.owner].active && !Enemies(ships[b.owner], sh)) continue;  // friends duck (host option)
+            if (b.ghost && s != b.owner && b.owner < ShipCount() && ships[b.owner].active && ships[b.owner].perks[PK_SPECTRAL] && !Enemies(ships[b.owner], sh)) continue;  // (spectral: through friends)
             if (Vector3Distance(sh.pos, b.pos) > 75.0f) continue;
             float S = ClassOf(sh.cls).scale;
             Vector3 h0 = WorldToHull(sh.pos, sh.rot, prev, S);
@@ -2334,6 +2439,7 @@ void World::UpdateBalls(float dt) {
                 } else *slot = {true, hl, fminf(dmg, sh.hp)};
             }
             Damage(sh, dmg, b.owner);
+            OnPerkHit(sh, b.owner, hitPos, dmg, false);
             if (wasAlive && !sh.alive && b.crew >= 0 && b.crew < CrewCount() && crew[b.crew].active) {  // that crewman's shot sank her
                 crew[b.crew].kills++;
                 for (auto it = events.rbegin(); it != events.rend(); ++it)
@@ -2584,11 +2690,11 @@ void World::BotThink(Ship& s, float dt) {
         // wanted speed / top speed); never so slow she loses steerage
         const float err = stationS - sNow;
         in.sail = Clamp((vRef + err * 0.12f) / fmaxf(topOf(s), 1.0f), raid ? 0.25f : err < -30.0f ? 0.0f : 0.15f, 1.0f);  // (voyage: ahead of station and the players stopped - heave to and wait)
-        const Harbour& dest = harbours[voyage::endHarbour];
-        const bool last = sNow > RouteLength() - 700.0f;  // the last stretch: straight in
+        const Harbour& dest = harbours[voyageTo];
+        const bool last = sNow > VoyageGoalS() - 700.0f;  // the last stretch: straight in
         if (last) in.sail = 1.0f;
         if (voyageClock < 3.0f) in.sail = 0.0f;  // (all together: nobody sails before the convoy does)
-        const bool berthing = sNow > RouteLength() - 350.0f;
+        const bool berthing = sNow > VoyageGoalS() - 350.0f;
         if (berthing) {  // in to the harbour at the end, each to a berth of its own (all for one spot, they pile up on the rocks)
             int b = 0;
             for (const Ship& o : ships)
@@ -2598,7 +2704,7 @@ void World::BotThink(Ship& s, float dt) {
             goal = {dest.x + inw.x * back + side.x * across, 0.0f, dest.z + inw.y * back + side.y * across};
             if (flat(goal, s.pos) < 25.0f) in.sail = 0.0f;  // made it: heave to
         }
-        if (aid && !berthing) {  // a friend disabled: go and lie alongside her
+        if (aid) {  // a friend disabled: go and lie alongside her (out of the harbour again if need be)
             goal = aid->pos;
             in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
         }
@@ -2665,7 +2771,7 @@ void World::BotThink(Ship& s, float dt) {
             fight = false;
         }
     }
-    bool lineStands = false;
+    bool lineStands = mode == MODE_BOSS && bossKind == BOSS_PIRATES;  // (the Odyssey's sea battles: ship to ship, as with the Armada's line)
     if (mode == MODE_BOSS && bossKind == BOSS_ARMADA)
         for (const Ship& l : ships) lineStands |= l.active && l.alive && (l.formation >= 0 || l.fireship);
     if (mode == MODE_BOSS && s.team == 0 && s.leader < 0 && bossId >= 0 && bossId < ShipCount() && ships[bossId].active && ships[bossId].alive && !lineStands) {
@@ -2728,6 +2834,7 @@ void World::BotThink(Ship& s, float dt) {
             flee = Vector2Add(flee, Vector2Normalize(Vector2Subtract(me, {bossB.x, bossB.z})));  // (where it's coming down)
         for (const Ball& bl : balls) {
             if (bl.splash <= 0.0f || bl.inWater) continue;
+            if (bl.owner < ShipCount() && ships[bl.owner].active && !Enemies(ships[bl.owner], s)) continue;  // (a friend's shell)
             float t = (bl.vel.y + sqrtf(fmaxf(0.0f, bl.vel.y * bl.vel.y + 2.0f * tune::gravity * bl.pos.y))) / tune::gravity;
             Vector2 land = {bl.pos.x + bl.vel.x * t, bl.pos.z + bl.vel.z * t};
             if (t < 4.0f && Vector2Distance(land, me) < bl.splash + 22.0f) flee = Vector2Add(flee, Vector2Normalize(Vector2Subtract(me, land)));
@@ -2825,10 +2932,10 @@ void World::BotThink(Ship& s, float dt) {
         float range = sqrtf(d.x * d.x + d.z * d.z);
         float sn = Clamp(tune::gravity * range / (MC.muzzleSpeed * MC.muzzleSpeed), -1.0f, 1.0f);
         float elev = 0.5f * asinf(sn) + atan2f(d.y, range);
-        if ((s.raider || s.merchant) && Diff().aimErr > 0.0f) {  // (voyage, Easy: the pirates' gunners are no great shots; their aim wanders)
-            const float t = (float)time, yawErr = Diff().aimErr * sinf(t * 0.9f + s.id * 2.1f), c = cosf(yawErr), sn2 = sinf(yawErr);
+        if ((s.raider || s.merchant) && AimErr() > 0.0f) {  // (voyage, Easy: the pirates' gunners are no great shots; their aim wanders)
+            const float t = (float)time, yawErr = AimErr() * sinf(t * 0.9f + s.id * 2.1f), c = cosf(yawErr), sn2 = sinf(yawErr);
             d = {d.x * c + d.z * sn2, d.y, -d.x * sn2 + d.z * c};
-            elev += 0.6f * Diff().aimErr * sinf(t * 1.3f + s.id * 0.7f);
+            elev += 0.6f * AimErr() * sinf(t * 1.3f + s.id * 0.7f);
         }
         in.aim = AimForElevation({d.x, d.z}, elev);
         int side = GunSide(s.cls, s.rot, in.aim);
@@ -3016,7 +3123,7 @@ int World::AllowedClass(int want) const {
 
 float World::MaxHpOf(const Ship& s) const {
     if (s.leader >= 0) return ClassOf(s.cls).hp;
-    return ClassOf(s.cls).hp + (s.pirate ? tune::pirateHpBonus : 0.0f);
+    return (ClassOf(s.cls).hp + (s.pirate ? tune::pirateHpBonus : 0.0f)) * (1.0f + 0.2f * s.perks[PK_HULL]);
 }
 
 Vector3 World::SlotPos(const Ship& c, int slot) const {
@@ -3419,9 +3526,11 @@ void World::EndRound(bool byLimit) {
     bool anySunk = false;
     for (const Ship& s : ships) anySunk |= s.active && s.leader < 0 && !s.raider && !s.merchant && !s.boss && s.deaths > 0;
     if (anySunk) award(6, [](const Ship& s) { return (float)s.deaths - s.kills * 0.01f; }, true);
+    if (odyssey) OdysseyEnd(voyageWinner == 0);  // (on to the next round, or the run's over)
 }
 
 void World::StartRound() {
+    if (odyssey) OdysseySetRound(false);  // (the mode and the sea may change under us)
     matchState = 0;
     matchClock = roundLength;
     raceClock = 0.0f;
@@ -3481,7 +3590,9 @@ void World::StartRound() {
     for (Ship& s : ships)
         if (s.active && s.leader < 0) Respawn(s);  // fresh hulls, fresh fleets, spread round the bay
     GameEvent e{EventType::MatchStart};
-    e.b = round;
+    e.b = odyssey ? odRound : round;
+    e.a = mode;  // (the Odyssey: the mode this round plays as)
+    e.value = odyssey ? 1.0f : 0.0f;
     e.flags = arena;  // (the clients build the new course too)
     events.push_back(e);
 }
@@ -3753,6 +3864,7 @@ void World::Step() {
     if (mode == MODE_RAID && matchState == 0) UpdateRaid(dt);
     if (mode == MODE_BOSS && matchState == 0) UpdateBoss(dt);
     if ((mode == MODE_BOSS || mode == MODE_VOYAGE) && matchState == 0) UpdateRevives(dt);
+    if (odyssey && matchState == 0) UpdatePerks(dt);
     if (Voyaging() && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
 }
@@ -3814,7 +3926,7 @@ bool World::PlaceInConvoy(Ship& s) {
     return true;
 }
 
-void World::SpawnRaider(Vector2 at, float heading, int cls) {
+void World::SpawnRaider(Vector2 at, float heading, int cls, float hullMul) {
     int j = NewShipSlot();
     if (j < 0) return;
     Ship& p = ships[j];
@@ -3832,7 +3944,7 @@ void World::SpawnRaider(Vector2 at, float heading, int cls) {
     p.name = n < 16 ? std::string(kPirateNames[n]) : std::string(nm);
     p.pos = {at.x, ocean.Height(at.x, at.y) + 1.0f, at.y};
     p.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
-    p.maxHp = p.hp = MaxHpOf(p);
+    p.maxHp = p.hp = MaxHpOf(p) * hullMul;
     p.alive = true;
     p.sail = 1.0f;
     GameEvent e{EventType::Respawn};
@@ -3854,7 +3966,11 @@ void World::UpdateVoyage(float dt) {
         voyageWait += dt;
         if (!aboard && voyageWait < 20.0f) return;
     }
-    if (voyageClock <= 0.0f) RollMonsters();
+    if (voyageClock <= 0.0f) {
+        RollMonsters();
+        rallies = std::max(0, 3 - Captains());  // (a small crew gets a rally or two)
+        rallyT = 0.0f;
+    }
     voyageClock += dt;
     std::vector<const Ship*> afloat;
     int convoy = 0;
@@ -3863,7 +3979,7 @@ void World::UpdateVoyage(float dt) {
         if (!s.active || s.leader >= 0 || s.raider) continue;
         ++convoy;
         humans |= !s.isBot;
-        alive |= s.alive;  // (every one of us disabled at once: the voyage is lost)
+        alive |= s.alive || (rallyT > 0.0f || rallies > 0) && s.downed;  // (every one of us disabled at once: the voyage is lost - unless a small crew rallies)
         if (s.alive) {
             afloat.push_back(&s);
             voyageBest = fmaxf(voyageBest, RouteS(s.pos.x, s.pos.z));
@@ -3871,7 +3987,7 @@ void World::UpdateVoyage(float dt) {
     }
     if (!convoy) return;
     // made it: every (human) convoy ship afloat is in the far harbour, and none is waiting to rejoin
-    const Harbour& dest = harbours[voyage::endHarbour];
+    const Harbour& dest = harbours[voyageTo];
     bool home = !afloat.empty();
     for (const Ship& s : ships) {
         if (!s.active || s.leader >= 0 || s.raider || (humans && s.isBot)) continue;
@@ -3880,6 +3996,11 @@ void World::UpdateVoyage(float dt) {
             continue;
         }
         if (Vector2Distance({s.pos.x, s.pos.z}, {dest.x, dest.z}) > tune::harbourRadius) home = false;
+    }
+    {
+        bool afloatAny = false;
+        for (const Ship& s : ships) afloatAny |= s.active && s.leader < 0 && !s.raider && s.alive;
+        if (!afloatAny && alive && rallyT <= 0.0f && rallies > 0) rallyT = 6.0f;
     }
     if (home || !alive) {
         voyageWinner = home ? 0 : 1;
@@ -3912,7 +4033,7 @@ void World::UpdateVoyage(float dt) {
     const float prog = Clamp(voyageBest / fmaxf(RouteLength(), 1.0f), 0.0f, 1.0f);
     int escorts = 0;
     for (const Ship& e : ships) escorts += e.active && e.alive && !e.stowed && e.leader >= 0 && e.team == 0;
-    int want = std::min(40, (int)ceilf((1.0f + 1.0f * convoy + 0.3f * escorts) * (0.6f + 0.8f * prog) * Diff().pirates));
+    int want = std::min(40, (int)ceilf((1.0f + 1.0f * convoy + 0.3f * escorts) * (0.6f + 0.8f * prog) * PirateMul()));
     if (const char* e = getenv("BS_PIRATES")) want = std::min(want, atoi(e));  // (tests)
     if (pirates >= want) {
         voyageSpawn = 3.0f;
@@ -3946,7 +4067,7 @@ void World::UpdateVoyage(float dt) {
             Vector2 q = {at.x + side.x * off, at.y + side.y * off};
             if (RocksHeight(rocks, q.x, q.y) > -20.0f) q = at;
             float v = RandF();
-            const float big = Clamp(prog + Diff().bigger, -0.4f, 1.4f);  // (further on, or a harder voyage: bigger ships)
+            const float big = Clamp(prog + Bigger(), -0.4f, 1.4f);  // (further on, or a harder voyage: bigger ships)
             int cls = v < 0.45f - 0.25f * big ? SC_CUTTER : v < 0.92f - 0.25f * big ? SC_FRIGATE : SC_LINE;
             SpawnRaider(q, toPrey, cls);
         }
@@ -4389,7 +4510,7 @@ void World::SpawnConvoy() {
         m.merchant = true;
         m.fixedCls = true;
         m.team = 0;
-        float v = RandF(), big = Diff().bigger + 0.2f;  // (harder: more of them ships of the line)
+        float v = RandF(), big = Bigger() + 0.2f;  // (harder: more of them ships of the line)
         m.cls = m.nextCls = (uint8_t)(v < 0.35f - 0.25f * big ? SC_CUTTER : v < 0.85f - 0.3f * big ? SC_FRIGATE : SC_LINE);
         m.name = k < 24 ? std::string(kMerchantNames[k]) : std::string(kMerchantNames[k % 24]) + " " + std::to_string(k / 24 + 1);
         PlaceInHarbour(m, voyage::startHarbour, k);
@@ -4481,6 +4602,23 @@ void World::UpdateRaid(float dt) {
 void World::SpawnBoss() {
     bossKind = bossChoice < BOSS_KINDS ? bossChoice : (uint8_t)((int)(RandF() * BOSS_KINDS) % BOSS_KINDS);  // (random: any of them)
     if (const char* e = getenv("BS_BOSSKIND")) bossKind = (uint8_t)atoi(e);  // (tests)
+    if (odyssey) bossKind = odBossKind;
+    rallies = std::max(0, 3 - Captains());  // (a small crew gets a rally or two)
+    rallyT = 0.0f;
+    if (bossKind == BOSS_PIRATES) {
+        bossParts.clear();
+        FortressRockOn(false);
+        SpawnPirateFleet();
+        bossPhase = 1;
+        teamScore[0] = 0;
+        GameEvent e{EventType::BossPhase};
+        e.a = (uint16_t)(bossId >= 0 ? bossId : NO_SHIP);
+        e.b = 1;
+        e.flags = bossKind;
+        e.pos = bossPos;
+        events.push_back(e);
+        return;
+    }
     bossParts.clear();
     FortressRockOn(false);
     if (bossKind == BOSS_KRAKEN || bossKind == BOSS_DUTCHMAN || bossKind == BOSS_SERPENT || bossKind == BOSS_FORTRESS || bossKind == BOSS_ARMADA || bossKind == BOSS_IRONCLAD || bossKind == BOSS_STORM) {
@@ -4522,7 +4660,7 @@ void World::SpawnBoss() {
     b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI * 0.5f);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
-    b.maxHp = b.hp = (3000.0f + 1500.0f * std::max(captains, 1)) * Diff().bossHp;
+    b.maxHp = b.hp = BossHull(3000.0f, 1500.0f);
     if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);  // (tests)
     b.alive = true;
     b.sail = 0.5f;
@@ -4629,6 +4767,10 @@ void World::UpdateBoss(float dt) {
     // won: it's going down; lost: none of us afloat or coming back
     bool anyone = false;
     for (const Ship& s : ships) anyone |= s.active && s.leader < 0 && s.team == 0 && s.alive;  // (all of us disabled at once: nobody left to bring anyone round)
+    if (!anyone && (rallyT > 0.0f || rallies > 0)) {  // (a small crew: one of them rallies)
+        if (rallyT <= 0.0f) rallyT = 6.0f;
+        anyone = true;
+    }
     if (bossHpNow <= 0.0f || !anyone) {
         voyageWinner = bossHpNow <= 0.0f ? 0 : 1;
         if (bossHpNow <= 0.0f) bossState = 2;
@@ -4673,7 +4815,7 @@ void World::UpdateBoss(float dt) {
                 if (RocksHeight(rocks, at.x, at.y) > -20.0f) at = Vector2Scale(at, 0.8f);
                 l.pos = {at.x, ocean.Height(at.x, at.y) + 1.0f, at.y};
                 l.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI);
-                l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * Diff().bossHp;
+                l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * BossHpMul();
                 l.alive = true;
                 l.sail = 1.0f;
             }
@@ -4698,6 +4840,10 @@ void World::UpdateBoss(float dt) {
     std::vector<const Ship*> prey;
     for (const Ship& s : ships)
         if (s.active && s.alive && !s.stowed && s.team == 0) prey.push_back(&s);
+    if (bossKind == BOSS_PIRATES) {
+        UpdatePirateFleet(dt);
+        return;
+    }
     if (bossKind == BOSS_KRAKEN) {
         UpdateKrakenQueen(dt, phase, prey);
         return;
@@ -4727,7 +4873,7 @@ void World::UpdateBoss(float dt) {
         return;
     }
     const Vector3 deck = Vector3Add(B.pos, {0.0f, 9.0f, 0.0f});
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.3f : 1.65f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.3f : 1.65f);
     const float dmg = 0.75f;  // (x ballDamage: lots of shot, each not so much)
     // grapeshot: whoever comes in close gets a fan of it, whatever pattern is up (no lying alongside it in safety)
     bossStep2 -= dt * rate;
@@ -4918,14 +5064,14 @@ void World::SpawnKrakenQueen() {
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
     bossPos = {0.0f, 0.0f, 0.0f};
-    bossHpMax = bossHpNow = (1600.0f + 700.0f * std::max(captains, 1)) * Diff().bossHp;
+    bossHpMax = bossHpNow = BossHull(1600.0f, 700.0f);
     if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
     bossState = 0;
     bossT = 0.0f;
     bossInk = 8.0f;
     bossSpit = 4.0f;
     bossParts.assign(kq::arms, BossPart{});
-    const float armHp = (110.0f + 40.0f * std::max(captains, 1)) * Diff().bossHp;
+    const float armHp = BossHull(110.0f, 40.0f);
     for (int k = 0; k < kq::arms; ++k) {
         BossPart& a = bossParts[k];
         a.root = ArmBase(k);
@@ -4950,7 +5096,7 @@ void World::UpdateKrakenQueen(float dt, int phase, const std::vector<const Ship*
     Ship& P = ships[bossId];
     bossT += dt;
     if (bossState == 0 && bossT > 4.0f) bossState = 1;
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
     const float windup = 1.8f / sqrtf(rate);
     int up = 0, grabs = 0, winding = 0;
     for (const BossPart& a : bossParts) {
@@ -5337,7 +5483,7 @@ void World::SpawnDutchman() {
     b.rot = QuaternionFromAxisAngle({0, 1, 0}, RandF() * 2.0f * PI);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
-    b.maxHp = b.hp = (1500.0f + 650.0f * std::max(captains, 1)) * Diff().bossHp;  // (it's only there to be shot about half the time)
+    b.maxHp = b.hp = BossHull(1500.0f, 650.0f);  // (it's only there to be shot about half the time)
     if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
     b.alive = true;
     b.sail = 0.6f;
@@ -5355,7 +5501,7 @@ void World::SpawnDutchman() {
 void World::UpdateDutchman(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& D = ships[bossId];
     bossT += dt;
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
     for (size_t i = 0; i < bossParts.size();) {  // cursed water fades
         bossParts[i].timer -= dt;
         bossParts[i].t += dt;
@@ -5506,7 +5652,7 @@ void World::SpawnSerpent() {
     if (bossId < 0) return;
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
-    bossHpMax = bossHpNow = (1200.0f + 500.0f * std::max(captains, 1)) * Diff().bossHp;  // (much of the time it's out of reach)
+    bossHpMax = bossHpNow = BossHull(1200.0f, 500.0f);  // (much of the time it's out of reach)
     if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
     bossState = getenv("BS_BOSSUP") ? ss::CRUISE : ss::ARRIVING;  // (BS_BOSSUP: screenshots, it starts up)
     bossT = 0.0f;
@@ -5525,7 +5671,7 @@ void World::SpawnSerpent() {
 void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& P = ships[bossId];
     bossT += dt;
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.25f : 1.5f);
     Vector3& head = bossParts[0].pos;
     auto enter = [&](uint8_t st) { bossState = st; bossT = 0.0f; };
     auto nearest = [&](Vector3 from) {
@@ -5678,7 +5824,7 @@ void World::UpdateSerpent(float dt, int phase, const std::vector<const Ship*>& p
                 break;
             }
             if (bossCoilHp <= 0.0f) {  // round her
-                bossCoilHp = (260.0f + 90.0f * prey.size()) * Diff().bossHp;
+                bossCoilHp = (260.0f + 90.0f * prey.size()) * BossHpMul();
                 bossT = 0.0f;
                 GameEvent e{EventType::BossPart};
                 e.a = t->id;
@@ -5763,7 +5909,7 @@ void World::SpawnFortress() {
     FortressRockOn(true);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0 && !s.boss;
-    bossHpMax = bossHpNow = (2300.0f + 950.0f * std::max(captains, 1)) * Diff().bossHp;  // (it can't dodge, so it's stout)
+    bossHpMax = bossHpNow = BossHull(2300.0f, 950.0f);  // (it can't dodge, so it's stout)
     if (const char* e = getenv("BS_BOSSHP")) bossHpMax = bossHpNow = (float)atof(e);
     bossPos = {0.0f, sf::top, 0.0f};
     bossState = sf::LIGHT_SWEEP;
@@ -5773,7 +5919,7 @@ void World::SpawnFortress() {
     bossStep = 0.0f;
     bossSpit = 4.0f;
     bossParts.assign(sf::towers, BossPart{});
-    const float towerHp = (300.0f + 110.0f * std::max(captains, 1)) * Diff().bossHp;
+    const float towerHp = BossHull(300.0f, 110.0f);
     for (int k = 0; k < sf::towers; ++k) {
         BossPart& t = bossParts[k];
         float a = 2.0f * PI * k / sf::towers;
@@ -5788,7 +5934,7 @@ void World::SpawnFortress() {
 void World::UpdateFortress(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& P = ships[bossId];
     bossT += dt;
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
     auto lobbed = [&](Vector3 from, Vector3 at, float speed, bool high) {
         Vector2 d = {at.x - from.x, at.z - from.z};
         float rng = Clamp(Vector2Length(d), 30.0f, 600.0f);
@@ -5950,7 +6096,7 @@ void World::SpawnArmada() {
     b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI * 0.5f);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
-    b.maxHp = b.hp = (1000.0f + 400.0f * std::max(captains, 1)) * Diff().bossHp;
+    b.maxHp = b.hp = BossHull(1000.0f, 400.0f);
     if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
     b.alive = true;
     b.sail = 0.5f;
@@ -5982,7 +6128,7 @@ void World::SpawnArmada() {
         Vector3 p = Vector3Add(b.pos, Vector3Add(Vector3Scale(fwd, aa::wall), Vector3Scale(side, off)));
         l.pos = {p.x, ocean.Height(p.x, p.z) + 1.0f, p.z};
         l.rot = b.rot;
-        l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * Diff().bossHp;
+        l.maxHp = l.hp = ClassOf(SC_LINE).hp * 1.8f * BossHpMul();
         l.alive = true;
         l.sail = 0.5f;
     }
@@ -6087,7 +6233,7 @@ void World::FireshipBlast(Ship& f) {
 
 void World::UpdateArmada(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& F = ships[bossId];
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.15f : 1.6f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.15f : 1.6f);
     // the volley: red lines out from every gun of the line, then all of them at once
     bossVolley -= dt * rate;
     if (bossVolleyState == 0 && bossVolley <= 0.0f) {
@@ -6198,7 +6344,7 @@ void World::SpawnIronclad() {
     b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
-    b.maxHp = b.hp = (1500.0f + 650.0f * std::max(captains, 1)) * Diff().bossHp;  // (most shot glances off it, but not all)
+    b.maxHp = b.hp = BossHull(1500.0f, 650.0f);  // (most shot glances off it, but not all)
     if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
     b.alive = true;
     b.sail = 0.5f;
@@ -6215,7 +6361,7 @@ void World::SpawnIronclad() {
 void World::UpdateIronclad(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& I = ships[bossId];
     bossT += dt;
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.5f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.5f);
     Ship* t = bossTarget >= 0 && bossTarget < ShipCount() && ships[bossTarget].active && ships[bossTarget].alive ? &ships[bossTarget] : nullptr;
     auto enter = [&](uint8_t st) { bossState = st; bossT = 0.0f; };
     switch (bossState) {
@@ -6337,7 +6483,7 @@ void World::SpawnStormCaller() {
     b.rot = QuaternionFromAxisAngle({0, 1, 0}, a + PI * 0.5f);
     int captains = 0;
     for (const Ship& s : ships) captains += s.active && s.leader < 0 && s.team == 0;
-    b.maxHp = b.hp = (1300.0f + 550.0f * std::max(captains, 1)) * Diff().bossHp;
+    b.maxHp = b.hp = BossHull(1300.0f, 550.0f);
     if (const char* e = getenv("BS_BOSSHP")) b.maxHp = b.hp = (float)atof(e);
     b.alive = true;
     b.sail = 0.5f;
@@ -6352,7 +6498,7 @@ void World::SpawnStormCaller() {
 
 void World::UpdateStormCaller(float dt, int phase, const std::vector<const Ship*>& prey) {
     Ship& C = ships[bossId];
-    const float rate = Diff().bossRate * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
+    const float rate = BossRateMul() * (phase == 1 ? 1.0f : phase == 2 ? 1.2f : 1.45f);
     static const bool bossUpTest = getenv("BS_BOSSUP") != nullptr;
     auto inBay = [](Vector3 p) {
         float r = sqrtf(p.x * p.x + p.z * p.z);
@@ -6539,6 +6685,30 @@ void World::UpdateRevives(float dt) {
                 Damage(s, 1e6f, -1);
                 break;
             }
+    // a small crew's rally (everyone disabled, fewer than three captains): one of them gets going again on her own
+    if (rallyT > 0.0f) {
+        rallyT -= dt;
+        if (rallyT <= 0.0f) {
+            Ship* best = nullptr;
+            for (Ship& s : ships)
+                if (s.active && !s.alive && s.downed && s.leader < 0 && (!best || s.reviveT > best->reviveT)) best = &s;
+            if (best) {
+                rallies = std::max(0, rallies - 1);
+                best->alive = true;
+                best->downed = false;
+                best->reviveT = 0.0f;
+                best->deadTimer = 0.0f;
+                best->hp = best->maxHp * tune::reviveHull;
+                for (Leak& l : best->leaks) l = Leak{};
+                GameEvent e{EventType::Revive};
+                e.a = best->id;
+                e.b = NO_SHIP;
+                e.flags = 1;  // (her own crew)
+                e.pos = best->pos;
+                events.push_back(e);
+            }
+        }
+    }
     for (Ship& s : ships) {
         if (!s.active || s.alive || !s.downed) continue;
         int helpers = 0, who = -1;
@@ -6552,18 +6722,417 @@ void World::UpdateRevives(float dt) {
             s.reviveT = fmaxf(0.0f, s.reviveT - dt * 0.5f);
             continue;
         }
-        s.reviveT += dt;
-        if (s.reviveT < tune::reviveTime) continue;
+        int medic = 0;
+        for (const Ship& o : ships)
+            if (o.active && o.alive && o.team == 0 && o.leader < 0 && o.id != s.id && Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}) <= tune::reviveRadius)
+                medic = std::max(medic, (int)o.perks[PK_MEDIC]);
+        s.reviveT += dt * (1.0f + 0.4f * medic);
+        if (s.reviveT < ReviveTimeOf(s)) continue;  // (longer each time: a crew can't be brought round for ever)
+        s.revived++;
         s.alive = true;
         s.downed = false;
         s.reviveT = 0.0f;
         s.deadTimer = 0.0f;
-        s.hp = s.maxHp * tune::reviveHull;
+        s.hp = s.maxHp * (tune::reviveHull + 0.1f * s.perks[PK_MEDIC]);
         for (Leak& l : s.leaks) l = Leak{};
         GameEvent e{EventType::Revive};
         e.a = s.id;
         e.b = (uint16_t)(helpers == 1 ? who : NO_SHIP);
         e.pos = s.pos;
         events.push_back(e);
+    }
+}
+
+// ---- the Odyssey: a roguelike run of rounds -------------------------------------------------
+void PerkOffers(uint32_t runSeed, int round, int shipId, const uint8_t* have, uint8_t out[3]) {
+    uint32_t h = runSeed ^ ((uint32_t)round * 2654435761u) ^ ((uint32_t)shipId * 40503u + 17u);
+    uint8_t pool[PK_COUNT];
+    float wt[PK_COUNT];
+    int n = 0;
+    for (int p = 0; p < PK_COUNT; ++p)
+        if (have[p] < kPerkMax[p]) {
+            pool[n] = (uint8_t)p;
+            wt[n] = CompletesCombo(have, p) >= 0 ? 3.0f : PerkMechanical(p) ? 1.25f : 1.0f;  // (combos turn up)
+            ++n;
+        }
+    for (int k = 0; k < 3; ++k) {
+        if (n == 0) { out[k] = 255; continue; }
+        h = h * 1664525u + 1013904223u;
+        float total = 0.0f;
+        for (int j = 0; j < n; ++j) total += wt[j];
+        float r = (float)((h >> 8) & 0xFFFFFF) / 16777216.0f * total;
+        int j = 0;
+        while (j < n - 1 && r >= wt[j]) { r -= wt[j]; ++j; }
+        out[k] = pool[j];
+        pool[j] = pool[n - 1];
+        wt[j] = wt[n - 1];
+        --n;
+    }
+}
+
+int World::Captains() const {
+    int n = 0;
+    for (const Ship& s : ships) n += s.active && s.leader < 0 && s.team == 0 && !s.boss && !s.raider && !s.merchant;
+    return n;
+}
+
+float World::VoyageGoalS() const { return voyageTo == voyage::haven && havenS > 0.0f ? havenS : RouteLength(); }
+
+void World::GivePerk(Ship& s, int perk) {
+    if (perk < 0 || perk >= PK_COUNT || s.perks[perk] >= kPerkMax[perk]) return;
+    const int combo = CompletesCombo(s.perks, perk);
+    s.perks[perk]++;
+    if (combo >= 0) {  // a combo's on
+        GameEvent c{EventType::PerkFx};
+        c.a = s.id;
+        c.b = (uint16_t)combo;
+        c.flags = PFX_COMBO;
+        c.pos = s.pos;
+        events.push_back(c);
+    }
+    if (perk == PK_HULL) {  // (the new timbers go in straight away)
+        const float was = s.maxHp;
+        s.maxHp = MaxHpOf(s);
+        if (s.alive) s.hp = fminf(s.maxHp, s.hp + (s.maxHp - was));
+    }
+    GameEvent e{EventType::Perked};
+    e.a = s.id;
+    e.b = (uint16_t)perk;
+    e.pos = s.pos;
+    events.push_back(e);
+}
+
+bool World::PickPerk(int shipId, int choice) {
+    if (!odyssey || matchState != 1 || !odWon || shipId < 0 || shipId >= ShipCount() || choice < 0 || choice > 2) return false;
+    Ship& s = ships[shipId];
+    if (!s.active || s.leader >= 0 || s.team != 0 || s.perkRound == odLast) return false;
+    uint8_t offer[3];
+    PerkOffers(odSeed, odLast, s.id, s.perks, offer);
+    if (offer[choice] == 255) return false;
+    s.perkRound = (int16_t)odLast;
+    GivePerk(s, offer[choice]);
+    return true;
+}
+
+// The round's over (EndRound): won, on to the next and an upgrade each (the bots choose straight away); lost, the run
+// is over and the next one starts from the beginning.
+void World::OdysseyEnd(bool won) {
+    odLast = odRound;
+    odWon = won;
+    if (won) {
+        for (Ship& s : ships)
+            if (s.active && s.isBot && s.leader < 0 && s.team == 0 && !s.boss && !s.raider) {
+                uint8_t offer[3];
+                PerkOffers(odSeed, odLast, s.id, s.perks, offer);
+                int pick = (int)(RandF() * 3.0f) % 3;
+                for (int k = 0; k < 3; ++k)
+                    if (offer[k] != 255 && CompletesCombo(s.perks, offer[k]) >= 0) pick = k;  // (a combo when there's one)
+                PickPerk(s.id, pick);
+            }
+        odRound++;
+    } else {
+        odBest = std::max(odBest, odRound);
+        odRound = 1;
+        odLeg = 0;
+        odSeed = odSeed * 1103515245u + 12345u;
+        for (Ship& s : ships) {
+            for (uint8_t& p : s.perks) p = 0;
+            s.perkRound = -1;
+        }
+    }
+}
+
+// This round's kind (Init: the first; StartRound: the next): the mode it plays as, its sea, its harbours, its boss.
+void World::OdysseySetRound(bool first) {
+    if (!first && odWon)  // (whoever didn't choose: the first on offer)
+        for (Ship& s : ships)
+            if (s.active && s.leader < 0 && s.team == 0 && !s.boss && !s.raider && s.perkRound != odLast) PickPerk(s.id, 0);
+    odKind = OdKindOf(odRound);
+    const uint8_t newMode = odKind == OD_LEG ? MODE_VOYAGE : MODE_BOSS, newArena = odKind == OD_LEG ? ARENA_PASSAGE : ARENA_ISLES;
+    if (!first) {  // the last round's enemies, gone
+        for (Ship& s : ships)
+            if (s.active && (s.raider || s.merchant || s.boss)) RemoveShip(s.id);
+        bossId = -1;
+        bossParts.clear();
+        bossHpNow = 0.0f;
+        bossState = 0;
+        bossPhase = bossPat = 0;
+        FortressRockOn(false);
+        for (Monster& m : monsters) m = Monster{};
+        balls.clear();
+    }
+    odWaves.clear();
+    odWave = odWaves0 = 0;
+    mode = newMode;
+    if (arena != newArena || first) {
+        arena = newArena;
+        if (!first) BuildArena();
+        for (int i = 0; i < tune::crateCount; ++i) {
+            crates[i].active = false;
+            crates[i].timer = 0.5f + 0.4f * i;
+        }
+    }
+    roundLength = mode == MODE_VOYAGE ? tune::voyageLength : tune::bossLength;
+    voyageFrom = voyage::startHarbour;
+    voyageTo = voyage::endHarbour;
+    if (odKind == OD_LEG) {  // start -> haven, haven -> the far port, and round again
+        const bool firstHalf = odLeg % 2 == 0;
+        voyageFrom = firstHalf ? voyage::startHarbour : voyage::haven;
+        voyageTo = firstHalf ? voyage::haven : voyage::endHarbour;
+        odLeg++;
+    }
+    odBossKind = BOSS_PIRATES;
+    if (odKind == OD_BOSS) {  // the run's bosses in an order of its own, none again until all have come
+        uint8_t order[BOSS_KINDS];
+        for (int i = 0; i < BOSS_KINDS; ++i) order[i] = (uint8_t)i;
+        uint32_t h = odSeed ^ 0x9E3779B9u;
+        for (int i = BOSS_KINDS - 1; i > 0; --i) {
+            h = h * 1664525u + 1013904223u;
+            int j = (int)((h >> 8) % (uint32_t)(i + 1));
+            std::swap(order[i], order[j]);
+        }
+        odBossKind = order[(OdBossNo() - 1) % BOSS_KINDS];
+    }
+    odHullMul = 0.85f + 0.07f * (odRound - 1);  // (a gentle start, then stouter every round)
+    voyageWinner = -1;
+    rallies = 0;
+    rallyT = 0.0f;
+}
+
+// The Odyssey's sea battle: the pirate fleet comes round the islands in waves, each bigger than the last, and the
+// bar is what's left of it (afloat and still to come)
+void World::SpawnPirateFleet() {
+    const int captains = std::max(1, Captains());
+    const int waves = 2 + (odRound >= 11 ? 1 : 0) + (odRound >= 21 ? 1 : 0);
+    odWaves.clear();
+    bossHpMax = 0.0f;
+    for (int w = 0; w < waves; ++w) {
+        int n = (int)roundf(PirateMul() * (1.0f + 0.7f * captains) * (0.8f + 0.3f * w));
+        if (const char* e = getenv("BS_ODPIRATES")) n = atoi(e);  // (tests)
+        n = std::max(2, std::min(n, 16));
+        std::vector<uint8_t> cls;
+        for (int k = 0; k < n; ++k) {
+            const float v = RandF(), big = Bigger() + 0.15f * w;
+            const int c = v < 0.45f - 0.25f * big ? SC_CUTTER : v < 0.92f - 0.25f * big ? SC_FRIGATE : SC_LINE;
+            cls.push_back((uint8_t)c);
+            bossHpMax += ClassOf(c).hp * odHullMul;
+        }
+        odWaves.push_back(cls);
+    }
+    odWaves0 = waves;
+    odWave = 0;
+    odWaveT = 1e9f;  // (the first wave straight away)
+    bossHpNow = bossHpMax;
+    bossId = BossProxy(BossName(BOSS_PIRATES));
+    bossPos = {0.0f, 0.0f, 0.0f};
+}
+
+void World::UpdatePirateFleet(float dt) {
+    odWaveT += dt;
+    int alive = 0;
+    float left = 0.0f;
+    Vector3 c{};
+    for (const Ship& p : ships)
+        if (p.active && p.raider && p.alive) {
+            ++alive;
+            left += p.hp;
+            c = Vector3Add(c, p.pos);
+        }
+    for (const std::vector<uint8_t>& w : odWaves)
+        for (uint8_t k : w) left += ClassOf(k).hp * odHullMul;
+    bossHpNow = left;
+    if (alive) bossPos = Vector3Scale(c, 1.0f / alive);
+    // the next wave: when this one's all but gone, or it's been out a good while
+    if (odWaves.empty() || !(alive == 0 || odWaveT > 90.0f)) return;
+    std::vector<uint8_t> w = odWaves.front();
+    odWaves.erase(odWaves.begin());
+    odWave++;
+    odWaveT = 0.0f;
+    // round the islands where we're not: the bearing on the rim furthest from any of ours (we spread all round it),
+    // the ships spread across a couple of cables
+    float base = RandF() * 2.0f * PI, bestD = -1.0f;
+    for (int k = 0; k < 24; ++k) {
+        const float a = k * (2.0f * PI / 24.0f) + RandF() * 0.2f;
+        const Vector2 at = {sinf(a) * 570.0f, cosf(a) * 570.0f};
+        float nd = 1e9f;
+        for (const Ship& s : ships)
+            if (s.active && s.alive && !s.stowed && s.team == 0) nd = fminf(nd, Vector2Distance({s.pos.x, s.pos.z}, at));
+        if (nd > bestD) { bestD = nd; base = a; }
+    }
+    for (size_t k = 0; k < w.size(); ++k) {
+        Vector2 at{};
+        bool ok = false;
+        for (int tries = 0; tries < 30 && !ok; ++tries) {
+            const float a = base + ((float)k - (w.size() - 1) * 0.5f) * 0.09f + (RandF() - 0.5f) * 0.1f, r = 540.0f + RandF() * 60.0f;
+            at = {sinf(a) * r, cosf(a) * r};
+            ok = RocksHeight(rocks, at.x, at.y) < -20.0f;
+            for (const Ship& o : ships) ok &= !(o.active && o.alive && !o.stowed && Vector2Distance({o.pos.x, o.pos.z}, at) < 45.0f);
+        }
+        SpawnRaider(at, atan2f(-at.x, -at.y), w[k], odHullMul);
+    }
+    GameEvent e{EventType::Wave};
+    e.b = (uint16_t)odWave;
+    e.flags = (uint8_t)odWaves0;
+    e.value = (float)w.size();
+    events.push_back(e);
+}
+
+// The upgrades that work over time: the carpenters mend a hull nobody's shooting at
+void World::UpdatePerks(float dt) {
+    static const float winAt = getenv("BS_ODWIN") ? (float)atof(getenv("BS_ODWIN")) : -1.0f;  // (screenshots: this round won then)
+    static bool winDone = false;
+    if (winAt >= 0.0f && !winDone && time >= winAt) {
+        winDone = true;
+        voyageWinner = 0;
+        EndRound(true);
+        return;
+    }
+    for (Ship& s : ships) {
+        if (!s.active || !s.alive || s.stowed) continue;
+        s.sinceHit += dt;
+        if (s.perks[PK_REGEN] && s.sinceHit > 5.0f) s.hp = fminf(s.maxHp, s.hp + s.maxHp * 0.006f * s.perks[PK_REGEN] * dt);
+        s.chainT = fmaxf(0.0f, s.chainT - dt);
+        s.invulnT = fmaxf(0.0f, s.invulnT - dt);
+        s.kegCd = fmaxf(0.0f, s.kegCd - dt);
+        if (s.burnT > 0.0f) {
+            s.burnT -= dt;
+            const int by = s.burnBy;
+            // Will-o'-the-Wisp: the fire leaps to their ships close by (a few times a second)
+            if (by >= 0 && by < ShipCount() && HasCombo(ships[by].perks, CB_WISP) && RandF() < dt * 1.5f)
+                for (Ship& o : ships)
+                    if (o.active && o.alive && !o.stowed && o.id != s.id && o.burnT <= 0.0f && Enemies(ships[by], o) &&
+                        Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}) < 35.0f)
+                        Ignite(o, by, s.burnDps);
+            Damage(s, s.burnDps * dt, by);
+            if (s.burnT <= 0.0f) s.burnDps = 0.0f;
+        }
+    }
+}
+
+// A boss's hull for the crew it meets: tuned at three captains (a + 3b), and from there with the crew to the power
+// 1.1 - a solo captain takes on a third of it, six captains (who bring each other round all fight) twice and more
+float World::BossHull(float a, float b) const {
+    const int c = std::max(1, Captains());
+    return (a + 3.0f * b) * powf((float)c / 3.0f, 1.1f) * BossHpMul();
+}
+
+// ---- the upgrades at work ----------------------------------------------------------------------
+void World::Ignite(Ship& s, int by, float dps) {
+    if (!s.active || !s.alive || s.stowed) return;
+    if (s.burnT <= 0.0f) {
+        GameEvent e{EventType::PerkFx};
+        e.a = (uint16_t)(by >= 0 ? by : NO_SHIP);
+        e.b = s.id;
+        e.flags = PFX_ABLAZE;
+        e.pos = s.pos;
+        events.push_back(e);
+    }
+    s.burnT = 5.0f;
+    s.burnDps = fmaxf(s.burnDps, dps);
+    s.burnBy = (int16_t)by;
+}
+
+// Powder Kegs: she goes up, and everything of theirs near her takes it
+void World::KegBlast(Ship& s) {
+    const float r = 45.0f, dmg = 20.0f + 25.0f * std::max(1, (int)s.perks[PK_KEGS]);
+    for (Ship& o : ships) {
+        if (!o.active || !o.alive || o.stowed || o.id == s.id || !Enemies(s, o)) continue;
+        const float d = Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}) - hull::maxHalfBeam * ClassOf(o.cls).scale;
+        if (d > r) continue;
+        const float k = 1.0f - 0.6f * Clamp(d / r, 0.0f, 1.0f);
+        Vector2 out = Vector2Normalize({o.pos.x - s.pos.x, o.pos.z - s.pos.z});
+        ApplyImpulse(o, {out.x * tune::ballKnockback * 2.5f, tune::ballKnockback * 2.0f, out.y * tune::ballKnockback * 2.5f}, Vector3Add(o.pos, {0.0f, -2.0f, 0.0f}));
+        GameEvent h{EventType::Hit};
+        h.a = s.id;
+        h.b = o.id;
+        h.pos = Vector3Add(o.pos, {0.0f, 4.0f, 0.0f});
+        h.dir = {out.x, 0.0f, out.y};
+        h.value = dmg * k;
+        events.push_back(h);
+        Damage(o, dmg * k, s.id);
+    }
+    GameEvent e{EventType::PerkFx};
+    e.a = s.id;
+    e.b = s.id;
+    e.flags = PFX_KEG;
+    e.pos = s.pos;
+    events.push_back(e);
+}
+
+// Lightning Rod: a bolt out of a clear sky onto her (the Storm Caller's, drawn the same)
+void World::CallLightning(Ship& t, int by) {
+    if (!t.active || !t.alive) return;
+    ApplyImpulse(t, {0.0f, -tune::ballKnockback, 0.0f}, Vector3Add(t.pos, {0.0f, 6.0f, 0.0f}), {tune::hitPitch, 0.2f, 1.0f});
+    GameEvent h{EventType::Hit};
+    h.a = (uint16_t)by;
+    h.b = t.id;
+    h.flags = EF_PLUNGING;
+    h.pos = Vector3Add(t.pos, {0.0f, 8.0f, 0.0f});
+    h.dir = {0, -1, 0};
+    h.value = 15.0f;
+    events.push_back(h);
+    GameEvent e{EventType::BossSlam};
+    e.a = (uint16_t)by;
+    e.flags = 4;  // (lightning)
+    e.pos = {t.pos.x, ocean.Height(t.pos.x, t.pos.z), t.pos.z};
+    events.push_back(e);
+    if (by >= 0 && by < ShipCount() && HasCombo(ships[by].perks, CB_SURGE)) t.chainT = fmaxf(t.chainT, 3.0f);  // (Storm Surge: and the rigging's in flames)
+    Damage(t, 15.0f, by);
+}
+
+// One of ours hit her (burst: by a shell's burst rather than the ball itself)
+void World::OnPerkHit(Ship& t, int owner, Vector3 at, float dmg, bool burst) {
+    if (owner < 0 || owner >= ShipCount()) return;
+    Ship& O = ships[CaptainOf(owner)];
+    if (!O.active || !Enemies(O, t) || !t.active) return;
+    const uint8_t* P = O.perks;
+    if (P[PK_HOTSHOT] && (!burst || HasCombo(P, CB_FIRESTORM))) Ignite(t, O.id, 3.0f * P[PK_HOTSHOT]);
+    if (burst) return;
+    if (P[PK_CHAIN] && t.alive) {
+        if (t.chainT <= 0.0f) {
+            GameEvent e{EventType::PerkFx};
+            e.a = O.id;
+            e.b = t.id;
+            e.flags = PFX_CHAINED;
+            e.pos = at;
+            events.push_back(e);
+        }
+        t.chainT = fmaxf(t.chainT, 2.0f + P[PK_CHAIN]);
+    }
+    if (P[PK_LIGHTNING] && t.alive) {
+        float ch = 0.12f * P[PK_LIGHTNING];
+        if (t.chainT > 0.0f && HasCombo(P, CB_SURGE)) ch *= 2.0f;
+        if (RandF() < ch) CallLightning(t, O.id);
+    }
+    if (P[PK_GRENADO]) {  // the shell bursts where it hit: everything of theirs close by takes some
+        const float r = 10.0f + 5.0f * P[PK_GRENADO];
+        for (Ship& o : ships) {
+            if (!o.active || !o.alive || o.stowed || o.id == t.id || !Enemies(O, o)) continue;
+            const float d = Vector2Distance({o.pos.x, o.pos.z}, {at.x, at.z}) - hull::maxHalfBeam * ClassOf(o.cls).scale;
+            if (d > r) continue;
+            const float bd = dmg * 0.4f * (1.0f - 0.6f * Clamp(d / r, 0.0f, 1.0f));
+            GameEvent h{EventType::Hit};
+            h.a = O.id;
+            h.b = o.id;
+            h.pos = Vector3Add(o.pos, {0.0f, 3.0f, 0.0f});
+            h.dir = {0, -1, 0};
+            h.value = bd;
+            events.push_back(h);
+            Damage(o, bd, O.id);
+            OnPerkHit(o, O.id, o.pos, bd, true);
+        }
+    }
+}
+
+// Quartermaster: a crate's worth of luck to start the round (Arsenal: two)
+void World::GiveRoundPowers(Ship& s) {
+    if (!s.perks[PK_QUARTER]) return;
+    const int n = HasCombo(s.perks, CB_ARSENAL) ? 2 : 1;
+    int first = -1;
+    for (int k = 0; k < n; ++k) {
+        int t = (int)(RandF() * PU_COUNT) % PU_COUNT;
+        if (t == first) t = (t + 1) % PU_COUNT;
+        first = t;
+        s.power[t] = fmaxf(s.power[t], 2.0f * tune::powerMax);
     }
 }

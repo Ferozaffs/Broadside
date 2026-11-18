@@ -158,6 +158,10 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         int id = peerShip[peer];
         uint8_t cls = r.Get<uint8_t>();
         if (id >= 0 && r.ok && cls < SC_PLAYABLE) world.ships[id].nextCls = (uint8_t)world.AllowedClass(cls);  // takes effect at the next respawn
+    } else if (type == MSG_PICK_PERK) {  // the Odyssey: an upgrade, between rounds
+        int id = peerShip[peer];
+        uint8_t choice = r.Get<uint8_t>();
+        if (id >= 0 && r.ok) world.PickPerk(id, choice);
     } else if (type == MSG_SET_ROLE) {
         uint8_t want = r.Get<uint8_t>();
         if (!r.ok) return;

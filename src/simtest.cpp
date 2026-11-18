@@ -559,7 +559,9 @@ static int QaTest() {
     runs.push_back({(uint8_t)MODE_RAID, -1, false, (uint8_t)ARENA_ISLES, true});
     runs.push_back({(uint8_t)MODE_VOYAGE, -1, false, (uint8_t)ARENA_ISLES, true});
     for (int b = 0; b < BOSS_KINDS; ++b) runs.push_back({(uint8_t)MODE_BOSS, b, false, (uint8_t)ARENA_ISLES, false});
-    static const char* kModes[] = {"ffa", "teams", "pirate", "race", "voyage", "raid", "boss"};
+    runs.push_back({MODE_ODYSSEY, -1, false, (uint8_t)ARENA_ISLES, false});
+    runs.push_back({MODE_ODYSSEY, -1, true, (uint8_t)ARENA_ISLES, false});
+    static const char* kModes[] = {"ffa", "teams", "pirate", "race", "voyage", "raid", "boss", "odyssey"};
     int problems = 0;
     for (const Run& run : runs) {
         World g;
@@ -621,7 +623,7 @@ static int QaTest() {
                     for (const NetShip& ns : sn.ships) {
                         const Ship& s = g.ships[ns.id];
                         if (((ns.flags & SF_ALIVE) != 0) != s.alive || ns.downed != s.downed || ns.harbourWork != s.harbourWork ||
-                            fabsf(ns.harbourCd - s.harbourCd) > 1.0f || fabsf(ns.revive - s.reviveT / tune::reviveTime) > 0.01f) { ok = false; break; }
+                            fabsf(ns.harbourCd - s.harbourCd) > 1.0f || fabsf(ns.revive - s.reviveT / World::ReviveTimeOf(s)) > 0.01f) { ok = false; break; }
                     }
                 if (!ok) { if (!snapBad) note(TextFormat("t=%.0f snapshot mismatch (%zu bytes, read to %zu)", g.time, w.buf.size(), r.pos)); snapBad++; }
             }
@@ -637,6 +639,72 @@ static int QaTest() {
     }
     printf("QA: %d run(s) with problems\n", problems);
     return problems ? 1 : 0;
+}
+
+// The Odyssey: bot captains (BS_CAPTAINS, 3) through a run - each round's kind and how it went, the waves, the
+// upgrades they took, the bosses; until the run is over (or BS_VOYMIN minutes). BS_ODYSSEYTEST=1 --simtest
+static int OdysseyTest() {
+    World g;
+    g.rounds = true;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 1;
+    g.Init(seed, 0, 0, MODE_ODYSSEY, false, ARENA_ISLES);
+    if (const char* e = getenv("BS_DIFF")) g.difficulty = (uint8_t)atoi(e);
+    const int N = getenv("BS_CAPTAINS") ? atoi(getenv("BS_CAPTAINS")) : 3;
+    for (int i = 0; i < N; ++i) g.AddShip(TextFormat("captain%d", i), true);
+    if (const char* e = getenv("BS_ODPERKS")) {  // (tests: everyone starts with this many upgrades, the mechanical ones)
+        const int n = atoi(e);
+        for (Ship& s : g.ships) {
+            if (!s.active || s.leader >= 0 || s.team != 0) continue;
+            (void)n;  // (AddShip gave them)
+            std::string have;
+            for (int p = 0; p < PK_COUNT; ++p) if (s.perks[p]) have += std::string(" ") + kPerkNames[p] + (s.perks[p] > 1 ? TextFormat(" x%d", s.perks[p]) : "");
+            for (int c = 0; c < CB_COUNT; ++c) if (HasCombo(s.perks, c)) have += std::string("  [") + kCombos[c].name + "]";
+            printf("   %s:%s\n", s.name.c_str(), have.c_str());
+        }
+        g.events.clear();
+    }
+    int fxCount[8] = {}, bolts = 0;
+    static const char* kKind[] = {"SEA BATTLE", "VOYAGE LEG", "BOSS"};
+    printf("odyssey seed %u, %s, %d captains: round 1 is a %s (mode %d, arena %d)\n", seed, voyage::kDifficultyNames[g.difficulty], N, kKind[g.odKind], g.mode, g.arena);
+    const int T = (int)((getenv("BS_VOYMIN") ? atof(getenv("BS_VOYMIN")) : 60.0f) * 60 * 60);
+    float roundT = 0.0f;
+    int disabled = 0, revives = 0, rallies = 0, runs = 0;
+    for (int i = 0; i < T; ++i) {
+        g.Step();
+        if (g.matchState == 0) roundT += 1.0f / 60.0f;
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::MatchStart)
+                printf("   t=%5.0f ROUND %d: %s (mode %d, arena %d)%s%s\n", g.time, e.b, kKind[g.odKind], e.a, e.flags,
+                       g.odKind == OD_BOSS ? TextFormat(", %s", BossName(g.odBossKind)) : "",
+                       g.odKind == OD_LEG ? TextFormat(", harbour %d -> %d", g.voyageFrom, g.voyageTo) : "");
+            if (e.type == EventType::MatchEnd) {
+                const bool won = e.b == 0;
+                printf("   t=%5.0f   %s after %.0f s (%d disabled, %d brought round, %d rallies)%s\n", g.time, won ? "WON" : e.b == 1 ? "LOST" : "TIME UP", roundT,
+                       disabled, revives, rallies, won ? "" : "  -> the run is over");
+                roundT = 0.0f;
+                disabled = revives = rallies = 0;
+                if (!won && ++runs >= 1) i = T;  // (one run)
+            }
+            if (e.type == EventType::Wave) printf("   t=%5.0f   wave %d of %d: %.0f pirates (hull x%.2f)\n", g.time, e.b, e.flags, e.value, g.odHullMul);
+            if (e.type == EventType::Perked && e.a < g.ShipCount()) printf("   t=%5.0f   %s takes %s (%d)\n", g.time, g.ships[e.a].name.c_str(), kPerkNames[e.b % PK_COUNT], g.ships[e.a].perks[e.b % PK_COUNT]);
+            if (e.type == EventType::Kill && (e.flags & EF_DOWNED)) disabled++;
+            if (e.type == EventType::PerkFx && e.flags < 8) fxCount[e.flags]++;
+            if (e.type == EventType::BossSlam && e.flags == 4 && e.a < g.ShipCount() && g.ships[e.a].team == 0) bolts++;
+            if (e.type == EventType::Revive) (e.flags & 1 ? rallies : revives)++;
+        }
+        g.events.clear();
+        if (getenv("BS_ODLOG") && i % (60 * 15) == 0 && g.matchState == 0) {  // (every 15 s: everyone afloat)
+            printf("   t=%5.0f", g.time);
+            for (const Ship& x : g.ships)
+                if (x.active && !x.stowed && x.leader < 0 && !x.boss && (x.team == 0 || x.raider))
+                    printf("  %s%s %.0f/%.0f%s", x.raider ? "P" : "C", x.raider ? "" : std::to_string(x.id).c_str(), x.hp, x.maxHp, x.alive ? "" : x.downed ? "(down)" : "(sunk)");
+            printf("\n");
+        }
+    }
+    printf("   upgrades at work: ablaze %d, chained %d, charms %d, kegs %d, combos formed %d, double-shotted %d, prizes %d, lightning %d\n", fxCount[PFX_ABLAZE],
+           fxCount[PFX_CHAINED], fxCount[PFX_CHARM], fxCount[PFX_KEG], fxCount[PFX_COMBO], fxCount[PFX_ECHO], fxCount[PFX_PRIZE], bolts);
+    printf("odyssey: reached round %d (best %d)\n", std::max(g.odLast, g.odRound), std::max(g.odBest, g.odLast));
+    return 0;
 }
 
 static int BossTest() {
@@ -749,6 +817,7 @@ static int BossTest() {
 
 int RunSimTest() {
     if (getenv("BS_BOSSTEST")) return BossTest();
+    if (getenv("BS_ODYSSEYTEST")) return OdysseyTest();
     if (getenv("BS_QATEST")) return QaTest();
     if (getenv("BS_SPAWNTEST")) return SpawnTest();
     if (getenv("BS_HARBOURTEST")) return HarbourTest();

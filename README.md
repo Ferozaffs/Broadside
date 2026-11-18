@@ -144,8 +144,11 @@ The host picks the game in the menu:
   which under the co-op cards (or Random: a new one every round). Each has three phases as its hull goes (the bar at
   the top of the screen), and **red** on the water always marks where something is about to land. Nobody respawns
   and the harbours do no repairs: a ship whose hull is gone is **disabled**, dead in the water, and a friend who
-  stays alongside her for 10 seconds brings her back with a quarter of her hull (the bots come to help too). If every
-  ship is disabled at once, the fight is lost. The difficulty sets its hull and how fast it attacks.
+  stays alongside her for 10 seconds brings her back with a quarter of her hull (the bots come to help too; each time
+  the same ship goes down in a round it takes half as long again). If every ship is disabled at once, the fight is
+  lost. The difficulty sets its hull and how fast it attacks; its hull also grows with the crew it meets (tuned for
+  three captains: a solo captain faces about a third of it, six about twice and more), and most bosses attack a little
+  faster for a big crew and slower for a solo one.
   - **The Leviathan**: a man-o'-war three times the size of a ship of the line, under black sails. It fills the sea
     with magenta shot in patterns: rings, turning spirals, marching walls, aimed fans and marked mortars, with
     grapeshot up close. Later it fires faster and its gunboats come out.
@@ -166,6 +169,36 @@ The host picks the game in the menu:
   - **The Storm Caller**: brings a storm with it. Lightning strikes where a ring marks the water (turn or shorten sail),
     and waterspouts wander the bay, pulling ships in, spinning them and lifting them. Later rogue waves roll right
     across the bay, throwing everything they pass.
+- **Odyssey** (co-op, roguelike): a run of rounds, each harder than the last. Odd rounds are **sea battles** in the
+  bay (the pirate fleet comes round the islands in waves; sink every ship of it), even rounds are **legs of the
+  Passage** (get the convoy from the start harbour to the haven, then from the haven to the far port), and **every
+  fifth round is a boss**, the eight in an order of the run's own, each tougher than the last. After every round you
+  win, each captain picks **one of three upgrades** (1 / 2 / 3, or click), kept for the whole run. Revives work as in
+  Boss mode.
+  - **Steady ones** (stack up to five): Stout Timbers (+20% hull), Drilled Gunners (reload 10% faster), Heavy Shot
+    (+15% damage), Clean Hull (+6% speed), Iron Sheathing (12% less damage), Ship's Surgeon (bring friends round
+    faster, come back stronger), Carpenters (mend your hull when nobody's shooting at you).
+  - **Ones that change how you fight**: Hot Shot (your hits set ships ablaze), Grenado Shells (your shot bursts: near
+    misses hurt too), Chain Shot (hits tear their rigging, they sail slower), Double-Shotted (a chance a broadside fires
+    twice), Prize Crew (every kill: hull back, guns reloaded), Lucky Charm (survive a killing blow on 1 hull, a moment
+    untouchable, once a round), Desperado (below 40% hull: much more damage, faster reload), Lightning Rod (your hits
+    may call down lightning), Spectral Powder (your shot goes through islands and friends), Ram Prow (rams: triple
+    damage, none to you), Powder Kegs (disabled? you blow up and take them with you), Quartermaster (crate power-ups
+    last twice as long, and one to start every round).
+  - **Combos**, when you hold both halves: **Firestorm** (Hot Shot + Grenado: bursts set everything ablaze), **Storm
+    Surge** (Lightning Rod + Chain Shot: struck ships are chained, chained ships struck twice as often), **Devil's
+    Luck** (Lucky Charm + Desperado: every kill gives a spent charm back), **Plunderer** (Prize Crew + Double-Shotted:
+    after every kill your next broadside fires twice), **Juggernaut** (Ram Prow + Iron Sheathing: your rams mend your
+    hull), **Kamikaze** (Ram Prow + Powder Kegs: ramming sets off a keg and you live), **Will-o'-the-Wisp** (Spectral
+    Powder + Hot Shot: fire leaps from ship to ship), **Arsenal** (Quartermaster + Double-Shotted: two power-ups to
+    start every round). An upgrade that would complete a combo turns up more often, and its card says so. Lose a round and the run
+  is over: the results show how far you got (and the best this session), and a new run starts from round 1. Every
+  round brings more pirates, bigger ships, stouter hulls and sharper gunners; bosses get more hull and attack faster.
+  The host's difficulty sets where it starts.
+
+**Small crews** (Boss, Voyage and the Odyssey with fewer than three captains, bots included): when every ship is
+disabled at once, a crew can **rally** and get her going again on their own, twice a round with one captain and once
+with two. The boss bar or the voyage banner shows how many are left.
 
 Rounds last 8 minutes or until someone reaches the score limit. Then the results: the winner, the standings and
 the awards (Admiral of the Fleet, Master Gunner, Flying Dutchman, Spin Doctor, Treasure Hunter, Unsinkable, and

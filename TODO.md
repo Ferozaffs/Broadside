@@ -696,3 +696,60 @@ If the session runs out of tokens, continue when they refresh.
 - Open: without a reserve the Kraken Queen and the Sea Fortress beat 4 bot captains inside 4 minutes; the Voyage with
   no humans is lost around halfway (the bots no longer turn to fight). Revisit the boss hulls / bot revive behaviour if
   players find it too hard.
+
+## The Odyssey (2026-11-18, user: "a rogue like voyage mode next, between each round you get powerups to pick from and
+## each 5th round its a boss battle. Increasing difficulty." Asked: rounds = sea battles and voyage legs, "Both";
+## upgrades permanent for the run)
+- [x] MODE_ODYSSEY (= 7, the host's pick only): World::odyssey; each round plays as MODE_BOSS or MODE_VOYAGE
+  (OdKindOf: every 5th OD_BOSS, odd OD_BATTLE, even OD_LEG). OdysseySetRound (Init, StartRound): mode, arena
+  (BuildArena when it changes: Isles <-> Passage), roundLength, voyageFrom / voyageTo (legs: start -> haven, haven ->
+  end, round again), the boss (the run's shuffled order of the eight, no repeats), the last round's enemies removed.
+  OdysseyEnd (EndRound): won -> odRound++, bots pick; lost -> the run's over, perks cleared, a new odSeed.
+  MatchStart carries the mode (e.a) and value 1; the clients switch mode and sea (SetOcean).
+- [x] Sea battles: BOSS_PIRATES (= BOSS_KINDS, never in Boss mode's picker): a proxy boss, the bar = the fleet's hull
+  afloat and to come; 2 waves (3 from round 11, 4 from 21) of PirateMul x (1 + 0.7 per captain) x (0.8 + 0.3 per
+  wave) pirates, 2..16, from the bearing on the rim furthest from any of us; the next when the last is sunk or after
+  90 s (EventType::Wave). Allied bots fight ship to ship (lineStands).
+- [x] Perks (Ship::perks, PK_COUNT 7, up to perkMax 5): hull +20%, reload -10%, shot +15%, speed +6%, armour x0.88,
+  medic (revive +40% speed per stack of the best helper, +10% hull on coming back), regen (0.6%/s after 5 s unhurt).
+  PerkOffers: 3 from the run seed, the round, the ship (same on the clients). MSG_PICK_PERK; anyone who hasn't
+  picked by the next round gets the first. A late joiner gets as many as the rounds already won.
+- [x] The ramp: PirateMul 0.6 + 0.1 per round, Bigger +0.05 per round, pirate hulls 0.85 + 0.07 per round, their aim
+  error +0.07 rad at round 1 down to none by round 11; bosses: hull x(1 + 0.35 per earlier boss), rate x(1 + 0.08).
+- [x] Small crews (Boss, Voyage, the Odyssey): rallies = 3 - captains (bots count): all disabled at once -> 6 s, then
+  the most-revived one gets going again (Revive flags 1).
+- [x] Client: the Odyssey card (co-op, 4th), the boss picker moved down a row; ROUND n on the boss bar / voyage banner,
+  waves, rallies; this leg's harbour marked; results "ROUND n CLEARED" / "THE RUN IS OVER" (reached, best); the
+  upgrade cards between rounds (1 / 2 / 3, click); the upgrades over the hull card. Protocol 26 (maxHp in 16 bits,
+  perks packed 3 bits each, the Odyssey's block, rallies).
+- [x] Fixed on the way: the voyage banner was red all the time (it read the old reserve).
+- Bot runs (3 captains, Normal): seed 1 reached round 5 (lost to the Storm Caller), seed 2 round 4 (a leg).
+  BS_ODYSSEYTEST=1 --simtest (BS_ODLOG: everyone's hull every 15 s).
+
+## Scaling with the number of players (2026-11-18, user: "check so difficulty in voyage raid and boss scale well with
+## number of players")
+- Boss: measured the Leviathan with 1 / 3 / 6 bot captains (hull a + b per captain): solo lost at 80% hull left, 3 at
+  59%, 6 reached phase 3 by chaining 70 revives. Now World::BossHull(a, b) = (a + 3b) x (captains / 3)^1.1 (all ten
+  boss and part hulls), BossRateMul x clamp(1 + 0.08 (captains - 3), 0.85, 1.5) for every boss but the Leviathan (its
+  aimed patterns already scale), and each revive of the same ship in a round takes 50% longer (Ship::revived,
+  ReviveTimeOf). After: solo, 3 and 6 all reach phase 2 (about 40% / 41% / 34% of the hull taken). Storm Caller solo
+  and 6 even too.
+- Voyage: (1 + convoy + 0.3 escorts) pirates is about right; a solo bot convoy made harbour untouched (it outruns the
+  two that come), six lost ships but got there. Fixed: bots berthed in harbour wouldn't go back for a disabled friend.
+- Raid: four merchantmen per pirate captain, the same per pirate whatever the crew: left as is.
+- Small crews: rallies (see the Odyssey).
+
+## Upgrades that make combos (2026-11-18, user: "Make sure powerups are creative fun and leads to awsome combos")
+- [x] 19 upgrades (Perk): the seven steady ones, and twelve that change how you fight (kPerkMax caps each): Hot Shot
+  (Ignite: 5 s at 3 hp/s a stack), Grenado (Ball::splash 10 + 5/stack, splashMul 0.4, and a burst on a hit:
+  OnPerkHit), Chain Shot (Ship::chainT, top x0.65), Double-Shotted (25%/stack: the pending volley again 0.45 s on),
+  Prize Crew (a kill: 15/25/35% hull, reloads), Lucky Charm (Damage: 1 hull, 3 s invulnT, charmUsed per round),
+  Desperado (< 40% hull: +30% damage, reload -20% a stack), Lightning Rod (12%/stack: CallLightning, the Storm Caller's
+  bolt event), Spectral Powder (Ball::ghost, and through friends), Ram Prow (Collisions: out x(2 + stacks), in x0),
+  Powder Kegs (KegBlast when disabled: 45 m, 20 + 25/stack), Quartermaster (crates x2, GiveRoundPowers at Respawn).
+- [x] 8 combos (kCombos, HasCombo): Firestorm, Storm Surge, Devil's Luck, Plunderer, Juggernaut, Kamikaze,
+  Will-o'-the-Wisp, Arsenal. EventType::PerkFx (PFX_*: ablaze, chained, charm, keg, combo, echo, prize). Offers weigh a
+  combo-completing upgrade x3 (and the mechanical ones x1.25); bots take the combo when one's offered. The cards say
+  "COMPLETES <COMBO>" or "+ <OTHER> = <COMBO>"; the HUD lists the upgrades and the combos. Burning ships flame (the
+  fire ship's fire), the charmed sparkle gold, the chained shed canvas; bolts are drawn outside the Storm Caller's
+  fight now. Snapshot: perks packed into 64 bits, burning / chained / charmed in the state byte.

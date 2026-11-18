@@ -203,6 +203,67 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 
 // ---- game modes and harbours -----------------------------------------------------
 enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_BOSS = 6, MODE_COUNT = 7 };
+// The Odyssey (roguelike co-op): what the host picks, not a mode the world is ever in. A run of rounds, each played as
+// one of the modes above - a sea battle in the bay (MODE_BOSS against BOSS_PIRATES, waves of them), a leg of the
+// Passage (MODE_VOYAGE, harbour to harbour), and every fifth a boss (MODE_BOSS) - harder every round, and an upgrade to
+// pick after each one won. Lose a round and the run is over.
+constexpr uint8_t MODE_ODYSSEY = 7;
+enum OdysseyKind : uint8_t { OD_BATTLE = 0, OD_LEG = 1, OD_BOSS = 2 };
+enum PerkFxKind : uint8_t { PFX_ABLAZE = 1, PFX_CHAINED, PFX_CHARM, PFX_KEG, PFX_COMBO, PFX_ECHO, PFX_PRIZE };
+// the upgrades: picked one at a time between rounds, kept for the run, each stacking up to its kPerkMax. The first
+// seven make the ship better at what she does; the rest change what she does - and pairs of them make combos (kCombos)
+enum Perk : uint8_t {
+    PK_HULL = 0, PK_RELOAD, PK_SHOT, PK_SPEED, PK_ARMOUR, PK_MEDIC, PK_REGEN,
+    PK_HOTSHOT,   // hits set her ablaze
+    PK_GRENADO,   // the shot bursts: near misses hurt too
+    PK_CHAIN,     // hits tear her rigging: she sails slower a while
+    PK_ECHO,      // a chance that a broadside fires twice
+    PK_PRIZE,     // every enemy sunk: hull back, guns reloaded
+    PK_CHARM,     // once a round (a stack): a killing blow leaves her on 1 hull, untouchable a moment
+    PK_DESPERADO, // below 40% hull: more damage, faster reload
+    PK_LIGHTNING, // hits may call down a bolt on her
+    PK_SPECTRAL,  // the shot goes through islands and friends
+    PK_RAM,       // rams: three times the damage, none to us
+    PK_KEGS,      // disabled: she blows up and takes them with her
+    PK_QUARTER,   // crate power-ups twice as long, and one to start every round
+    PK_COUNT
+};
+constexpr int perkMax = 5;
+inline constexpr uint8_t kPerkMax[PK_COUNT] = {5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 2, 3, 3, 1, 3, 3, 1};
+inline const char* const kPerkNames[PK_COUNT] = {"Stout Timbers", "Drilled Gunners", "Heavy Shot", "Clean Hull", "Iron Sheathing", "Ship's Surgeon", "Carpenters",
+                                                "Hot Shot", "Grenado Shells", "Chain Shot", "Double-Shotted", "Prize Crew", "Lucky Charm", "Desperado",
+                                                "Lightning Rod", "Spectral Powder", "Ram Prow", "Powder Kegs", "Quartermaster"};
+inline const char* const kPerkLines[PK_COUNT] = {"+20% hull", "reload 10% faster", "+15% damage", "+6% speed", "take 12% less damage",
+                                                "bring friends round faster, come back stronger", "mend your hull when out of the fight",
+                                                "your hits set ships ablaze", "your shot bursts: near misses hurt too",
+                                                "hits tear their rigging: they sail slower", "a chance a broadside fires twice",
+                                                "every kill: hull back, guns reloaded", "survive a killing blow, once a round",
+                                                "below 40% hull: much more damage, faster reload", "your hits may call down lightning",
+                                                "your shot goes through islands and friends", "rams: triple damage, none to you",
+                                                "disabled? you blow up and take them with you", "crate power-ups last twice as long, one each round"};
+inline bool PerkMechanical(int p) { return p >= PK_HOTSHOT; }
+// two upgrades that work together: both taken, the combo's on
+struct Combo { uint8_t a, b; const char* name; const char* line; };
+enum ComboId : uint8_t { CB_FIRESTORM = 0, CB_SURGE, CB_DEVIL, CB_PLUNDER, CB_JUGGERNAUT, CB_KAMIKAZE, CB_WISP, CB_ARSENAL, CB_COUNT };
+inline const Combo kCombos[CB_COUNT] = {
+    {PK_HOTSHOT, PK_GRENADO, "Firestorm", "your bursts set everything they catch ablaze"},
+    {PK_LIGHTNING, PK_CHAIN, "Storm Surge", "struck ships are chained, chained ships struck twice as often"},
+    {PK_CHARM, PK_DESPERADO, "Devil's Luck", "every kill gives you back a spent charm"},
+    {PK_PRIZE, PK_ECHO, "Plunderer", "after every kill your next broadside fires twice"},
+    {PK_RAM, PK_ARMOUR, "Juggernaut", "your rams mend your own hull"},
+    {PK_RAM, PK_KEGS, "Kamikaze", "ramming sets off a keg, and you live"},
+    {PK_SPECTRAL, PK_HOTSHOT, "Will-o'-the-Wisp", "fire leaps from ship to ship"},
+    {PK_QUARTER, PK_ECHO, "Arsenal", "start every round with two power-ups"},
+};
+inline bool HasCombo(const uint8_t* perks, int c) { return perks[kCombos[c].a] > 0 && perks[kCombos[c].b] > 0; }
+// the combo taking this upgrade would complete (-1: none)
+inline int CompletesCombo(const uint8_t* perks, int p) {
+    for (int c = 0; c < CB_COUNT; ++c)
+        if (!HasCombo(perks, c) && ((kCombos[c].a == p && perks[kCombos[c].b]) || (kCombos[c].b == p && perks[kCombos[c].a]))) return c;
+    return -1;
+}
+// three to choose from: the same on the server and on every client (the run's seed, the round, the ship), none maxed
+void PerkOffers(uint32_t runSeed, int round, int shipId, const uint8_t* have, uint8_t out[3]);
 // (boss: co-op against one of the bosses below, picked by the host or at random each round)
 enum BossKind : uint8_t {
     BOSS_LEVIATHAN = 0,  // a man-o'-war three times over, firing patterns of shot
@@ -211,8 +272,10 @@ enum BossKind : uint8_t {
     BOSS_KINDS = 8
 };
 constexpr uint8_t BOSS_RANDOM = 255;
-inline const char* const kBossNames[BOSS_KINDS] = {"The Leviathan", "The Kraken Queen", "The Flying Dutchman", "The Sea Serpent",
-                                                   "The Sea Fortress", "The Admiral's Armada", "The Ironclad", "The Storm Caller"};
+constexpr uint8_t BOSS_PIRATES = BOSS_KINDS;  // (the Odyssey's sea battles: no giant, waves of pirates; never picked in Boss mode)
+inline const char* const kBossNames[BOSS_KINDS + 1] = {"The Leviathan", "The Kraken Queen", "The Flying Dutchman", "The Sea Serpent",
+                                                       "The Sea Fortress", "The Admiral's Armada", "The Ironclad", "The Storm Caller", "The Pirate Fleet"};
+inline const char* BossName(int kind) { return kBossNames[kind >= 0 && kind <= BOSS_KINDS ? kind : 0]; }
 // a piece of a boss that's hit on its own (the Kraken Queen's arms, the fortress's towers, ...)
 struct BossPart {
     uint8_t state = 0;
@@ -551,7 +614,18 @@ struct Ship {
     bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
+    uint8_t perks[PK_COUNT] = {};  // the Odyssey: upgrades picked so far this run
+    int16_t perkRound = -1;        // ...the round whose pick she's had
+    float sinceHit = 0.0f;         // s since she was last hurt (the carpenters work when nobody's shooting)
+    float burnT = 0.0f, burnDps = 0.0f;  // ablaze (Hot Shot): s left, hull a second
+    int16_t burnBy = -1;           // ...who set her alight
+    float chainT = 0.0f;           // her rigging torn (Chain Shot): s of sailing slow left
+    float invulnT = 0.0f;          // Lucky Charm: s untouchable
+    uint8_t charmUsed = 0;         // ...charms spent this round
+    float kegCd = 0.0f;            // Kamikaze: s until a ram can set off another keg
+    bool plunder = false;          // Plunderer: the next broadside fires twice
     float reviveT = 0.0f; // ...s of that so far
+    int revived = 0;      // ...times she's been brought round this round (each takes half as long again as the last)
     float harbourCd = 0.0f;   // s until a harbour will repair her again
     bool harbourWork = false; // the shipwrights are at her now (the cooldown starts when they finish or she sails)
     bool merchant = false;  // raid: one of the AI convoy (sunk, or in port, it's gone for the round)
@@ -597,6 +671,7 @@ struct Ship {
 
 struct Ball {
     float dmgMul = 1.0f;  // the gun it came out of
+    float splashMul = 1.0f;  // a burst's share of a hit (mortars all of it; Grenado Shells less)
     uint16_t id = 0;
     uint16_t owner = 0;
     bool inWater = false;
@@ -636,7 +711,10 @@ enum class EventType : uint8_t {
     BossInk = 33,    // an ink cloud: pos, value = its radius
     BossMortar = 27, // a = the boss, pos = where a shell will land, value = s until it does (the clients mark the spot)
     BossPhase = 28,  // a = the boss, b = its phase (1 when it appears, then 2, 3 as its hull goes)
-    Revive = 34,     // boss mode: a = the ship back in the fight, b = who brought her round (NO_SHIP: several)
+    Revive = 34,     // boss mode: a = the ship back in the fight, b = who brought her round (NO_SHIP: several), flags 1: her own crew (a rally)
+    Perked = 36,     // the Odyssey: a = ship, b = the upgrade she took
+    Wave = 37,       // the Odyssey's sea battle: b = this wave, flags = how many waves, value = pirates in it
+    PerkFx = 38,     // an upgrade at work: a = whose, b = on whom (or the combo), flags = PerkFxKind, pos
     Repaired = 35,   // a = ship, the harbour's done with her (b = 1: she sailed before they'd finished); the cooldown starts
 };
 constexpr uint8_t EF_DOWNED = 32;   // (Kill in boss mode: disabled, not sunk - a friend can bring her round; EF_ROCK's bit, which only Ram uses)
@@ -727,6 +805,51 @@ public:
     uint8_t bossChoice = BOSS_LEVIATHAN;  // host: which boss (or BOSS_RANDOM: a new one every round)
     uint8_t bossKind = BOSS_LEVIATHAN;    // the one we're fighting
     float stormDmg[3] = {};               // (tests: what the Storm Caller's weather has done to us: bolts, spouts, waves)
+    // the Odyssey (MODE_ODYSSEY at Init): the run
+    bool odyssey = false;
+    int odRound = 1;              // how far into the run (1 ..)
+    int odBest = 0;               // the furthest any run has got this session
+    uint32_t odSeed = 1;          // the run's: its bosses' order, the upgrades offered
+    uint8_t odKind = OD_BATTLE;   // what this round is
+    bool odWon = false;           // the last round was won (the intermission offers upgrades)
+    int odLast = 0;               // ...and which round that was
+    int odLeg = 0;                // legs sailed this run (they go start -> haven, haven -> far port, and again)
+    uint8_t odBossKind = BOSS_PIRATES;  // the boss this round fights (sea battles: the pirate fleet)
+    std::vector<std::vector<uint8_t>> odWaves;  // a sea battle's waves still to come (the classes in each)
+    int odWave = 0, odWaves0 = 0;  // the wave we're on, of how many
+    float odWaveT = 0.0f;          // s since it came
+    float odHullMul = 1.0f;        // the pirates' hulls, this deep in the run
+    uint8_t voyageFrom = 0, voyageTo = 1;  // the voyage (and an Odyssey leg): from which harbour, to which (voyage::)
+    float VoyageGoalS() const;            // how far along the route its harbour is
+    int rallies = 0;               // small crews (fewer than three captains): times this round a crew may get her going again alone
+    float rallyT = 0.0f;           // ...one under way: s until she's going (everyone's disabled meanwhile)
+    int Captains() const;          // our side's captains (players and bots)
+    static float ReviveTimeOf(const Ship& s) { return tune::reviveTime * (1.0f + 0.5f * s.revived); }
+    static OdysseyKind OdKindOf(int round) { return round % 5 == 0 ? OD_BOSS : round % 2 == 1 ? OD_BATTLE : OD_LEG; }
+    int OdBossNo() const { return odRound / 5; }  // the run's 1st, 2nd ... boss
+    float BossHpMul() const { return Diff().bossHp * (odyssey && odKind == OD_BOSS ? 1.0f + 0.35f * (OdBossNo() - 1) : 1.0f); }
+    // (the Leviathan's patterns already aim at every captain; the others' attacks come a little faster for a big crew,
+    // a little slower for a solo one - tuned at three)
+    float BossRateMul() const {
+        const float crowd = bossKind == BOSS_LEVIATHAN ? 1.0f : Clamp(1.0f + 0.08f * (Captains() - 3), 0.85f, 1.5f);
+        return Diff().bossRate * crowd * (odyssey && odKind == OD_BOSS ? 1.0f + 0.08f * (OdBossNo() - 1) : 1.0f);
+    }
+    float BossHull(float a, float b) const;  // a boss's hull: a + b per captain at three of them, ^1.1 with the crew
+    float PirateMul() const { return Diff().pirates * (odyssey ? 0.6f + 0.1f * (odRound - 1) : 1.0f); }
+    float AimErr() const { return Diff().aimErr + (odyssey ? fmaxf(0.0f, 0.07f - 0.007f * (odRound - 1)) : 0.0f); }  // (the run's first pirates are poor gunners)
+    float Bigger() const { return Diff().bigger + (odyssey ? 0.05f * (odRound - 1) : 0.0f); }
+    void OdysseySetRound(bool first);  // this round's kind: the mode, the sea, the harbours, the boss
+    void OdysseyEnd(bool won);         // the round's over: on to the next (with an upgrade), or the run is
+    bool PickPerk(int shipId, int choice);  // a captain's pick (0..2 of the offers); false if not now
+    void GivePerk(Ship& s, int perk);
+    void SpawnPirateFleet();
+    void UpdatePirateFleet(float dt);
+    void UpdatePerks(float dt);
+    void Ignite(Ship& s, int by, float dps);
+    void KegBlast(Ship& s);
+    void CallLightning(Ship& target, int by);
+    void OnPerkHit(Ship& target, int owner, Vector3 at, float dmg, bool burst);  // a hit by one of ours: what her upgrades do
+    void GiveRoundPowers(Ship& s);  // Quartermaster (and Arsenal): a power-up or two to start the round with
     float bossHpNow = 0.0f, bossHpMax = 1.0f;  // its hull (the Leviathan: its ship's; the others keep their own)
     Vector3 bossPos{};                    // where it is
     float bossHeading = 0.0f, bossT = 0.0f;
@@ -813,7 +936,7 @@ private:
     void UpdateHarbours(float dt);
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
-    void SpawnRaider(Vector2 at, float heading, int cls);
+    void SpawnRaider(Vector2 at, float heading, int cls, float hullMul = 1.0f);
     void UpdateRaid(float dt);
     void UpdateBoss(float dt);
     void SpawnBoss();

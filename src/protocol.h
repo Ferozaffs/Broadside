@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 25;  // 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 26;  // 26: the Odyssey (perks, rallies, its block), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -26,6 +26,7 @@ enum MsgType : uint8_t {
     MSG_SET_ROLE = 13,    // C->S  role (captain / crew), or 2 = move to the next ship as crew
     MSG_ROLE = 14,        // S->C  our new crewman id (255: captain), our ship
     MSG_ORDER = 15,       // C->S  the captain's order to the crew (Order)
+    MSG_PICK_PERK = 16,   // C->S  the Odyssey: which of the three upgrades on offer (0..2)
 };
 enum Role : uint8_t { ROLE_CAPTAIN = 0, ROLE_CREW = 1 };
 
@@ -171,6 +172,9 @@ struct NetShip {
     bool downed = false, harbourWork = false;  // boss mode: disabled (a friend can bring her round) / in the shipwrights' hands
     float revive = 0;     // ...how far along that is, 0..1
     float harbourCd = 0;  // s until a harbour will repair her again
+    uint8_t perks[PK_COUNT] = {};  // the Odyssey: her upgrades
+    bool picked = false;           // ...and this round's pick made
+    bool burning = false, chained = false, charmed = false;  // ablaze, rigging torn, untouchable (the upgrades at work)
     uint16_t banked = 0;
     uint8_t raceGate = 0, racePlace = 0;  // race: gates behind it / finishing place (0: racing)
     float raceTime = 0, slowTimer = 0;    // race: time over the line / s left crippled
@@ -239,6 +243,11 @@ struct Snapshot {
     uint16_t teamScore[2] = {0, 0};
     uint8_t matchState = 0, round = 1, cove = 0;
     uint8_t raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
+    uint8_t rallies = 0;                  // a small crew's rallies left (boss, voyage)
+    bool odyssey = false;                 // the Odyssey: the run
+    uint16_t odRound = 1, odLast = 0, odBest = 0;
+    uint32_t odSeed = 1;
+    uint8_t odKind = 0, odWon = 0, voyageFrom = 0, voyageTo = 1, odWave = 0, odWaves = 0;
     float matchClock = 0;
     float raceClock = 0;  // race: s since the round started (the countdown is the first raceCountdown of it)
 };
@@ -254,6 +263,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
     w.Put(world.cove);
     w.Put((uint8_t)std::min(world.raidTotal, 255));
     w.Put((uint8_t)std::min(world.raidNeed, 255));
+    w.Put((uint8_t)std::min(world.rallies, 255));
     w.Put((uint16_t)Clamp(world.rounds ? world.matchClock * 10.0f : 0.0f, 0.0f, 65000.0f));
     w.Put((uint16_t)Clamp(world.raceClock * 20.0f, 0.0f, 65000.0f));
     uint16_t n = 0;
@@ -266,10 +276,16 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
                         (s.trimmed ? SF_TRIM : 0) | (s.crewed ? SF_CREW : 0) | (s.lookout ? SF_LOOKOUT : 0) | (s.lost ? SF_LOST : 0)));
         w.Put(s.team);
         w.Put(s.leader);
-        w.Put((uint8_t)Clamp(roundf(s.maxHp), 1.0f, 255.0f));  // whole points (cutter 55 .. ship of the line + treasure 180)
+        w.Put((uint16_t)Clamp(roundf(s.maxHp), 1.0f, 65000.0f));  // whole points (cutter 55 .. an upgraded ship of the line 320)
         w.PutU8f(s.bankTimer / tune::bankTime);  // pirate: unloading progress
-        w.Put((uint8_t)((s.downed ? 1 : 0) | (s.harbourWork ? 2 : 0)));
-        w.PutU8f(s.reviveT / tune::reviveTime);
+        w.Put((uint8_t)((s.downed ? 1 : 0) | (s.harbourWork ? 2 : 0) | (world.odyssey && s.perkRound == world.odLast ? 4 : 0) | (s.burnT > 0.0f ? 8 : 0) |
+                        (s.chainT > 0.0f ? 16 : 0) | (s.invulnT > 0.0f ? 32 : 0)));
+        {
+            uint64_t pk = 0;
+            for (int p = 0; p < PK_COUNT; ++p) pk |= (uint64_t)(s.perks[p] & 7) << (3 * p);
+            w.Put(pk);
+        }
+        w.PutU8f(s.reviveT / World::ReviveTimeOf(s));
         w.PutU8f(s.harbourCd / tune::harbourCooldown);
         w.Put((uint16_t)std::min(s.banked, 65535));
         w.PutU8f(s.hp / s.maxHp);
@@ -421,6 +437,19 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
             w.Put(p.target);
         }
     }
+    w.Put((uint8_t)(world.odyssey ? 1 : 0));
+    if (world.odyssey) {
+        w.Put((uint16_t)world.odRound);
+        w.Put((uint16_t)world.odLast);
+        w.Put((uint16_t)world.odBest);
+        w.Put(world.odSeed);
+        w.Put(world.odKind);
+        w.Put((uint8_t)(world.odWon ? 1 : 0));
+        w.Put(world.voyageFrom);
+        w.Put(world.voyageTo);
+        w.Put((uint8_t)world.odWave);
+        w.Put((uint8_t)world.odWaves0);
+    }
 }
 
 inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
@@ -433,6 +462,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
     s.cove = r.Get<uint8_t>();
     s.raidTotal = r.Get<uint8_t>();
     s.raidNeed = r.Get<uint8_t>();
+    s.rallies = r.Get<uint8_t>();
     s.matchClock = r.Get<uint16_t>() / 10.0f;
     s.raceClock = r.Get<uint16_t>() / 20.0f;
     uint16_t n = r.Get<uint16_t>();
@@ -442,12 +472,18 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         sh.flags = r.Get<uint8_t>();
         sh.team = r.Get<int8_t>();
         sh.leader = r.Get<int16_t>();
-        sh.maxHp = (float)r.Get<uint8_t>();
+        sh.maxHp = (float)r.Get<uint16_t>();
         sh.unload = r.GetU8f();
         {
             uint8_t st = r.Get<uint8_t>();
             sh.downed = (st & 1) != 0;
             sh.harbourWork = (st & 2) != 0;
+            sh.picked = (st & 4) != 0;
+            sh.burning = (st & 8) != 0;
+            sh.chained = (st & 16) != 0;
+            sh.charmed = (st & 32) != 0;
+            uint64_t pk = r.Get<uint64_t>();
+            for (int p = 0; p < PK_COUNT; ++p) sh.perks[p] = (uint8_t)((pk >> (3 * p)) & 7);
         }
         sh.revive = r.GetU8f();
         sh.harbourCd = r.GetU8f() * tune::harbourCooldown;
@@ -576,6 +612,19 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
             p.t = r.Get<uint16_t>() / 100.0f;
             p.target = r.Get<int16_t>();
         }
+    }
+    s.odyssey = r.Get<uint8_t>() != 0;
+    if (s.odyssey && r.ok) {
+        s.odRound = r.Get<uint16_t>();
+        s.odLast = r.Get<uint16_t>();
+        s.odBest = r.Get<uint16_t>();
+        s.odSeed = r.Get<uint32_t>();
+        s.odKind = r.Get<uint8_t>();
+        s.odWon = r.Get<uint8_t>();
+        s.voyageFrom = r.Get<uint8_t>();
+        s.voyageTo = r.Get<uint8_t>();
+        s.odWave = r.Get<uint8_t>();
+        s.odWaves = r.Get<uint8_t>();
     }
     return r.ok;
 }

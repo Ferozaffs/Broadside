@@ -99,7 +99,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--mode") {
             std::string t = next("ffa");
-            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : t == "raid" ? MODE_RAID : t == "boss" ? MODE_BOSS : MODE_FFA;
+            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : t == "raid" ? MODE_RAID : t == "boss" ? MODE_BOSS : t == "odyssey" ? MODE_ODYSSEY : MODE_FFA;
         } else if (a == "--fleets") o.fleets = true;
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
@@ -178,7 +178,7 @@ static const Color kNavy = {44, 112, 232, 255}, kPirate = {34, 32, 36, 255}, kPi
 static const char* const kOrderText[ORDER_COUNT] = {"MAN THE PORT GUNS!", "MAN THE STARBOARD GUNS!", "PATCH THE HOLES!"};
 static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss"};
 static const char* const kModeShort[MODE_COUNT] = {"FFA", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss"};
-static bool CoopMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS; }  // (the host picks a difficulty)  // (the menu's row of them)
+static bool CoopMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS || m == MODE_ODYSSEY; }  // (the host picks a difficulty)  // (the menu's row of them)
 static bool PassageMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID; }
 // a game mode on the host page: its name and a line about it (the chosen one gold)
 static bool ModeCard(Rectangle r, const char* name, const char* line, bool sel) {
@@ -362,6 +362,13 @@ public:
     int bossSel = BOSS_RANDOM;       // host's choice in boss mode: one of them, or a new one every round
     int curDifficulty = voyage::NORMAL;
     int raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
+    int rallies = 0;                  // a small crew's rallies left
+    bool odyssey = false;             // the Odyssey (from the snapshot): the run
+    int odRound = 1, odLast = 0, odBest = 0, odKind = 0, odWave = 0, odWaves = 0, voyageFrom = 0, voyageTo = 1;
+    bool odWon = false;
+    uint32_t odSeed = 1;
+    void DrawPerkPicker(float W, float H);
+    void PickPerkUi(int k);
     bool curSkills = false;
     bool curRealistic = false;
     int arenaSel = ARENA_ISLES;      // host's choice of arena
@@ -836,7 +843,7 @@ void Game::StartSession(bool host, int bots, bool open) {
     if (host) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
-        int arena = PassageMode(modeSel) ? ARENA_PASSAGE : modeSel == MODE_BOSS ? ARENA_ISLES : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
+        int arena = PassageMode(modeSel) ? ARENA_PASSAGE : modeSel == MODE_BOSS || modeSel == MODE_ODYSSEY ? ARENA_ISLES : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
         if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
                           arena, handlingSel != 0, ffSel != 0, diffSel, bossSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
@@ -1128,6 +1135,21 @@ void Game::Interpolate() {
     cove = snaps.back().cove;
     raidTotal = snaps.back().raidTotal;
     raidNeed = snaps.back().raidNeed;
+    {
+        const Snapshot& sn = snaps.back();
+        rallies = sn.rallies;
+        odyssey = sn.odyssey;
+        odRound = sn.odRound;
+        odLast = sn.odLast;
+        odBest = sn.odBest;
+        odSeed = sn.odSeed;
+        odKind = sn.odKind;
+        odWon = sn.odWon != 0;
+        voyageFrom = sn.odyssey ? sn.voyageFrom : voyage::startHarbour;
+        voyageTo = sn.odyssey ? sn.voyageTo : voyage::endHarbour;
+        odWave = sn.odWave;
+        odWaves = sn.odWaves;
+    }
     matchRound = snaps.back().round;
     matchClock = snaps.back().matchClock;
     raceClock = snaps.back().raceClock;
@@ -1250,7 +1272,10 @@ void Game::UpdateInput(float dt) {
     }
     if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
     for (int c = 0; c < SC_PLAYABLE; ++c)
-        if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) PickClass(c);
+        if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) {
+            if (odyssey && matchState == 1 && odWon) PickPerkUi(c);  // (the Odyssey, between rounds: the upgrades)
+            else PickClass(c);
+        }
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
         Feed(sfx::Muted() ? "Sound off  (M)" : "Sound on  (M)", ui::kDim);
@@ -1587,7 +1612,11 @@ void Game::DrawResults(float W, float H) {
     std::string title;
     Color tc = kGold;
     std::string sub;
-    if (curMode == MODE_VOYAGE) {
+    if (odyssey) {  // the run: on to the next round, or over
+        const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
+        if (odWon) { title = TextFormat("ROUND %d CLEARED", odLast); sub = TextFormat("next: round %d, %s   \xC2\xB7   %s", odRound, odRound % 5 == 0 ? "a boss" : odRound % 2 ? "a sea battle" : "a voyage leg", lvl); }
+        else { title = "THE RUN IS OVER"; tc = kRed; sub = TextFormat("you reached round %d   \xC2\xB7   best this session: round %d   \xC2\xB7   %s", odLast, std::max(odBest, odLast), lvl); }
+    } else if (curMode == MODE_VOYAGE) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
         if (winTeam == 0) { title = "SAFE HARBOUR"; sub = TextFormat("the convoy made it through   \xC2\xB7   %d pirate%s sunk   \xC2\xB7   %s", teamScore[1], teamScore[1] == 1 ? "" : "s", lvl); }
         else if (winTeam == 1) { title = "LOST AT SEA"; tc = kRed; sub = TextFormat("the pirates took the convoy   \xC2\xB7   %d of them sunk first   \xC2\xB7   %s", teamScore[1], lvl); }
@@ -1595,7 +1624,7 @@ void Game::DrawResults(float W, float H) {
     } else if (curMode == MODE_BOSS) {
         const char* lvl = TextToUpper(voyage::kDifficultyNames[curDifficulty]);
         int el = (int)fmaxf(0.0f, tune::bossLength - matchClock);
-        const std::string boss = kBossNames[bossView.bossKind % BOSS_KINDS];  // (whichever it was, not always the Leviathan)
+        const std::string boss = BossName(bossView.bossKind);  // (whichever it was, not always the Leviathan)
         if (winTeam == 0) { title = TextFormat("%s IS BEATEN", TextToUpper(boss.c_str())); sub = TextFormat("in %d:%02d   \xC2\xB7   %s", el / 60, el % 60, lvl); }
         else if (winTeam == 1) { title = "THE FLEET IS LOST"; tc = kRed; sub = TextFormat("%s wins   \xC2\xB7   %s", boss.c_str(), lvl); }
         else { title = "IT GOT AWAY"; tc = kText; sub = "the fight took too long"; }
@@ -2247,6 +2276,7 @@ void Game::Reconcile() {
     s.cls = ns->cls;
     s.dashCd = ns->dashCd;
     s.hookCd = ns->hookCd;
+    for (int p = 0; p < PK_COUNT; ++p) s.perks[p] = ns->perks[p];  // (the Odyssey's upgrades: speed and reload are predicted)
     if (ns->hooked != s.hooked) {
         s.hooked = ns->hooked;
         if (s.hooked >= 0 && s.hooked < NumShips() && view[s.hooked].present) s.hookRest = Vector3Distance(view[s.hooked].s.pos, ns->pos);
@@ -2760,7 +2790,65 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("%s  %ds", Scenery::PowerName(e.b), (int)e.value), pc, 2.4f});
             break;
         }
+        case EventType::PerkFx: {
+            const bool mine = e.a == myId, onMe = e.b == myId;
+            switch (e.flags) {
+                case PFX_ABLAZE:
+                    for (int i = 0; i < 24; ++i) Emit(Vector3Add(e.pos, {0, 4, 0}), {Rnd(-5, 5), Rnd(4, 12), Rnd(-5, 5)}, Rnd(1.0f, 2.0f), Rnd(0.4f, 0.9f), 0.2f, {255, 150, 50, 230}, 0);
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "ABLAZE!", {255, 150, 60, 255}, 1.4f});
+                    break;
+                case PFX_CHAINED:
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 12, 0}), "CHAINED!", {214, 204, 180, 255}, 1.2f});
+                    break;
+                case PFX_CHARM:
+                    fx.Add(fx::Flash, Vector3Add(e.pos, {0, 6, 0}), {0, 0, 0}, 0.3f, 24.0f, 0, ui::kGold);
+                    floats.push_back({Vector3Add(e.pos, {0, 18, 0}), mine ? "LUCKY CHARM! NOT TODAY" : "LUCKY!", ui::kGold, 2.2f});
+                    if (mine) sfx::PlayFlat(sfx::Chime, 1.0f, 1.3f);
+                    break;
+                case PFX_KEG:
+                    fx.BigExplosion(e.pos);
+                    fx.BigExplosion(Vector3Add(e.pos, {6, 2, -4}));
+                    sfx::Play(sfx::Slam, e.pos, 1.0f, 0.6f);
+                    if (myId >= 0 && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 150.0f) shake = fmaxf(shake, 1.4f);
+                    if (e.a < NumShips()) Feed3(NameOf(e.a), "'s powder kegs go up!", "", TeamOf(e.a), {255, 150, 60, 255});
+                    break;
+                case PFX_COMBO:
+                    if (mine && e.b < CB_COUNT) {
+                        Notice(TextFormat("COMBO!  %s", TextToUpper(kCombos[e.b].name)), ui::kGold, 4.0f);
+                        Feed(TextFormat("Combo: %s - %s", kCombos[e.b].name, kCombos[e.b].line), ui::kGold);
+                        sfx::PlayFlat(sfx::Treasure, 0.8f, 1.0f);
+                    } else if (e.a < NumShips() && e.b < CB_COUNT && view[e.a].present && !(view[e.a].s.flags & SF_BOT))
+                        Feed3(NameOf(e.a), TextFormat("  has a combo: %s", kCombos[e.b].name), "", TeamOf(e.a), ui::kGold);
+                    break;
+                case PFX_ECHO:
+                    if (mine) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "DOUBLE-SHOTTED!", ui::kGold, 1.2f});
+                    break;
+                case PFX_PRIZE:
+                    if (mine) {
+                        floats.push_back({Vector3Add(e.pos, {0, 18, 0}), "PRIZE! HULL BACK, GUNS LOADED", ui::kGreen, 2.0f});
+                        sfx::PlayFlat(sfx::Confirm, 0.8f, 1.1f);
+                    }
+                    break;
+            }
+            (void)onMe;
+            break;
+        }
+        case EventType::Wave:
+            Notice(TextFormat("WAVE %d / %d", e.b, e.flags), ui::kRed, 3.0f);
+            Feed(TextFormat("Pirates round the islands: %d of them", (int)e.value), ui::kRed);
+            sfx::PlayFlat(sfx::Chime, 0.7f, 0.6f);
+            break;
+        case EventType::Perked:
+            if (e.a == myId) Feed(TextFormat("Upgrade: %s (%s)", kPerkNames[e.b % PK_COUNT], kPerkLines[e.b % PK_COUNT]), ui::kGreen);
+            else if (e.a < NumShips() && view[e.a].present && !(view[e.a].s.flags & SF_BOT)) Feed3(NameOf(e.a), TextFormat("  takes %s", kPerkNames[e.b % PK_COUNT]), "", TeamOf(e.a), ui::kText);
+            break;
         case EventType::Revive:
+            if (e.flags & 1) {  // a small crew's rally
+                Feed3(NameOf(e.a), "'s crew gets her going again!", "", TeamOf(e.a), ui::kGreen);
+                if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "YOUR CREW RALLIES", ui::kGreen, 2.6f});
+                sfx::PlayFlat(sfx::Confirm, 0.9f, 0.7f);
+                break;
+            }
             if (e.b != NO_SHIP && e.b < NumShips()) Feed3(NameOf(e.b), "  brought round  ", NameOf(e.a), TeamOf(e.b), TeamOf(e.a));
             else Feed3(NameOf(e.a), "  is back in the fight", "", TeamOf(e.a), ui::kGreen);
             for (int i = 0; i < 30; ++i) {
@@ -2853,6 +2941,23 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::MatchStart:
+            if (e.value >= 1.0f) {  // the Odyssey: this round plays as another mode, maybe on another sea
+                static const char* const kKind[] = {"A SEA BATTLE", "A VOYAGE LEG", "A BOSS"};
+                const int kind = World::OdKindOf(e.b);
+                if (e.a < MODE_COUNT && (e.a != curMode || e.flags != curArena)) {
+                    curMode = e.a;
+                    curArena = e.flags;
+                    bossView.hasBoss = false;
+                    fortressRock = false;
+                    SetOcean(oceanSeed, curWeather, curArena, curMode);
+                    predValid = false;
+                    history.clear();
+                }
+                Notice(TextFormat("ROUND %d   \xC2\xB7   %s", e.b, kKind[kind]), ui::kGold, 4.0f);
+                Feed(kind == OD_BATTLE ? "Pirates are coming round the islands, wave after wave: sink every one."
+                     : kind == OD_LEG  ? "A leg of the Passage: get the convoy to the next harbour."
+                                       : "Something huge is coming. Sink it!", ui::kText);
+            }
             if (curMode == MODE_RACE && RaceArena(e.flags) && e.flags != curArena) {  // on to the next course
                 curArena = e.flags;
                 SetOcean(oceanSeed, curWeather, curArena, curMode);
@@ -3013,6 +3118,10 @@ void Game::PlayEvent(const GameEvent& e) {
             mortarMarks.push_back({e.pos, GetTime(), e.value});
             break;
         case EventType::BossPhase:
+            if (e.flags == BOSS_PIRATES) {
+                if (e.b == 1) Feed3("THE PIRATE FLEET", "  is coming: sink every ship of it", "", ui::kRed, ui::kText);
+                break;
+            }
             if (e.flags == BOSS_STORM) {
                 const Color sc = {170, 130, 230, 255};
                 if (e.b == 1) {
@@ -4346,8 +4455,9 @@ void Game::DrawHUD() {
             what = me && (me->flags & SF_PIRATE) ? "BANK THE TREASURE HERE" : "PIRATE COVE";
         }
         if (curMode == MODE_VOYAGE) {
-            c = i == voyage::endHarbour ? kGold : i == voyage::haven ? kGreen : kDim;
-            what = i == voyage::endHarbour ? "SAFE HARBOUR" : i == voyage::haven ? "HAVEN   \xC2\xB7   REPAIRS" : "DEPARTURE";
+            c = i == voyageTo ? kGold : i == voyage::haven ? kGreen : kDim;
+            what = i == voyageTo ? (i == voyage::haven ? "THE HAVEN   \xC2\xB7   THIS LEG'S HARBOUR" : "SAFE HARBOUR") : i == voyage::haven ? "HAVEN   \xC2\xB7   REPAIRS"
+                 : i == voyageFrom ? "DEPARTURE" : "HARBOUR";
         }
         if (curMode == MODE_RAID) {
             c = i == voyage::endHarbour ? kRed : i == voyage::haven ? kGreen : kDim;
@@ -4485,7 +4595,8 @@ void Game::DrawHUD() {
         int pirates = 0;
         for (int id = 0; id < NumShips(); ++id)
             pirates += view[id].present && view[id].s.team == 1 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0;
-        float togo = fmaxf(0.0f, pred.RouteLength() - sMe);
+        const float goalS = voyageTo == voyage::haven && pred.havenS > 0.0f ? pred.havenS : pred.RouteLength();
+        float togo = fmaxf(0.0f, goalS - sMe);
         int el = (int)fmaxf(0.0f, tune::voyageLength - matchClock);
         int afloat = 0, convoy = 0;
         for (int id = 0; id < NumShips(); ++id) {
@@ -4493,15 +4604,16 @@ void Game::DrawHUD() {
             ++convoy;
             afloat += (view[id].s.flags & SF_ALIVE) != 0;
         }
-        std::string t = TextFormat("%s   \xC2\xB7   SAFE HARBOUR %.1f km   \xC2\xB7   %s   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d   \xC2\xB7   %d:%02d",
-                                   TextToUpper(voyage::kDifficultyNames[curDifficulty]), togo / 1000.0f,
-                                   TextFormat("AFLOAT %d / %d", afloat, convoy), pirates, teamScore[1], el / 60, el % 60);
+        std::string t = TextFormat("%s   \xC2\xB7   %s %.1f km   \xC2\xB7   %s   \xC2\xB7   PIRATES %d   \xC2\xB7   SUNK %d%s   \xC2\xB7   %d:%02d",
+                                   odyssey ? TextFormat("ROUND %d", odRound) : TextToUpper(voyage::kDifficultyNames[curDifficulty]),
+                                   voyageTo == voyage::haven ? "THE HAVEN" : "SAFE HARBOUR", togo / 1000.0f,
+                                   TextFormat("AFLOAT %d / %d", afloat, convoy), pirates, teamScore[1], rallies > 0 ? TextFormat("   \xC2\xB7   RALLIES %d", rallies) : "", el / 60, el % 60);
         Vector2 m = Measure(t.c_str(), 16, true);
         Rectangle r = {W * 0.5f - m.x * 0.5f - 16, 6, m.x + 32, 26};
         Panel(r, kPanel, 8);
-        Text(t.c_str(), W * 0.5f, r.y + 4, 16, teamScore[0] == 0 ? kRed : kText, true, Center);
+        Text(t.c_str(), W * 0.5f, r.y + 4, 16, afloat <= 1 && convoy > 1 ? kRed : kText, true, Center);
         bannerRight = r.x + r.width;
-        Bar({r.x + 10, r.y + r.height - 4, r.width - 20, 3}, Clamp(sMe / fmaxf(pred.RouteLength(), 1.0f), 0.0f, 1.0f), kGold, {0, 0, 0, 120});
+        Bar({r.x + 10, r.y + r.height - 4, r.width - 20, 3}, Clamp(sMe / fmaxf(goalS, 1.0f), 0.0f, 1.0f), kGold, {0, 0, 0, 120});
         if (me && alive && matchState == 0) {  // the lane: buoy-dots on the water for the next 800 m
             for (float s = sMe + 40.0f; s < fminf(sMe + 840.0f, pred.RouteLength()); s += 32.0f) {
                 Vector2 q = pred.RouteAt(s);
@@ -4718,6 +4830,17 @@ void Game::DrawHUD() {
                         ((me->flags & SF_TRIM) ? "SAILS TENDED  +6% SPEED" : "");
         Label(t.c_str(), 24 + 14, H - 24 - 134 - 18, 11, kGreen);
     }
+    // ---- the Odyssey: our upgrades, over the status card ----
+    if (me && odyssey) {
+        std::string t;
+        for (int p = 0; p < PK_COUNT; ++p)
+            if (me->perks[p]) t += TextFormat("%s%s%s", t.empty() ? "" : "   Â·   ", TextToUpper(kPerkNames[p]), me->perks[p] > 1 ? TextFormat(" x%d", me->perks[p]) : "");
+        if (!t.empty()) Label(t.c_str(), 24, 50, 10, kGold);  // (top left, under the connection line: clear of the power-up timers)
+        std::string c;
+        for (int k = 0; k < CB_COUNT; ++k)
+            if (HasCombo(me->perks, k)) c += TextFormat("%s%s", c.empty() ? "COMBOS   " : "   \xC2\xB7   ", TextToUpper(kCombos[k].name));
+        if (!c.empty()) Label(c.c_str(), 24, 66, 10, {150, 200, 255, 255});
+    }
     // ---- status card ----
     if (me) {
         Rectangle card = {24, H - 24 - 134, 336, 134};
@@ -4805,12 +4928,12 @@ void Game::DrawHUD() {
         Label(label, W * 0.5f, r.y + 10, 12, col, Center);
         Text(value, W * 0.5f, r.y + 24, 40, kText, true, Center);
     };
-    if (alive && me->airTime > 0.15f) {
+    if (alive && matchState == 0 && me->airTime > 0.15f) {
         int spin = (int)(fabsf(me->airSpin) * RAD2DEG);
         const char* v = spin >= 90 ? TextFormat("%.1fs  %d\xC2\xB0", me->airTime, spin) : TextFormat("%.1fs", me->airTime);
         Pill(spin >= 330 ? "SPINNING" : "AIRBORNE", v, me->airTime > 2.0f || spin >= 330 ? kGold : kBlue);
     }
-    else if (alive && me->depthBelow > 2.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
+    else if (alive && matchState == 0 && me->depthBelow > 2.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
 
     if (me && !alive && me->downed) {  // boss mode: disabled, waiting for a friend
         Text("DISABLED", W * 0.5f, H * 0.5f - 150, 72, kGold, true, Center);
@@ -4818,7 +4941,7 @@ void Game::DrawHUD() {
             Text(TextFormat("Being brought round: %d%%", (int)(me->revive * 100.0f)), W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
             SegBar({W * 0.5f - 160, H * 0.5f - 40, 320, 9}, me->revive, 20, kGreen);
         } else
-            Text(TextFormat("Dead in the water: a friend alongside for %d s brings you back with a quarter of your hull", (int)tune::reviveTime), W * 0.5f,
+            Text(TextFormat("Dead in the water: a friend alongside for %d s brings you back with a quarter of your hull (longer each time)", (int)tune::reviveTime), W * 0.5f,
                  H * 0.5f - 72, 22, kText, false, Center);
         Text(curMode == MODE_VOYAGE ? "If every ship of the convoy is disabled at once, the voyage is lost" : "If every ship is disabled at once, the fight is lost",
              W * 0.5f, H * 0.5f - 18, 16, kDim, false, Center);
@@ -4969,7 +5092,8 @@ void Game::DrawHUD() {
     }
 
     if (matchState == 1) DrawResults(W, H);
-    if (me && crewId < 0 && ((!(me->flags & SF_ALIVE) && !me->downed) || matchState == 1)) {  // (disabled: she comes back as she is)
+    if (odyssey && matchState == 1) DrawPerkPicker(W, H);
+    else if (me && crewId < 0 && ((!(me->flags & SF_ALIVE) && !me->downed) || matchState == 1)) {  // (disabled: she comes back as she is)
         float cw = fminf(860.0f, W - 80);
         Rectangle area = {W * 0.5f - cw * 0.5f, H - (matchState == 1 ? 210.0f : 250.0f), cw, 84};
         Label(matchState == 1 ? "NEXT ROUND YOU SAIL  (1 / 2 / 3)" : "CHOOSE YOUR NEXT SHIP  (1 / 2 / 3)", W * 0.5f, area.y - 22, 12, kGold, Center);
@@ -5059,19 +5183,20 @@ void Game::DrawMenu() {
                                            {MODE_RACE, "Race", "first down the channel"}};
         static const ModeItem kCoop[] = {{MODE_VOYAGE, "Voyage", "take the convoy through"},
                                          {MODE_RAID, "Raid", "you are the pirates"},
-                                         {MODE_BOSS, "Boss", "fight a giant"}};
+                                         {MODE_BOSS, "Boss", "fight a giant"},
+                                         {MODE_ODYSSEY, "Odyssey", "a roguelike run, a boss every 5th"}};
         const float cw = 200.0f, ch = compact ? 50.0f : 60.0f;
         // glass behind both columns: the backdrop battle sails right through here
-        Panel({x - 14, y - 14, 2 * cw + 12 + 28, 18 + 4 * (ch + 8) + 22}, {8, 14, 22, 170}, 12);
+        Panel({x - 14, y - 14, 2 * cw + 12 + 28, 18 + 5 * (ch + 8) + 22}, {8, 14, 22, 170}, 12);
         Panel({x + 2 * cw + 12 + 28, y - 14, 420 + 28, 5 * row + 6 + bh + 52}, {8, 14, 22, 170}, 12);
         Label("VERSUS", x + 2, y, 11, kDim);
         Label("CO-OP", x + cw + 14, y, 11, kDim);
         for (int i = 0; i < 4; ++i)
             if (ModeCard({x, y + 18 + i * (ch + 8), cw, ch}, kVersus[i].name, kVersus[i].line, modeSel == kVersus[i].mode)) modeSel = kVersus[i].mode;
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < 4; ++i)
             if (ModeCard({x + cw + 12, y + 18 + i * (ch + 8), cw, ch}, kCoop[i].name, kCoop[i].line, modeSel == kCoop[i].mode)) modeSel = kCoop[i].mode;
         if (modeSel == MODE_BOSS) {  // which boss: under the co-op cards, arrows either side
-            Rectangle r = {x + cw + 12, y + 18 + 3 * (ch + 8), cw, ch};
+            Rectangle r = {x + cw + 12, y + 18 + 4 * (ch + 8), cw, ch};
             DrawRectangleRounded(r, 12.0f / r.height * 2.0f, 8, {255, 255, 255, 14});
             const int n = BOSS_KINDS + 1;  // (the last: random)
             int i = bossSel == BOSS_RANDOM ? BOSS_KINDS : bossSel;
@@ -5091,7 +5216,8 @@ void Game::DrawMenu() {
             static const char* const kHow[] = {"FEWER PIRATES", "CO-OP", "MORE PIRATES", "SUNK IS OUT"};
             static const char* const kHowRaid[] = {"SINK HALF", "SINK 60%", "BIGGER, SINK 70%", "BIGGEST, SINK 80%"};
             static const char* const kHowBoss[] = {"A GENTLER GIANT", "CO-OP", "TOUGHER, FASTER FIRE", "SUNK IS OUT"};
-            Label(TextFormat("DIFFICULTY   \xC2\xB7   %s", modeSel == MODE_RAID ? kHowRaid[diffSel] : modeSel == MODE_BOSS ? kHowBoss[diffSel] : kHow[diffSel]), sx + 2, sy, 11, kDim);
+            static const char* const kHowOd[] = {"A GENTLE START", "CO-OP", "HARDER FROM ROUND 1", "FOR THE BRAVE"};
+            Label(TextFormat("DIFFICULTY   \xC2\xB7   %s", modeSel == MODE_RAID ? kHowRaid[diffSel] : modeSel == MODE_BOSS ? kHowBoss[diffSel] : modeSel == MODE_ODYSSEY ? kHowOd[diffSel] : kHow[diffSel]), sx + 2, sy, 11, kDim);
             Segmented({sx, sy + 18, mw, 40}, voyage::kDifficultyNames, voyage::DIFFICULTIES, diffSel);
         } else if (modeSel == MODE_RACE) {
             static const char* const kCourses[] = {"Any", "Strait", "Serpent", "Hairpin", "Zigzag"};
@@ -5108,7 +5234,7 @@ void Game::DrawMenu() {
             if (Button({st.x + 3, st.y + 3, 32, 34}, "-")) botCount = std::max(0, botCount <= 10 ? botCount - 1 : botCount - 5);
             if (Button({st.x + st.width - 35, st.y + 3, 32, 34}, "+")) botCount = botCount < 10 ? botCount + 1 : botCount + 5;
             Text(TextFormat("%d", botCount), st.x + st.width * 0.5f, st.y + 7, 22, kText, true, Center, false);
-            Label(modeSel == MODE_VOYAGE || modeSel == MODE_BOSS ? "ALLIES" : modeSel == MODE_RAID ? "PIRATES" : "BOTS", st.x + st.width * 0.5f, sy, 11, kDim, Center);
+            Label(modeSel == MODE_VOYAGE || modeSel == MODE_BOSS || modeSel == MODE_ODYSSEY ? "ALLIES" : modeSel == MODE_RAID ? "PIRATES" : "BOTS", st.x + st.width * 0.5f, sy, 11, kDim, Center);
         }
         sy += row;
         static const char* const kTimes[] = {"Noon", "Sunset", "Night"};
@@ -6459,7 +6585,8 @@ void Game::DrawBossBar(float W) {
     const bool down = bossView.bossState == 2 || frac <= 0.0f;
     const float bw = fminf(720.0f, W - 120.0f), x = W * 0.5f - bw * 0.5f;
     Panel({x - 16, 6, bw + 32, 64}, kPanel, 10);
-    Text(TextToUpper(kBossNames[bossView.bossKind % BOSS_KINDS]), W * 0.5f, 10, 20, down ? kDim : kRed, true, Center);
+    Text(odyssey ? TextFormat("ROUND %d   \xC2\xB7   %s", odRound, TextToUpper(BossName(bossView.bossKind))) : TextToUpper(BossName(bossView.bossKind)), W * 0.5f, 10, 20,
+         down ? kDim : kRed, true, Center);
     DrawRectangleRounded({x, 36, bw, 12}, 0.5f, 6, {0, 0, 0, 160});
     bossShown = bossShown < frac ? frac : fmaxf(frac, bossShown - GetFrameTime() * 0.12f);  // (the trail drains after a hit)
     float shown = bossShown;
@@ -6473,6 +6600,12 @@ void Game::DrawBossBar(float W) {
         afloat += (view[id].s.flags & SF_ALIVE) != 0;
     }
     std::string extra;
+    if (bossView.bossKind == BOSS_PIRATES) {
+        int pir = 0;
+        for (int id = 0; id < NumShips(); ++id) pir += view[id].present && view[id].s.team == 1 && (view[id].s.flags & SF_ALIVE) && view[id].s.leader < 0;
+        extra = TextFormat("   \xC2\xB7   WAVE %d / %d   \xC2\xB7   %d PIRATE%s AFLOAT", odWave, odWaves, pir, pir == 1 ? "" : "S");
+    }
+    if (rallies > 0) extra += TextFormat("   \xC2\xB7   RALLIES %d", rallies);
     if (bossView.bossKind == BOSS_STORM) {
         int spouts = 0, waves = 0;
         for (const NetBossPart& p : bossView.bossParts) {
@@ -6755,6 +6888,21 @@ void Game::DrawSearchlight(const Camera3D& cam) {
 
 // The Armada's fire ships: alight from end to end
 void Game::FireshipFx(float dt) {
+    for (int id = 0; id < NumShips(); ++id) {  // the upgrades at work: Hot Shot's fires, the Lucky Charm's glow, Chain Shot's torn canvas
+        if (!view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
+        const NetShip& s = view[id].s;
+        if (s.burning)
+            for (float z : {-6.0f, 5.0f}) fx.ShipFire(HullToWorld(s.pos, s.rot, {0.0f, 3.5f, z}, ScaleOf(id)), 0.8f, dt, s.vel);
+        if (s.charmed && Rnd(0.0f, 1.0f) < dt * 40.0f) {
+            fx::Particle& q = fx.Add(fx::Spark, Vector3Add(s.pos, {Rnd(-8, 8), Rnd(2, 14), Rnd(-8, 8)}), {0, Rnd(2, 5), 0}, Rnd(0.5f, 1.0f), 0.5f, 0, ui::kGold);
+            q.drag = 1.0f;
+        }
+        if (s.chained && Rnd(0.0f, 1.0f) < dt * 6.0f) {
+            fx::Particle& q = fx.Add(fx::Debris, HullToWorld(s.pos, s.rot, {Rnd(-3, 3), Rnd(14, 24), Rnd(-6, 6)}, ScaleOf(id)), Vector3Add(s.vel, {Rnd(-2, 2), -1.0f, Rnd(-2, 2)}),
+                                     Rnd(1.0f, 2.0f), Rnd(0.8f, 1.4f), 0, {214, 204, 180, 255});
+            q.spin = Rnd(-300, 300);
+        }
+    }
     if (curMode != MODE_BOSS || !bossView.hasBoss || bossView.bossKind != BOSS_ARMADA) return;
     for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present || !(view[id].s.flags & SF_ALIVE) || NameOf(id) != "Fire ship") continue;
@@ -6823,13 +6971,14 @@ void Game::DrawStormFx(float dt) {
 }
 
 void Game::DrawStormGeometry(const Camera3D& cam) {
-    if (!bossView.hasBoss || bossView.bossKind != BOSS_STORM) return;
+    const bool storm = bossView.hasBoss && bossView.bossKind == BOSS_STORM;
+    if (!storm && bolts.empty()) return;  // (a Lightning Rod's bolts come down in any fight)
     const OceanCPU& oc = Ocean();
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     rlSetTexture(rlGetTextureIdDefault());
     // the waves: a swell rising out of the sea behind, a grey-white crest, a steep face in front, rolling across the bay
-    {
+    if (storm) {
         struct Prof { float fwd, h; unsigned char r, g, b, a; };
         // (linear colour: the post pass fogs it by depth and tonemaps it like the sea round it)
         static const Prof prof[] = {{-75.0f, 0.0f, 4, 14, 18, 0},     {-40.0f, 2.2f, 4, 14, 18, 190},  {-15.0f, 6.0f, 6, 17, 21, 225},
@@ -6871,7 +7020,7 @@ void Game::DrawStormGeometry(const Camera3D& cam) {
         rlDrawRenderBatchActive();
     }
     // the spouts: a twisting funnel of grey water from the sea up into the cloud, widening as it climbs
-    {
+    if (storm) {
         const float tNow = (float)GetTime();
         rlDisableDepthMask();
         rlBegin(RL_QUADS);
@@ -6935,4 +7084,50 @@ void Game::DrawStormGeometry(const Camera3D& cam) {
     rlSetTexture(0);
     rlEnableBackfaceCulling();
     (void)cam;
+}
+
+// The Odyssey, between rounds won: three upgrades to choose from (1 / 2 / 3, or click), kept for the run
+void Game::DrawPerkPicker(float W, float H) {
+    using namespace ui;
+    if (!odyssey || !odWon || matchState != 1 || myId < 0 || myId >= NumShips() || !view[myId].present || crewId >= 0) return;
+    const NetShip& me = view[myId].s;
+    uint8_t offer[3];
+    PerkOffers(odSeed, odLast, myId, me.perks, offer);
+    const float cw = fminf(300.0f, (W - 120.0f) / 3.0f), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (3 * cw + 2 * gap) * 0.5f, y = H - 300.0f;
+    Label(me.picked ? "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON" : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 / 2 / 3)", odLast), W * 0.5f, y - 24, 13, kGold, Center);
+    for (int k = 0; k < 3; ++k) {
+        if (offer[k] == 255) continue;
+        Rectangle r = {x0 + k * (cw + gap), y, cw, ch};
+        const bool hot = !me.picked && CheckCollisionPointRec(GetMousePosition(), r);
+        Panel(r, hot ? kPanelHi : kPanel, 12);
+        if (hot) DrawRectangleRoundedLines(r, 12.0f / r.height * 2.0f, 8, kGold);
+        Text(TextFormat("%d", k + 1), r.x + 16, r.y + 12, 18, kGold, true);
+        const Color special = {150, 200, 255, 255};
+        Text(kPerkNames[offer[k]], r.x + 42, r.y + 12, 20, me.picked ? kDim : PerkMechanical(offer[k]) ? special : kText, true);
+        Text(kPerkLines[offer[k]], r.x + 16, r.y + 42, 15, kDim, false);
+        const int have = me.perks[offer[k]], combo = CompletesCombo(me.perks, offer[k]);
+        if (combo >= 0) {
+            Label(TextFormat("COMPLETES  %s", TextToUpper(kCombos[combo].name)), r.x + 16, r.y + 64, 11, kGold);
+            Text(kCombos[combo].line, r.x + 16, r.y + 78, 12, A(kGold, 0.8f), false);
+        } else {
+            for (int c = 0; c < CB_COUNT; ++c)  // (half a combo: what it would go with)
+                if ((kCombos[c].a == offer[k] || kCombos[c].b == offer[k]) && !HasCombo(me.perks, c)) {
+                    const int other = kCombos[c].a == offer[k] ? kCombos[c].b : kCombos[c].a;
+                    Label(TextFormat("+ %s = %s", TextToUpper(kPerkNames[other]), TextToUpper(kCombos[c].name)), r.x + 16, r.y + 66, 10, A(special, 0.8f));
+                    break;
+                }
+            Label(have ? TextFormat("YOU HAVE %d   \xC2\xB7   UP TO %d", have, kPerkMax[offer[k]]) : PerkMechanical(offer[k]) ? "NEW   \xC2\xB7   CHANGES HOW YOU FIGHT" : "NEW",
+                  r.x + 16, r.y + ch - 20, 10, have ? kDim : kGreen);
+        }
+        if (hot && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) PickPerkUi(k);
+    }
+}
+
+void Game::PickPerkUi(int k) {
+    if (!odyssey || !odWon || matchState != 1 || myId < 0 || myId >= NumShips() || !view[myId].present || view[myId].s.picked) return;
+    ByteWriter w;
+    w.Put(MSG_PICK_PERK);
+    w.Put((uint8_t)k);
+    Send(w.buf, true);
+    sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
 }
