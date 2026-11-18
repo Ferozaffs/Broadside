@@ -65,7 +65,7 @@ private:
     std::vector<Particle> ps;
     struct Glow { Vector3 p; float size; Color c; };
     std::vector<Glow> glows;
-    Texture2D smokeTex{}, fireTex{}, flashTex{};
+    Texture2D smokeTex{}, fireTex{}, flashTex{}, streakTex{};
     std::vector<uint32_t> order;
     uint32_t seed = 1234567;
     float R(float a, float b);

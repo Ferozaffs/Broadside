@@ -813,3 +813,14 @@ If the session runs out of tokens, continue when they refresh.
   Queen's crown of little red eyes gone; a darker maroon skin.
 - [x] The hit flash: full only for your own shot, a hint for others', and quicker (a crowd of guns kept it lit, tinting
   the whole boss orange).
+
+## Effects pass (2026-11-18, user: "effects like the big wave etc. that look out of place, same with particles")
+- [x] The rogue wave is part of the sea now: a ridge raised in the water's own vertex shader (Rogue() in common.glsl,
+  uRogue0/1 + uRogueK: crest point, heading, half-length, height), its slope in the water's normals, broken white
+  water along the crest and streaks down the face, OceanHeight (post fog, ship wetness) includes it. The client tracks
+  each wave smoothly from the snapshots (Game::UpdateRogues, RogueAt mirrors the GLSL) and lifts and pitches the
+  ships riding it for the eye (the sim's impulse is unchanged). Spray torn off the crest, a faint mist behind it. The
+  old hand-built strip of quads is gone.
+- [x] Particles: smoke puffs softer and wispier (a ragged edge), cannon smoke gauzier, smoke never lit brighter than a
+  little over the light there is (it glowed in storms); spray drops drawn as short soft streaks along their motion;
+  splashes get a column of mist; the waterspout's spray in gauzy sheets.

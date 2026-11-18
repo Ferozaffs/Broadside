@@ -89,6 +89,8 @@ public:
     Vector3 ambient{0.55f, 0.6f, 0.68f};  // sky light on particles (0..1)
     Atmos atm;  // set before Begin each frame; sunDir/sunColor/ambient are taken from it
     Vector4 vortex{0, 0, 0, 0};  // maelstrom arena: xy centre (world xz), z = 1 when there is one
+    Vector4 rogue[2]{};          // the Storm Caller's rogue waves: crest point (x, y = world xz), heading (z, w)
+    Vector4 rogueK{};            // ...their half-lengths and heights (x, y; z, w), 0 height: none
     unsigned int SceneDepthTex() const { return sceneDepth; }  // this frame's resolved depth (after End)
 
 private:

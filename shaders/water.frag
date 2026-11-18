@@ -87,6 +87,19 @@ void main() {
     vec3 macroNormal = normalize(vec3(-vg.x, 1.0, -vg.y));
     vec3 N = normalize(vec3(-slopes.x - vg.x, 1.0, -slopes.y - vg.y));
     N = normalize(mix(macroNormal, N, atten));
+    // a rogue wave: its slope in the surface (it's big: it doesn't fade with distance), white water along its crest and
+    // down its face, broken up into streaks and blown back over its shoulder
+    vec3 rg = Rogue(vXZ);
+    if (rg.x > 0.05) {
+        N = normalize(N + vec3(-rg.y, 0.0, -rg.z));
+        float steep = length(rg.yz), lift = rg.x / max(max(uRogueK.y, uRogueK.w), 1.0);
+        vec4 rn1 = texture(uNoise, vXZ * 0.035 + vec2(uTime * 0.03, 0.0));
+        vec4 rn2 = texture(uNoise, vXZ * 0.11 - vec2(0.0, uTime * 0.05));
+        float lace = rn1.r * 0.55 + rn2.g * 0.45;
+        float crest = smoothstep(0.9, 0.99, lift) * smoothstep(0.3, 0.65, lace + 0.1);       // a narrow broken line along the top
+        float face = smoothstep(0.6, 1.1, steep) * smoothstep(0.3, 0.8, lift) * smoothstep(0.68, 0.85, lace);  // streaks down the face
+        foam = max(foam, clamp(max(crest * 0.9, face * 0.55), 0.0, 0.9));
+    }
 
     // maelstrom foam: streaks wound round the funnel, spiralling in, and white water churning in the throat
     float vortexChurn = 0.0, eyeDark = 0.0;

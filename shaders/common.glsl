@@ -58,6 +58,25 @@ vec2 VortexFlow(vec2 xz) {
     return n * vr + vec2(n.y, -n.x) * vt;
 }
 
+// ---- the Storm Caller's rogue waves: a ridge raised out of the sea itself (visual only: the physics has its own) ----
+// (same formula as Game::RogueAt in main.cpp: keep them in step)
+uniform vec4 uRogue0, uRogue1;  // each wave's crest point (xy = world xz) and the way it rolls (zw)
+uniform vec4 uRogueK;           // their half-lengths (x, z) and heights (y, w); a height of 0: no wave
+vec3 RogueOne(vec2 xz, vec4 w, float halfLen, float H) {  // height, dh/dx, dh/dz
+    if (H <= 0.0) return vec3(0.0);
+    vec2 d = w.zw, rel = xz - w.xy;
+    float f = dot(rel, d), l = dot(rel, vec2(d.y, -d.x));
+    if (f < -150.0 || f > 45.0) return vec3(0.0);
+    float L = f < 0.0 ? 38.0 : 10.0;  // a long back, a steep face
+    float g = exp(-(f / L) * (f / L)), dg = -2.0 * f / (L * L) * g;
+    float e = clamp((halfLen - abs(l)) / 160.0, 0.0, 1.0);
+    e = e * e * (3.0 - 2.0 * e);
+    float b = 1.0 - smoothstep(620.0, 740.0, length(xz));  // (it dies against the islands)
+    float k = H * e * b;
+    return vec3(k * g, d * (k * dg));
+}
+vec3 Rogue(vec2 xz) { return RogueOne(xz, uRogue0, uRogueK.x, uRogueK.y) + RogueOne(xz, uRogue1, uRogueK.z, uRogueK.w); }
+
 // Texel n of each cascade holds the field at world x = n * L / N, hence the half-texel shift.
 vec2 OceanUV(vec2 xz, int c) { return xz / uOceanLen[c] + 0.5 / uOceanN; }
 float ShoreDamp(vec2 xz) { return uShoreExtent > 0.0 ? texture(uShoreDamp, xz / (2.0 * uShoreExtent) + 0.5).r : 1.0; }
@@ -73,7 +92,7 @@ float OceanHeight(vec2 xz) {
         vec3 d = OceanDispFoam(p, 0, 0.0).xyz + OceanDispFoam(p, 1, 0.0).xyz;
         p = xz - d.xz;
     }
-    return OceanDispFoam(p, 0, 0.0).y + OceanDispFoam(p, 1, 0.0).y + OceanDispFoam(p, 2, 0.0).y + VortexHeight(xz);
+    return OceanDispFoam(p, 0, 0.0).y + OceanDispFoam(p, 1, 0.0).y + OceanDispFoam(p, 2, 0.0).y + VortexHeight(xz) + Rogue(xz).x;
 }
 
 float SkyHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }

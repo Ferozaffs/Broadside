@@ -39,7 +39,9 @@ float Smooth(float e0, float e1, float x) {
 float PuffDensity(float x, float y, int var) {
     float r = sqrtf(x * x + y * y);
     float n = Fbm(x * 2.4f + var * 17.0f, y * 2.4f + var * 5.0f, var * 101 + 7);
-    return Smooth(0.18f, 0.62f, (1.0f - r) * 0.95f + (n - 0.5f) * 0.95f);
+    float fine = Fbm(x * 6.0f - var * 3.0f, y * 6.0f + var * 11.0f, var * 37 + 3);
+    float d = Smooth(0.05f, 0.75f, (1.0f - r) * 0.9f + (n - 0.5f) * 1.1f + (fine - 0.5f) * 0.35f);  // (a soft, ragged edge: wisps, not cotton)
+    return d * (0.65f + 0.35f * fine);
 }
 Texture2D ToTexture(Image img) {
     Texture2D t = LoadTextureFromImage(img);
@@ -110,6 +112,17 @@ void System::Init() {
     flashTex = ToTexture(flash);
 
     soft = ToTexture(GenImageGradientRadial(64, 64, 0.0f, WHITE, BLANK));
+    {  // a drop of spray in flight, smeared along its way
+        Image st = GenImageColor(32, 64, BLANK);
+        Color* sp = (Color*)st.data;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 32; ++x) {
+                float u = (x + 0.5f) / 32 * 2 - 1, w = (y + 0.5f) / 64 * 2 - 1;
+                float a = expf(-u * u * 9.0f) * Smooth(1.0f, 0.55f, fabsf(w)) * (0.7f + 0.3f * (1.0f - w) * 0.5f);
+                sp[y * 32 + x] = {255, 255, 255, (unsigned char)(255 * Clamp(a, 0.0f, 1.0f))};
+            }
+        streakTex = ToTexture(st);
+    }
     ps.reserve(8000);
 }
 
@@ -161,7 +174,7 @@ void System::CannonFire(Vector3 m, Vector3 dir, Vector3 sv) {
     // the smoke bank: shoots out, stalls within ~10 m, then hangs and drifts for seconds
     for (int i = 0; i < 13; ++i) {
         Vector3 v = Vector3Add(Vector3Add(Vector3Scale(sv, 0.55f), Vector3Scale(dir, R(5, 36))), RDir(3.5f));
-        Particle& q = Add(Smoke, Vector3Add(m, Vector3Scale(dir, R(0, 2))), v, R(5.0f, 9.0f), R(2.0f, 3.4f), R(2.0f, 3.4f), {226, 224, 218, 200});
+        Particle& q = Add(Smoke, Vector3Add(m, Vector3Scale(dir, R(0, 2))), v, R(5.0f, 9.0f), R(2.4f, 3.8f), R(2.4f, 3.8f), {206, 204, 198, 150});
         q.drag = R(1.8f, 3.0f);
         q.rise = R(0.3f, 0.9f);
         q.spin = R(-12, 12);
@@ -321,6 +334,10 @@ void System::Draw(const Camera3D& cam, const Lighting& L) {
     // smoke picks up the sun from above and the sky everywhere
     float sunUp = Clamp(L.sunDir.y * 2.0f + 0.3f, 0.0f, 1.0f);
     Vector3 lit = {L.ambient.x + L.sun.x * 0.55f * sunUp, L.ambient.y + L.sun.y * 0.55f * sunUp, L.ambient.z + L.sun.z * 0.55f * sunUp};
+    {  // (white smoke in grey weather glows like a lamp: never brighter than a little over the light there is)
+        const float m = fmaxf(lit.x, fmaxf(lit.y, lit.z)), cap = 0.92f;
+        if (m > cap) lit = Vector3Scale(lit, cap / m);
+    }
     for (uint32_t i : order) {
         const Particle& p = ps[i];
         float t = 1.0f - p.life / p.maxLife;
@@ -335,7 +352,18 @@ void System::Draw(const Camera3D& cam, const Lighting& L) {
             if (p.kind == Debris) c = {(unsigned char)(c.r * lit.x), (unsigned char)(c.g * lit.y), (unsigned char)(c.b * lit.z), c.a};
             else if (p.kind == Droplet) c = {(unsigned char)fminf(255, c.r * lit.x), (unsigned char)fminf(255, c.g * lit.y), (unsigned char)fminf(255, c.b * lit.z), c.a};
             c.a = (unsigned char)(c.a * a);
-            quad(soft, full, p, c);
+            if (p.kind == Droplet) {  // spray: a short streak along the way it's flying, as the eye sees a falling drop
+                const float sx = Vector3DotProduct(p.v, right), sy = Vector3DotProduct(p.v, up);
+                const float sp = sqrtf(sx * sx + sy * sy);
+                float d = Vector3Distance(p.p, cam.position);
+                float nf = Clamp((d - p.size * 0.4f) / (p.size * 0.8f + 1.0f), 0.0f, 1.0f);
+                if (nf <= 0.0f) continue;
+                c.a = (unsigned char)(c.a * nf * 0.6f);
+                const float len = p.size * (1.0f + fminf(sp * 0.02f, 0.45f)), wid = p.size * 0.8f;
+                const float ang = atan2f(sx, sy) * RAD2DEG;
+                DrawBillboardPro(cam, streakTex, {0, 0, 32, 64}, p.p, up, {wid, len}, {wid * 0.5f, len * 0.5f}, -ang, c);
+            } else
+                quad(soft, full, p, c);
         }
     }
     rlDrawRenderBatchActive();

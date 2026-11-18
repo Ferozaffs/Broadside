@@ -700,6 +700,11 @@ private:
     void FireshipFx(float dt);
     void DrawIronclad(float dt);
     void DrawStormFx(float dt);
+    // the rogue waves as the water draws them (tracked smoothly between snapshots), and what they do to the ships' looks
+    struct RogueTrack { Vector2 pos{}, dir{}; float h = 0.0f; bool seen = false; };
+    RogueTrack rogues[2];
+    void UpdateRogues(float dt);
+    float RogueAt(float x, float z, Vector2* grad = nullptr) const;
     void DrawStormGeometry(const Camera3D& cam);
     struct Bolt { Vector3 at; double t0; float seed; };
     std::vector<Bolt> bolts;
@@ -2680,8 +2685,9 @@ void Game::PlayEvent(const GameEvent& e) {
                 Vector3 v = {Rnd(-3, 3), Rnd(6, skip ? 10 : 18), Rnd(-3, 3)};
                 Emit(e.pos, v, Rnd(0.8f, 1.6f), Rnd(0.4f, 0.9f), 0.5f, {235, 245, 250, 220}, 0);
             }
-            for (int i = 0; i < 6; ++i)
-                Emit(e.pos, {Rnd(-1, 1), Rnd(1, 3), Rnd(-1, 1)}, 1.5f, 2.0f, 2.0f, {230, 240, 245, 120}, 1);
+            for (int i = 0; i < (skip ? 2 : 6); ++i)  // a column of mist rising and spreading over it (the drops fall out of it)
+                Emit(Vector3Add(e.pos, {Rnd(-1.0f, 1.0f), Rnd(0.5f, skip ? 1.5f : 6.0f), Rnd(-1.0f, 1.0f)}), {Rnd(-1.2f, 1.2f), Rnd(2.0f, skip ? 3.0f : 7.0f), Rnd(-1.2f, 1.2f)},
+                     Rnd(1.4f, 2.2f), Rnd(2.0f, 3.2f), 3.0f, {222, 230, 234, 70}, 1);
             break;
         }
         case EventType::Hit: {
@@ -6378,6 +6384,7 @@ void Game::Frame() {
             UpdateInput(dt);
         }
         ApplyPrediction(dt);
+        UpdateRogues(dt);
         PlayEvents();
         if (prof) mark[2] = GetTime();
         Vector3 focus = (myId >= 0 && view[myId].present) ? view[myId].s.pos : Vector3{0, 0, 0};
@@ -7209,6 +7216,73 @@ void Game::DrawIronclad(float dt) {
     }
 }
 
+// ---- the rogue waves, as the water draws them ----------------------------------------------------------------------
+// Tracked from the snapshots and run on at the wave's speed between them (the boss's parts come 20 times a second),
+// handed to the shaders, and the ships lifted and pitched over them for the eye only (the physics' wave is the
+// impulse in the sim; this is what you see go under them)
+float Game::RogueAt(float x, float z, Vector2* grad) const {  // (as Rogue() in common.glsl)
+    float h = 0.0f;
+    if (grad) *grad = {0.0f, 0.0f};
+    for (const RogueTrack& w : rogues) {
+        if (w.h <= 0.0f) continue;
+        const Vector2 rel = {x - w.pos.x, z - w.pos.y};
+        const float f = rel.x * w.dir.x + rel.y * w.dir.y, l = rel.x * w.dir.y - rel.y * w.dir.x;
+        if (f < -150.0f || f > 45.0f) continue;
+        const float L = f < 0.0f ? 38.0f : 10.0f, g = expf(-(f / L) * (f / L)), dg = -2.0f * f / (L * L) * g;
+        float e = Clamp((sc::waveHalf - fabsf(l)) / 160.0f, 0.0f, 1.0f);
+        e = e * e * (3.0f - 2.0f * e);
+        const float r = sqrtf(x * x + z * z), t = Clamp((r - 620.0f) / 120.0f, 0.0f, 1.0f), b = 1.0f - t * t * (3.0f - 2.0f * t);
+        const float k = w.h * e * b;
+        h += k * g;
+        if (grad) *grad = Vector2Add(*grad, Vector2Scale(w.dir, k * dg));
+    }
+    return h;
+}
+
+void Game::UpdateRogues(float dt) {
+    const bool storm = curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_STORM;
+    for (RogueTrack& w : rogues) w.seen = false;
+    if (storm)
+        for (const NetBossPart& p : bossView.bossParts) {
+            if (p.state != sc::WAVE) continue;
+            const Vector2 at = {p.pos.x, p.pos.z};
+            RogueTrack* t = nullptr;
+            for (RogueTrack& w : rogues)  // (the same wave: the same heading)
+                if (w.h > 0.0f && !w.seen && Vector2DotProduct(w.dir, p.dir) > 0.99f) t = &w;
+            if (!t)
+                for (RogueTrack& w : rogues)
+                    if (w.h <= 0.0f) { t = &w; t->pos = at; t->dir = p.dir; break; }
+            if (!t) continue;
+            t->seen = true;
+            const Vector2 off = Vector2Subtract(at, t->pos);
+            if (Vector2Length(off) > 80.0f) t->pos = at;                          // (a fresh one, or far adrift: jump)
+            else t->pos = Vector2Add(t->pos, Vector2Scale(off, fminf(1.0f, dt * 3.0f)));  // (else drift onto it)
+        }
+    for (RogueTrack& w : rogues) {
+        if (w.h > 0.0f || w.seen) w.pos = Vector2Add(w.pos, Vector2Scale(w.dir, sc::waveSpeed * dt));
+        const float target = w.seen ? 10.0f : 0.0f;  // (it rises out of the sea, and sinks back when it's done)
+        w.h = Clamp(w.h + (target > w.h ? 4.0f : -6.0f) * dt, 0.0f, 10.0f);
+    }
+    for (int k = 0; k < 2; ++k) renderer.rogue[k] = {rogues[k].pos.x, rogues[k].pos.y, rogues[k].dir.x, rogues[k].dir.y};
+    renderer.rogueK = {sc::waveHalf, rogues[0].h, sc::waveHalf, rogues[1].h};
+    if (rogues[0].h <= 0.0f && rogues[1].h <= 0.0f) return;
+    // the ships ride it (for the eye): lifted by it under them, bow and stern, and pitched to its slope
+    for (int id = 0; id < NumShips(); ++id) {
+        if (!view[id].present) continue;
+        NetShip& s = view[id].s;
+        const Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+        const float half = 16.0f * ScaleOf(id);
+        const float hb = RogueAt(s.pos.x + fwd.x * half, s.pos.z + fwd.z * half), hs = RogueAt(s.pos.x - fwd.x * half, s.pos.z - fwd.z * half);
+        const float hm = RogueAt(s.pos.x, s.pos.z);
+        const float lift = 0.25f * (hb + hs) + 0.5f * hm;
+        if (lift < 0.01f) continue;
+        s.pos.y += lift;
+        const float pitch = atan2f(hb - hs, 2.0f * half);
+        const Vector3 right = Vector3Normalize(Vector3CrossProduct({0, 1, 0}, fwd));
+        s.rot = QuaternionNormalize(QuaternionMultiply(QuaternionFromAxisAngle(right, -pitch), s.rot));
+    }
+}
+
 // The Storm Caller's weather: waterspouts (columns of spray whirling up into the cloud), rogue waves (a crest rolling
 // across the bay), lightning bolts
 void Game::DrawStormFx(float dt) {
@@ -7223,22 +7297,32 @@ void Game::DrawStormFx(float dt) {
                 float h = Rnd(0.0f, 140.0f), a = Rnd(0.0f, 2.0f * PI), r = 4.0f + h * 0.12f;
                 Vector3 at = {base.x + sinf(a) * r, base.y + h, base.z + cosf(a) * r};
                 Vector3 v = {cosf(a) * 14.0f, Rnd(14.0f, 22.0f), -sinf(a) * 14.0f};
-                fx::Particle& q = fx.Add(fx::Smoke, at, v, Rnd(2.0f, 3.5f), Rnd(5.0f, 9.0f), 2.0f, {190, 200, 205, 170});
+                fx::Particle& q = fx.Add(fx::Smoke, at, v, Rnd(2.0f, 3.5f), Rnd(8.0f, 13.0f), 3.0f, {196, 204, 208, 80});
                 q.drag = 0.4f;
                 q.rise = 4.0f;
             }
             if (Rnd(0.0f, 1.0f) < dt * 25.0f) Emit(Vector3Add(base, {Rnd(-8, 8), 0.0f, Rnd(-8, 8)}), {Rnd(-8, 8), Rnd(6, 16), Rnd(-8, 8)}, 1.2f, 0.8f, 0.5f, {225, 235, 240, 210}, 0);
             if (Rnd(0.0f, 1.0f) < dt * 8.0f) AddFoam(base, 4.0f, p.len, 2.0f, 0.8f);
-        } else if (p.state == sc::WAVE) {
-            Vector2 d = p.dir, side = {d.y, -d.x};
-            for (float o = -p.len; o <= p.len; o += 30.0f) {
-                if (Rnd(0.0f, 1.0f) > dt * 4.0f) continue;
-                Vector3 at = {p.pos.x + side.x * o, 0.0f, p.pos.z + side.y * o};
-                if (at.x * at.x + at.z * at.z > 720.0f * 720.0f) continue;
-                at.y = oc.Height(at.x, at.z) + 6.0f;
-                AddFoam(at, 6.0f, 18.0f, 3.0f, 0.9f);
-                for (int k = 0; k < 3; ++k) Emit(at, {d.x * 10.0f + Rnd(-3, 3), Rnd(6, 14), d.y * 10.0f + Rnd(-3, 3)}, 1.4f, 1.0f, 0.6f, {230, 240, 245, 210}, 0);
-            }
+        }
+    }
+    // the rogue waves: spray torn off the crest and blown back over its shoulder, a fine mist hanging behind it
+    for (const RogueTrack& w : rogues) {
+        if (w.h <= 0.0f) continue;
+        const Vector2 d = w.dir, side = {d.y, -d.x};
+        for (float o = -700.0f; o <= 700.0f; o += 16.0f) {
+            if (Rnd(0.0f, 1.0f) > dt * 5.0f) continue;
+            Vector2 c = {w.pos.x + side.x * (o + Rnd(-8, 8)), w.pos.y + side.y * (o + Rnd(-8, 8))};
+            if (c.x * c.x + c.y * c.y > 700.0f * 700.0f || Vector2Distance(c, {rv.pos.x, rv.pos.z}) > 900.0f) continue;
+            const float lift = RogueAt(c.x, c.y);
+            if (lift < w.h * 0.6f) continue;
+            Vector3 at = {c.x, oc.Height(c.x, c.y) + lift + 0.5f, c.y};
+            for (int k = 0; k < 3; ++k)
+                Emit(at, {d.x * Rnd(-2, 6) + Rnd(-1.5f, 1.5f), Rnd(3, 9), d.y * Rnd(-2, 6) + Rnd(-1.5f, 1.5f)}, Rnd(0.8f, 1.5f), Rnd(0.4f, 0.8f), 0.4f, {215, 228, 232, 190}, 0);
+            if (Rnd(0.0f, 1.0f) > 0.35f) continue;
+            fx::Particle& m = fx.Add(fx::Smoke, Vector3Add(at, {-d.x * 3.0f, 1.0f, -d.y * 3.0f}), {-d.x * 6.0f, Rnd(1, 3), -d.y * 6.0f}, Rnd(2.0f, 3.0f), Rnd(6.0f, 9.0f), 4.0f,
+                                     {205, 215, 220, 32});
+            m.drag = 0.6f;
+            m.rise = 0.5f;
         }
     }
     (void)now;
@@ -7251,8 +7335,8 @@ void Game::DrawStormGeometry(const Camera3D& cam) {
     rlDrawRenderBatchActive();
     rlDisableBackfaceCulling();
     rlSetTexture(rlGetTextureIdDefault());
-    // the waves: a swell rising out of the sea behind, a grey-white crest, a steep face in front, rolling across the bay
-    if (storm) {
+    // (the rogue waves are part of the water now: water.frag / UpdateRogues)
+    if (false) {
         struct Prof { float fwd, h; unsigned char r, g, b, a; };
         // (linear colour: the post pass fogs it by depth and tonemaps it like the sea round it)
         static const Prof prof[] = {{-75.0f, 0.0f, 4, 14, 18, 0},     {-40.0f, 2.2f, 4, 14, 18, 190},  {-15.0f, 6.0f, 6, 17, 21, 225},

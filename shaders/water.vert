@@ -17,7 +17,7 @@ void main() {
     }
     vXZ = xz;
     vWorld = vec3(xz.x, 0.0, xz.y) + d;
-    vWorld.y += VortexHeight(vWorld.xz);
+    vWorld.y += VortexHeight(vWorld.xz) + Rogue(vWorld.xz).x;
     vDist = dist;
     gl_Position = uViewProj * vec4(vWorld, 1.0);
 }
