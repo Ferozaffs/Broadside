@@ -344,6 +344,8 @@ public:
     double inputAcc = 0;
     bool paused = false;
     bool showHelp = true;
+    bool helpPinned = false;   // F1 pressed: the panel stays as the player left it
+    double helpUntil = 0.0;    // ...otherwise it folds away at this time
     float shake = 0, flash = 0;
     float lanternBoost = 0.25f;
     int todSel = 0, weatherSel = 0;  // host's choice in the menu (the menu backdrop previews it)
@@ -604,7 +606,7 @@ private:
     void Feed(const std::string& s, Color c) { Feed3(s, "", "", c, c); }
     void Feed3(const std::string& a, const std::string& mid, const std::string& b, Color ca, Color cb) {
         feed.push_back({a, mid, b, ca, cb, GetTime()});
-        if (feed.size() > 6) feed.pop_front();
+        if (feed.size() > 4) feed.pop_front();
     }
     // the colour a ship flies (sails, pennant), and a readable version for text on the dark HUD
     Color ColorOf(int id) const {
@@ -891,6 +893,7 @@ void Game::StartSession(bool host, int bots, bool open) {
     predValid = false;
     showDebug = opt.demo;
     if (opt.autopilot) showHelp = false;
+    helpUntil = GetTime() + 14.0;
 }
 
 void Game::Disconnect(const std::string& why) {
@@ -1054,7 +1057,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 view[id].s.leader = leader;
                 hullHits[id].clear();
                 if (!wasPresent && id != myId && leader < 0 && mode == Mode::Playing && !((PassageMode(curMode) || curMode == MODE_BOSS) && bot))  // (voyage: pirates are called out below; raid: the convoy; boss: it)
-                    Feed3(name, "  sets sail", "", TeamOf(id), ui::kDim);
+                    if (!bot) Feed3(name, "  sets sail", "", TeamOf(id), ui::kDim);  // (players only: the bots just appear)
             }
             break;
         }
@@ -1273,7 +1276,10 @@ void Game::UpdateInput(float dt) {
         if (paused) EnableCursor();
         else DisableCursor();
     }
-    if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
+    if (IsKeyPressed(KEY_F1)) {
+        showHelp = !showHelp;
+        helpPinned = true;
+    }
     for (int c = 0; c < std::max((int)SC_PLAYABLE, 4); ++c)
         if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) {
             if (odyssey && matchState == 1 && odWon) PickPerkUi(c);  // (the Odyssey, between rounds: the upgrades)
@@ -2786,8 +2792,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 q.spin = Rnd(-400, 400);
             }
             for (int i = 0; i < 20; ++i) Emit(e.pos, {Rnd(-4, 4), Rnd(5, 12), Rnd(-4, 4)}, Rnd(0.7f, 1.4f), Rnd(0.4f, 0.8f), 0.5f, {235, 245, 250, 220}, 0);
-            if (!IsEscort(e.a) && (e.a == myId || (myId >= 0 && view[myId].present && Vector3Distance(e.pos, view[myId].s.pos) < 450.0f)))
-                Feed3(NameOf(e.a), "  grabbed  ", Scenery::PowerName(e.b), TeamOf(e.a), pc);
+            if (e.a == myId) Feed3("You", "  grabbed  ", Scenery::PowerName(e.b), ui::kText, pc);  // (only your own: the others' are on their tags)
             if (e.a == myId) sfx::PlayFlat(sfx::Chime, 0.7f);
             else sfx::Play(sfx::Chime, e.pos, 0.6f);
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("%s  %ds", Scenery::PowerName(e.b), (int)e.value), pc, 2.4f});
@@ -4457,11 +4462,11 @@ void Game::DrawHUD() {
         float d = Vector3Distance(rv.pos, p);
         Vector2 sp;
         if (d < 60.0f || d > 1100.0f || !rv.Project(p, sp) || sp.x < -20 || sp.y < -20 || sp.x > W + 20 || sp.y > H + 20) continue;
-        float a = Clamp(1.3f - d / 800.0f, 0.35f, 1.0f);
+        float a = Clamp(1.2f - d / 700.0f, 0.25f, 0.9f);
         Color pc = Scenery::PowerColor(cr.type);
-        DrawPoly(sp, 4, 8.0f, 0.0f, A({0, 0, 0, 140}, a));
-        DrawPoly(sp, 4, 6.0f, 0.0f, A(pc, a));
-        if (d < 700.0f) Text(TextFormat("%d m", (int)d), sp.x, sp.y + 10, 12, A(kText, a * 0.8f), false, Center);
+        DrawPoly(sp, 4, 6.5f, 0.0f, A({0, 0, 0, 120}, a));
+        DrawPoly(sp, 4, 4.8f, 0.0f, A(pc, a));
+        if (d < 350.0f) Text(TextFormat("%d m", (int)d), sp.x, sp.y + 8, 11, A(kText, a * 0.7f), false, Center);
     }
 
     // ---- name tags ----
@@ -4501,9 +4506,16 @@ void Game::DrawHUD() {
             if (s.power[p] > 0.0f) DrawCircleV({sp.x + 46 + 11.0f * k++, sp.y + 0.5f}, 4.0f, A(Scenery::PowerColor(p), a));
         Text(TextFormat("%s  \xC2\xB7  %d m", TextToUpper(ClassOf(s.cls).name), (int)d), sp.x, sp.y + 7, 13, A(kDim, a), false, Center);
     }
-    for (const FloatText& f : floats) {
-        Vector2 sp;
-        if (rv.Project(f.pos, sp)) Text(f.text.c_str(), sp.x, sp.y, 26, A(f.color, Clamp(f.life, 0.0f, 1.0f)), true, Center);
+    {  // callouts over the action ("ABLAZE!", "LUCKY SHOT"...): the newest few, smaller far off, fading as they rise
+        int shown = 0;
+        for (int k = (int)floats.size() - 1; k >= 0 && shown < 4; --k) {
+            const FloatText& f = floats[k];
+            Vector2 sp;
+            if (!rv.Project(f.pos, sp)) continue;
+            const float d = Vector3Distance(rv.pos, f.pos), size = Clamp(24.0f - d * 0.03f, 15.0f, 22.0f);
+            Text(f.text.c_str(), sp.x, sp.y, size, A(f.color, Clamp(f.life * 1.4f, 0.0f, 1.0f) * 0.92f), true, Center);
+            ++shown;
+        }
     }
 
     // ---- harbours ----
@@ -4539,15 +4551,20 @@ void Game::DrawHUD() {
         }
         what = whatS.c_str();
         float a = Clamp(1.4f - d / 1400.0f, 0.45f, 1.0f);
-        if (PassageMode(curMode) && i == voyage::endHarbour) a = 1.0f;  // (the goal: always clear)
+        const bool goal = (PassageMode(curMode) && (i == voyageTo || i == voyage::endHarbour)) || (curMode == MODE_PIRATE && i == cove);
+        if (goal) a = 1.0f;  // (the goal: always clear)
+        const bool words = goal || (d < 900.0f && curMode != MODE_BOSS);  // (far off, or with nothing to offer, just the anchor)
+        if (!words) a *= 0.7f;
         DrawCircleV(sp, 9.0f, A({0, 0, 0, 150}, a));
         DrawCircleLines((int)sp.x, (int)sp.y, 8.0f, A(c, a));
         DrawLineEx({sp.x, sp.y - 5}, {sp.x, sp.y + 5}, 2.0f, A(c, a));  // a little anchor
         DrawLineEx({sp.x - 4, sp.y - 2}, {sp.x + 4, sp.y - 2}, 2.0f, A(c, a));
         DrawLineEx({sp.x - 5, sp.y + 3}, {sp.x, sp.y + 6}, 2.0f, A(c, a));
         DrawLineEx({sp.x + 5, sp.y + 3}, {sp.x, sp.y + 6}, 2.0f, A(c, a));
-        Label(what, sp.x, sp.y + 13, 10, A(c, a), Center);
-        Text(d >= 2000.0f ? TextFormat("%.1f km", d / 1000.0f) : TextFormat("%d m", (int)d), sp.x, sp.y + 26, 12, A(kDim, a), false, Center);
+        if (words) {
+            Label(what, sp.x, sp.y + 13, 10, A(c, a), Center);
+            Text(d >= 2000.0f ? TextFormat("%.1f km", d / 1000.0f) : TextFormat("%d m", (int)d), sp.x, sp.y + 26, 12, A(kDim, a), false, Center);
+        }
     }
     // ---- booty chests ----
     for (const NetCrate& ch : chests) {
@@ -4845,17 +4862,23 @@ void Game::DrawHUD() {
                 DrawLineEx(Vector2Add(c, Vector2Scale(d, 9)), Vector2Add(c, Vector2Scale(d, 18)), 2.5f, hc);
             }
         }
-        Label(ready ? TextFormat("%s READY", SideName(side)) : SideName(side), c.x, c.y + 40, 12, ready ? kGold : kDim, Center);
+        // under it, small: the elevation and the range (red when the guns can't reach)
         const char* rng = aimRange > 0 ? TextFormat("%.0f m", aimRange) : "--";
-        Text(TextFormat("%+.0f\xC2\xB0   %s", aimElevDeg, rng), c.x, c.y + 56, 17, aimClamped && !arcOut ? kRed : A(kText, arcOut ? 0.5f : 0.9f), false, Center);
-        if (arcOut) {
+        Text(TextFormat("%+.0f\xC2\xB0  \xC2\xB7  %s", aimElevDeg, rng), c.x, c.y + 38, 14, aimClamped && !arcOut ? A(kRed, 0.9f) : A(kText, arcOut ? 0.35f : 0.7f), false, Center);
+        if (arcOut) {  // the guns can't bear: an arrow beside the ring, the way to turn
             // forward of the arc: turn away from the target's side; aft of it: turn towards it
             bool toPort = (side == 0) == (arcOut < 0);
-            const char* hint = toPort ? "<<   STEER TO PORT" : "STEER TO STARBOARD   >>";
-            Label("GUNS CAN'T BEAR", c.x, c.y + 78, 11, kGold, Center);
-            Text(hint, c.x, c.y + 94, 16, A(kGold, 0.9f), true, Center);
+            const float sx = toPort ? -1.0f : 1.0f, pulse = 0.55f + 0.45f * sinf((float)now * 6.0f);
+            for (int k = 0; k < 2; ++k) {
+                const float x = c.x + sx * (44.0f + 11.0f * k);
+                const Vector2 tip = {x + sx * 8.0f, c.y}, t1 = {x - sx * 4.0f, c.y - 8.0f}, t2 = {x - sx * 4.0f, c.y + 8.0f};
+                const Color ac = A(kGold, pulse * (k ? 0.55f : 1.0f));
+                DrawTriangle(tip, t1, t2, ac);  // (both windings: raylib culls the one facing away)
+                DrawTriangle(tip, t2, t1, ac);
+            }
+            Label("TURN", c.x + sx * 58.0f, c.y + 14, 9, A(kGold, 0.8f), Center);
         } else if (aimClamped) {
-            Label(AimElevation(curInput.aim) > 0.3f ? "OUT OF RANGE" : "TOO CLOSE", c.x, c.y + 76, 11, kRed, Center);
+            Label(AimElevation(curInput.aim) > 0.3f ? "OUT OF RANGE" : "TOO CLOSE", c.x, c.y + 56, 9, A(kRed, 0.85f), Center);
         }
     } else {
         DrawCircleV(c, 2.5f, A(kText, 0.6f));
@@ -4918,13 +4941,20 @@ void Game::DrawHUD() {
                 y += 16.0f;
             }
         };
-        std::vector<std::string> ups, cos;
-        for (int p = 0; p < PK_COUNT; ++p)
-            if (me->perks[p]) ups.push_back(std::string(TextToUpper(kPerkNames[p])) + (me->perks[p] > 1 ? TextFormat(" x%d", me->perks[p]) : ""));
-        for (int k = 0; k < CB_COUNT; ++k)
-            if (HasCombo(me->perks, k)) cos.push_back(TextToUpper(kCombos[k].name));
-        lines(ups, "", kGold);
-        lines(cos, "COMBOS   ", {150, 200, 255, 255});
+        (void)lines;
+        int ups = 0, cos = 0;
+        for (int p = 0; p < PK_COUNT; ++p) ups += me->perks[p] > 0;
+        for (int k = 0; k < CB_COUNT; ++k) cos += HasCombo(me->perks, k);
+        if (ups > 0 && !(IsKeyDown(KEY_TAB) || opt.showScores)) {  // (the list itself is on Tab): a small pill, top left
+            const std::string t = TextFormat("%d UPGRADE%s", ups, ups == 1 ? "" : "S");
+            const std::string c2 = cos > 0 ? TextFormat("   \xC2\xB7   %d COMBO%s", cos, cos == 1 ? "" : "S") : "";
+            const float w1 = MeasureLabel(t.c_str(), 11).x, w2 = c2.empty() ? 0.0f : MeasureLabel(c2.c_str(), 11).x, wk = KeycapWidth("TAB", 11);
+            Rectangle r = {20, 16, w1 + w2 + wk + 34, 24};
+            Panel(r, A(kPanel, 0.75f), 8);
+            Label(t.c_str(), r.x + 10, r.y + 7, 11, kGold);
+            if (!c2.empty()) Label(c2.c_str(), r.x + 10 + w1, r.y + 7, 11, Color{150, 200, 255, 255});
+            Keycap("TAB", r.x + r.width - 8 - wk, r.y + 4, 11);
+        }
     }
     // ---- status card ----
     if (me) {
@@ -5006,30 +5036,29 @@ void Game::DrawHUD() {
 
     // ---- state pill (airborne / submerged / sunk) ----
     auto Pill = [&](const char* label, const char* value, Color col) {
-        Vector2 lm = Measure(value, 40, true);
-        float pw = fmaxf(220.0f, lm.x + 60), ph = 72;
-        Rectangle r = {W * 0.5f - pw * 0.5f, curMode == MODE_BOSS ? 82.0f : 34.0f, pw, ph};  // (below the boss's bar)
-        Panel(r, kPanelHi, 16);
-        Label(label, W * 0.5f, r.y + 10, 12, col, Center);
-        Text(value, W * 0.5f, r.y + 24, 40, kText, true, Center);
+        Vector2 lm = Measure(value, 28, true);
+        float pw = fmaxf(150.0f, lm.x + 44), ph = 54;
+        Rectangle r = {W * 0.5f - pw * 0.5f, curMode == MODE_BOSS || odyssey ? 80.0f : 36.0f, pw, ph};  // (below the boss's bar)
+        Panel(r, A(kPanelHi, 0.85f), 12);
+        Label(label, W * 0.5f, r.y + 7, 10, col, Center);
+        Text(value, W * 0.5f, r.y + 19, 28, kText, true, Center);
     };
-    if (alive && matchState == 0 && me->airTime > 0.15f) {
+    if (alive && matchState == 0 && me->airTime > 0.5f) {  // (a real jump, not every crest)
         int spin = (int)(fabsf(me->airSpin) * RAD2DEG);
         const char* v = spin >= 90 ? TextFormat("%.1fs  %d\xC2\xB0", me->airTime, spin) : TextFormat("%.1fs", me->airTime);
         Pill(spin >= 330 ? "SPINNING" : "AIRBORNE", v, me->airTime > 2.0f || spin >= 330 ? kGold : kBlue);
     }
-    else if (alive && matchState == 0 && me->depthBelow > 2.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
+    else if (alive && matchState == 0 && me->depthBelow > 5.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
 
     if (me && !alive && me->downed) {  // boss mode: disabled, waiting for a friend
-        Text("DISABLED", W * 0.5f, H * 0.5f - 150, 72, kGold, true, Center);
+        Text("DISABLED", W * 0.5f, H * 0.5f - 150, 56, kGold, true, Center);
         if (me->revive > 0.0f) {
-            Text(TextFormat("Being brought round: %d%%", (int)(me->revive * 100.0f)), W * 0.5f, H * 0.5f - 72, 22, kText, false, Center);
-            SegBar({W * 0.5f - 160, H * 0.5f - 40, 320, 9}, me->revive, 20, kGreen);
+            Text(TextFormat("Being brought round  %d%%", (int)(me->revive * 100.0f)), W * 0.5f, H * 0.5f - 84, 18, kText, false, Center);
+            SegBar({W * 0.5f - 140, H * 0.5f - 56, 280, 7}, me->revive, 20, kGreen);
         } else
-            Text(TextFormat("Dead in the water: a friend alongside for %d s brings you back with a quarter of your hull (longer each time)", (int)tune::reviveTime), W * 0.5f,
-                 H * 0.5f - 72, 22, kText, false, Center);
-        Text(curMode == MODE_VOYAGE ? "If every ship of the convoy is disabled at once, the voyage is lost" : "If every ship is disabled at once, the fight is lost",
-             W * 0.5f, H * 0.5f - 18, 16, kDim, false, Center);
+            Text("A friend alongside brings you back", W * 0.5f, H * 0.5f - 84, 18, kText, false, Center);
+        Text(curMode == MODE_VOYAGE ? "every convoy ship disabled at once loses the voyage" : "everyone disabled at once loses the fight",
+             W * 0.5f, H * 0.5f - 34, 14, A(kDim, 0.8f), false, Center);
     } else if (me && !alive) {
         Text("SUNK", W * 0.5f, H * 0.5f - 150, 72, kRed, true, Center);
         if (curMode == MODE_VOYAGE && (me->flags & SF_LOST))
@@ -5043,26 +5072,26 @@ void Game::DrawHUD() {
     }
 
     // ---- kill feed ----
-    float fy = 24;
+    float fy = 22;
     for (const FeedLine& f : feed) {
-        float a = (float)Clamp(8.0 - (now - f.time), 0.0, 1.0) * (float)Clamp((now - f.time) * 6.0, 0.0, 1.0);
+        float a = (float)Clamp(6.0 - (now - f.time), 0.0, 1.0) * (float)Clamp((now - f.time) * 6.0, 0.0, 1.0);
         if (a <= 0) continue;
-        float size = 18;
+        float size = 15;
         float wa = Measure(f.a.c_str(), size, true).x, wm = Measure(f.mid.c_str(), size).x, wb = Measure(f.b.c_str(), size, true).x;
         float tw = wa + wm + wb;
-        Rectangle r = {W - 24 - tw - 28, fy, tw + 28, 34};
-        Panel(r, A(kPanel, a), 10);
-        float tx = r.x + 14, ty = r.y + 7;
+        Rectangle r = {W - 24 - tw - 22, fy, tw + 22, 27};
+        Panel(r, A(kPanel, a * 0.8f), 8);
+        float tx = r.x + 11, ty = r.y + 6;
         Text(f.a.c_str(), tx, ty, size, A(f.ca, a), true, Left, false);
         Text(f.mid.c_str(), tx + wa, ty, size, A(kDim, a), false, Left, false);
         Text(f.b.c_str(), tx + wa + wm, ty, size, A(f.cb, a), true, Left, false);
-        fy += 40;
+        fy += 31;
     }
 
     // ---- connection info ----
-    Text(TextFormat("%s  \xC2\xB7  %u ms  \xC2\xB7  %d fps", server.Running() ? "HOSTING" : "ONLINE", net.RoundTripMs() + 2 * opt.fakeLagMs,
-                    GetFPS()),
-         24, 20, 15, A(kDim, 0.9f));
+    if (showDebug) Text(TextFormat("%s  \xC2\xB7  %u ms  \xC2\xB7  %d fps", server.Running() ? "HOSTING" : "ONLINE", net.RoundTripMs() + 2 * opt.fakeLagMs, GetFPS()), 24, 20, 13, A(kDim, 0.7f));
+    else if (!server.Running() || net.RoundTripMs() > 150)  // (a guest: the ping; a host's own is nothing)
+        Text(TextFormat("%u ms", net.RoundTripMs() + 2 * opt.fakeLagMs), 24, 20, 13, A(net.RoundTripMs() > 150 ? kGold : kDim, 0.7f));
     if (portOpened) {
         upnp::State us = upnp::GetState();
         std::string ext = upnp::ExternalIp(), lan = upnp::LocalIp();
@@ -5093,6 +5122,12 @@ void Game::DrawHUD() {
              24, 40, 14, kGold);
 
     // ---- controls hint ----
+    if (showHelp && !helpPinned && now > helpUntil) showHelp = false;  // (it folds away once you're under way)
+    if (!showHelp && !paused) {  // folded: a small reminder where it was
+        const float kw = KeycapWidth("F1", 12);
+        Keycap("F1", W - 24 - 78 - kw, H - 24 - 18, 12);
+        Label("CONTROLS", W - 24 - 70, H - 24 - 15, 10, A(kDim, 0.8f));
+    }
     if (showHelp) {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
@@ -5183,6 +5218,36 @@ void Game::DrawHUD() {
         Rectangle area = {W * 0.5f - cw * 0.5f, H - (matchState == 1 ? 210.0f : 250.0f), cw, 84};
         Label(matchState == 1 ? "NEXT ROUND YOU SAIL  (1 / 2 / 3)" : "CHOOSE YOUR NEXT SHIP  (1 / 2 / 3)", W * 0.5f, area.y - 22, 12, kGold, Center);
         DrawClassCards(area, true, true);
+    }
+
+    // ---- the Odyssey on Tab: our upgrades and combos, under the scores ----
+    if ((IsKeyDown(KEY_TAB) || opt.showScores) && odyssey && me) {
+        std::vector<std::string> ups, cos;
+        for (int p = 0; p < PK_COUNT; ++p)
+            if (me->perks[p]) ups.push_back(std::string(TextToUpper(kPerkNames[p])) + (me->perks[p] > 1 ? TextFormat(" x%d", me->perks[p]) : ""));
+        for (int k = 0; k < CB_COUNT; ++k)
+            if (HasCombo(me->perks, k)) cos.push_back(TextToUpper(kCombos[k].name));
+        if (!ups.empty()) {
+            const float pw = fminf(900.0f, W - 80.0f);
+            std::vector<std::pair<std::string, Color>> rows;
+            auto wrap = [&](const std::vector<std::string>& items, const char* head, Color col) {
+                std::string line = head;
+                for (const std::string& it : items) {
+                    std::string next = line + (line == head ? "" : "   \xC2\xB7   ") + it;
+                    if (line != head && MeasureLabel(next.c_str(), 11).x > pw - 40) {
+                        rows.push_back({line, col});
+                        line = it;
+                    } else line = next;
+                }
+                if (line != head) rows.push_back({line, col});
+            };
+            wrap(ups, "UPGRADES   ", kGold);
+            wrap(cos, "COMBOS   ", {150, 200, 255, 255});
+            const float ph = 20.0f + rows.size() * 18.0f;
+            Rectangle r = {W * 0.5f - pw * 0.5f, H - 24 - 134 - 14 - ph, pw, ph};
+            Panel(r, {10, 16, 24, 220}, 12);
+            for (size_t k = 0; k < rows.size(); ++k) Label(rows[k].first.c_str(), r.x + 20, r.y + 12 + k * 18.0f, 11, rows[k].second);
+        }
     }
 
     // ---- pause ----
@@ -5589,7 +5654,7 @@ void Game::CrewInputUpdate(float dt) {
         if (paused) EnableCursor();
         else DisableCursor();
     }
-    if (IsKeyPressed(KEY_F1)) showHelp = !showHelp;
+    if (IsKeyPressed(KEY_F1)) showHelp = !showHelp, helpPinned = true;
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
         Feed(sfx::Muted() ? "Sound off  (M)" : "Sound on  (M)", ui::kDim);

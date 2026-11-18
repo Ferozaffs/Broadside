@@ -785,3 +785,16 @@ If the session runs out of tokens, continue when they refresh.
   paints lips and blush. The first lofted version is kept as tools/make_female_crew_lofted.py.
 - [ ] A bought model later (Maksim Bugrimov's "Pirate Female") would still beat these up close: the faces keep
   something of his bone structure.
+
+## A quieter HUD (2026-11-18, after the review: "lets start by improving the hud")
+- [x] The controls panel folds away 14 s into a session (F1 pins it either way); folded, a small "F1 CONTROLS" hint.
+- [x] Feed: 4 lines, smaller, 6 s; no "sets sail" for bots, no "grabbed" for others (their tags show it), "You grabbed ...".
+- [x] Reticle: the ring says READY (no "PORT READY" label); one small elevation / range line; guns can't bear = a
+  pulsing arrow and TURN beside the ring instead of two lines of text.
+- [x] Crate markers smaller, the distance only within 350 m; harbour markers show their words only within 900 m (or the
+  one you're making for), none in boss mode.
+- [x] The Odyssey: a small "N UPGRADES · N COMBOS [TAB]" pill instead of the lists; the lists open under the scoreboard
+  on Tab.
+- [x] The state pill: smaller, only for real jumps (0.5 s+) and real dunks (5 m+). Callouts: the newest 4, smaller far
+  off. Disabled screen: two short lines. The ping/fps line only in debug (a guest sees the ping).
+- [ ] Next: the boss bar's second line, the kill feed's position vs the boss bar, a HUD scale option.
