@@ -776,5 +776,12 @@ If the session runs out of tokens, continue when they refresh.
   textures (cloth, skin with the face painted on the head's cylindrical map, hair, a details atlas) painted in the
   script. assets/crew/sailor_f, sailor_f_2, sailor_f_3 (auburn + tricorn, black braid + bandana, blonde ponytail).
   The game loads them after the men's three outfits; the outfits go round each crew in turn.
-- [ ] A bought model later (Maksim Bugrimov's "Pirate Female" fits: same artist and rig as the sailors) would replace
-  these through tools/ue4char_to_game_crew.py. Hands are mittens, the neck a little long.
+- [x] Rebuilt from the sailors' own art (user: "Didnt you build the females by modifying the male models? The male
+  pirates look a lot better"): tools/make_female_crew.py now puts outfits together from the Pirate pack's separate
+  parts (no beard), reshapes every part by one field (slimmer limbs/neck/hands, waist, hips, bust; the face from its
+  landmarks - the eyes found by their UVs: brow back, smaller nose, narrower softer jaw), cuts the skin the clothes
+  hide (rays along the skin normal) and tucks the rest in, grows a hair cap from the scalp plus a fringe, framing
+  locks and long hair (waves / braid / ponytail) in the pack's hair colours made solid, softens the skin texture and
+  paints lips and blush. The first lofted version is kept as tools/make_female_crew_lofted.py.
+- [ ] A bought model later (Maksim Bugrimov's "Pirate Female") would still beat these up close: the faces keep
+  something of his bone structure.
