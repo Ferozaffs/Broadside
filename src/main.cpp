@@ -233,7 +233,7 @@ public:
     bool quit = false;
 
     Renderer renderer;
-    CrewModel crewModels[3];          // the sailors (assets/crew: sailor, sailor_2, sailor_3 - one per outfit)
+    CrewModel crewModels[6];          // the sailors (assets/crew: sailor, sailor_2, sailor_3, and the women: sailor_f, sailor_f_2, sailor_f_3 - one per outfit)
     int crewOutfits = 0;
     ShipModel shipModel;              // the default ship (assets/ship)...
     ShipModel classModel[SC_COUNT];   // ...and any class with its own (assets/ship_<class>)
@@ -745,7 +745,7 @@ void Game::Init() {
     std::string assetDir = std::string(GetApplicationDirectory()) + "../assets/ship";
     if (!DirectoryExists(assetDir.c_str())) assetDir = std::string(GetApplicationDirectory()) + "assets/ship";
     if (DirectoryExists(assetDir.c_str())) shipModel.LoadExternal(assetDir.c_str(), renderer.litShader);
-    for (const char* n : {"sailor", "sailor_2", "sailor_3"})
+    for (const char* n : {"sailor", "sailor_2", "sailor_3", "sailor_f", "sailor_f_2", "sailor_f_3"})  // (any that are there: the outfits go round the crew in turn)
         if (crewModels[crewOutfits].Load((assetDir.substr(0, assetDir.size() - 4) + "crew").c_str(), renderer.litShader, n)) ++crewOutfits;
     {
         static const char* const kClassDirs[SC_COUNT] = {"cutter", "frigate", "line", "gunboat", "boss", "ghost", "ironclad"};  // (the bosses: the line's model if they have none)
