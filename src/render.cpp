@@ -24,7 +24,7 @@ bool RenderView::Project(Vector3 p, Vector2& out) const {
     float y = m.m1 * p.x + m.m5 * p.y + m.m9 * p.z + m.m13;
     float w = m.m3 * p.x + m.m7 * p.y + m.m11 * p.z + m.m15;
     if (w <= 0.01f) return false;
-    out = {(x / w * 0.5f + 0.5f) * width, (1.0f - (y / w * 0.5f + 0.5f)) * height};
+    out = {(x / w * 0.5f + 0.5f) * width / uiScale, (1.0f - (y / w * 0.5f + 0.5f)) * height / uiScale};
     return true;
 }
 

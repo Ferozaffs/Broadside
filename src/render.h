@@ -15,6 +15,7 @@ struct RenderView {
     float fovy = 60.0f;
     float nearZ = 0.5f, farZ = 12000.0f;
     int width = 0, height = 0;
+    float uiScale = 1.0f;  // the HUD's scale while it draws: Project answers in its units
     Matrix view, proj, viewProj, invViewProj;
     void Build(int w, int h);
     Camera3D AsCamera() const { return {pos, target, up, fovy, CAMERA_PERSPECTIVE}; }

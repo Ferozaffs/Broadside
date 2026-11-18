@@ -345,6 +345,10 @@ public:
     bool paused = false;
     bool showHelp = true;
     bool helpPinned = false;   // F1 pressed: the panel stays as the player left it
+    float hudUser = 1.0f;      // the player's HUD size (Ctrl = / Ctrl -, saved in hud.cfg), times the auto one
+    double hudSizeShown = -10.0;  // ...when it last changed (a moment's readout)
+    float HudScale() const { return Clamp((float)GetScreenHeight() / 1000.0f, 0.85f, 2.2f) * hudUser; }
+    std::string HudCfgPath() const { return std::string(GetApplicationDirectory()) + "hud.cfg"; }
     double helpUntil = 0.0;    // ...otherwise it folds away at this time
     float shake = 0, flash = 0;
     float lanternBoost = 0.25f;
@@ -747,6 +751,12 @@ void Game::Init() {
     std::string assetDir = std::string(GetApplicationDirectory()) + "../assets/ship";
     if (!DirectoryExists(assetDir.c_str())) assetDir = std::string(GetApplicationDirectory()) + "assets/ship";
     if (DirectoryExists(assetDir.c_str())) shipModel.LoadExternal(assetDir.c_str(), renderer.litShader);
+    if (FileExists(HudCfgPath().c_str())) {  // (the HUD size the player chose last time)
+        char* t = LoadFileText(HudCfgPath().c_str());
+        float v = 1.0f;
+        if (t && sscanf(t, "hud_scale %f", &v) == 1) hudUser = Clamp(v, 0.7f, 1.6f);
+        if (t) UnloadFileText(t);
+    }
     for (const char* n : {"sailor", "sailor_2", "sailor_3", "sailor_f", "sailor_f_2", "sailor_f_3"})  // (any that are there: the outfits go round the crew in turn)
         if (crewModels[crewOutfits].Load((assetDir.substr(0, assetDir.size() - 4) + "crew").c_str(), renderer.litShader, n)) ++crewOutfits;
     {
@@ -1279,6 +1289,13 @@ void Game::UpdateInput(float dt) {
     if (IsKeyPressed(KEY_F1)) {
         showHelp = !showHelp;
         helpPinned = true;
+    }
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD) || IsKeyPressed(KEY_MINUS) ||
+                                                                   IsKeyPressed(KEY_KP_SUBTRACT) || IsKeyPressed(KEY_ZERO))) {  // the HUD's size
+        if (IsKeyPressed(KEY_ZERO)) hudUser = 1.0f;
+        else hudUser = Clamp(hudUser + (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD) ? 0.1f : -0.1f), 0.7f, 1.6f);
+        hudSizeShown = GetTime();
+        SaveFileText(HudCfgPath().c_str(), (char*)TextFormat("hud_scale %.2f\n", hudUser));
     }
     for (int c = 0; c < std::max((int)SC_PLAYABLE, 4); ++c)
         if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) {
@@ -4435,7 +4452,7 @@ static const char* SideName(int s) { return s == 0 ? "PORT" : (s == 1 ? "STARBOA
 
 void Game::DrawHUD() {
     using namespace ui;
-    const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+    const float W = (float)GetScreenWidth() / rv.uiScale, H = (float)GetScreenHeight() / rv.uiScale;  // (in the HUD's units)
     if (DeckGlass() > 0.01f) {  // the spyglass on deck: its rim darkens the edges of the view (the sights stay clear)
         const float g = DeckGlass(), R = 0.5f * H * (1.6f - 0.6f * g), soft = 0.3f * H;
         Vector2 c = {W * 0.5f, H * 0.5f};
@@ -5073,6 +5090,7 @@ void Game::DrawHUD() {
 
     // ---- kill feed ----
     float fy = 22;
+    const float barRight = (curMode == MODE_BOSS && matchState == 0) ? W * 0.5f + fminf(720.0f, W - 120.0f) * 0.5f + 24.0f : -1.0f;
     for (const FeedLine& f : feed) {
         float a = (float)Clamp(6.0 - (now - f.time), 0.0, 1.0) * (float)Clamp((now - f.time) * 6.0, 0.0, 1.0);
         if (a <= 0) continue;
@@ -5080,6 +5098,10 @@ void Game::DrawHUD() {
         float wa = Measure(f.a.c_str(), size, true).x, wm = Measure(f.mid.c_str(), size).x, wb = Measure(f.b.c_str(), size, true).x;
         float tw = wa + wm + wb;
         Rectangle r = {W - 24 - tw - 22, fy, tw + 22, 27};
+        if (barRight > 0.0f && r.x < barRight && fy < 80.0f) {  // (it would run into the boss's bar: under it)
+            fy = 80.0f;
+            r.y = fy;
+        }
         Panel(r, A(kPanel, a * 0.8f), 8);
         float tx = r.x + 11, ty = r.y + 6;
         Text(f.a.c_str(), tx, ty, size, A(f.ca, a), true, Left, false);
@@ -5121,6 +5143,12 @@ void Game::DrawHUD() {
                         predStatN ? predStatSum / predStatN : 0.0, predStatMax, (int)history.size(), assist, assistTarget),
              24, 40, 14, kGold);
 
+    if (now - hudSizeShown < 1.5) {
+        const char* t = TextFormat("HUD SIZE  %d%%", (int)roundf(hudUser * 100.0f));
+        const Vector2 m = MeasureLabel(t, 14);
+        Panel({W * 0.5f - m.x * 0.5f - 18, H * 0.36f - 8, m.x + 36, 34}, kPanel, 8);
+        Label(t, W * 0.5f, H * 0.36f + 2, 14, kGold, Center);
+    }
     // ---- controls hint ----
     if (showHelp && !helpPinned && now > helpUntil) showHelp = false;  // (it folds away once you're under way)
     if (!showHelp && !paused) {  // folded: a small reminder where it was
@@ -5132,7 +5160,7 @@ void Game::DrawHUD() {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
                           {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"SHIFT", nullptr, "Dash (skills)"}, {"E", nullptr, "Hook (skills)"}, {"TAB", nullptr, "Scores"},
-                          {"Z", "X", "Crew: port / stbd guns"}, {"C", nullptr, "Crew: patch holes"}, {"F1", nullptr, "Hide"}};
+                          {"Z", "X", "Crew: port / stbd guns"}, {"C", nullptr, "Crew: patch holes"}, {"CTRL", "+/-", "HUD size"}, {"F1", nullptr, "Hide"}};
         const K crewKeys[] = {{"W", "S", "Walk"}, {"A", "D", "Sidestep"}, {"SHIFT", nullptr, "Run"}, {"E", nullptr, "Gun / helm / sails / lookout"},
                               {"LMB", nullptr, "Fire your gun"}, {"RMB", nullptr, "Zoom"}, {"F", nullptr, "Patch a hole (hold)"},
                               {"M", nullptr, "Sound on / off"}, {"TAB", nullptr, "Scores"}, {"F1", nullptr, "Hide"}};
@@ -6426,8 +6454,19 @@ void Game::Frame() {
         DrawLanternHalos(false);
         if (prof) mark[6] = GetTime();
         if (!getenv("BS_NOHUD")) {  // (BS_NOHUD: clean shots for film)
+            // the HUD in its own units: everything drawn at its size, scaled up (or down) to the window
+            const float s = HudScale();
+            rlDrawRenderBatchActive();
+            rlPushMatrix();
+            rlScalef(s, s, 1.0f);
+            SetMouseScale(1.0f / s, 1.0f / s);
+            rv.uiScale = s;
             DrawMonsterLabels();
             DrawHUD();
+            rlDrawRenderBatchActive();
+            rlPopMatrix();
+            SetMouseScale(1.0f, 1.0f);
+            rv.uiScale = 1.0f;
         }
         if (prof) {
             mark[7] = GetTime();
@@ -6705,7 +6744,7 @@ void Game::DrawMonsterLabels() {
     if (noticeT > 0.0f) {
         noticeT -= GetFrameTime();
         float a = Clamp(noticeT / 0.8f, 0.0f, 1.0f);
-        const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+        const float W = (float)GetScreenWidth() / rv.uiScale, H = (float)GetScreenHeight() / rv.uiScale;
         Text(notice.c_str(), W * 0.5f + 2, H * 0.24f + 3, 40, Fade(BLACK, 0.5f * a), true, Center);
         Text(notice.c_str(), W * 0.5f, H * 0.24f, 40, Fade(noticeC, a), true, Center);
     }
@@ -6810,9 +6849,26 @@ void Game::DrawBossBar(float W) {
         for (const NetBossPart& p : bossView.bossParts) up += p.state >= kq::ARM_RISING && p.state <= kq::ARM_GRAB;
         extra = TextFormat("   \xC2\xB7   ARMS %d / %d%s", up, (int)bossView.bossParts.size(), up >= 4 ? "  (SHIELDING HER)" : "  (SHE'S OPEN)");
     }
-    Text(TextFormat("%s   \xC2\xB7   %s%s   \xC2\xB7   %d:%02d", TextToUpper(voyage::kDifficultyNames[curDifficulty]),
-                    TextFormat("AFLOAT %d / %d", afloat, captains), extra.c_str(), el / 60, el % 60),
-         W * 0.5f, 50, 13, afloat <= 1 ? kRed : kDim, true, Center);
+    // under the bar: our ships as pips on the left (filled afloat, hollow disabled), the clock on the right, and in the
+    // middle what it's doing - gold when it's a call to act
+    for (int k = 0; k < captains && k < 12; ++k) {
+        const Vector2 pc = {x + 6.0f + k * 13.0f, 57.0f};
+        if (k < afloat) DrawCircleV(pc, 4.0f, afloat <= 1 ? kRed : kGreen);
+        else DrawCircleLinesV(pc, 4.0f, A(kDim, 0.8f));
+    }
+    float px = x + 6.0f + std::min(captains, 12) * 13.0f;
+    for (int k = 0; k < rallies; ++k)  // (a small crew's rallies: little gold diamonds)
+        DrawPoly({px + 4.0f + k * 11.0f, 57.0f}, 4, 4.0f, 45.0f, A(kGold, 0.9f));
+    Text(TextFormat("%d:%02d", el / 60, el % 60), x + bw, 50, 13, kDim, true, Right);
+    std::string st = extra;
+    const size_t cut = st.find("   \xC2\xB7   ");
+    if (cut == 0) st = st.substr(sizeof("   \xC2\xB7   ") - 1);
+    const size_t rl = st.find("   \xC2\xB7   RALLIES");  // (the rallies are the diamonds)
+    if (rl != std::string::npos) st = st.substr(0, rl);
+    if (!st.empty()) {
+        const bool act = st.find('!') != std::string::npos || st.find(':') != std::string::npos;
+        Text(st.c_str(), W * 0.5f, 50, 13, act ? kGold : kDim, true, Center);
+    }
 }
 
 // Boss mode: the strike lines its arms are about to come down along, red on the water, a brighter band racing out
@@ -7309,7 +7365,7 @@ void Game::DrawPerkPicker(float W, float H) {
     uint8_t offer[4];
     PerkOffers(odSeed, odLast, myId, me.perks, offer);
     const int N = PerkOfferCount(me.perks);
-    const float cw = fminf(300.0f, (W - 120.0f) / N), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (N * cw + (N - 1) * gap) * 0.5f, y = H - 300.0f;
+    const float cw = fminf(300.0f, (W - 120.0f) / N), ch = 104.0f, gap = 16.0f, x0 = W * 0.5f - (N * cw + (N - 1) * gap) * 0.5f, y = H - 340.0f;
     Label(me.picked ? "UPGRADE TAKEN   \xC2\xB7   THE NEXT ROUND SOON" : TextFormat("ROUND %d CLEARED   \xC2\xB7   CHOOSE AN UPGRADE  (1 - %d)", odLast, N), W * 0.5f, y - 24, 13, kGold, Center);
     for (int k = 0; k < N; ++k) {
         if (offer[k] == 255) continue;

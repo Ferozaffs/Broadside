@@ -797,4 +797,9 @@ If the session runs out of tokens, continue when they refresh.
   on Tab.
 - [x] The state pill: smaller, only for real jumps (0.5 s+) and real dunks (5 m+). Callouts: the newest 4, smaller far
   off. Disabled screen: two short lines. The ping/fps line only in debug (a guest sees the ping).
-- [ ] Next: the boss bar's second line, the kill feed's position vs the boss bar, a HUD scale option.
+- [x] The boss bar's second line: our ships as pips (filled afloat, hollow disabled), rallies as gold diamonds, the
+  clock at the right, and in the middle only what the boss is doing (gold when it's a call to act).
+- [x] The feed drops under the boss bar when it would run into it.
+- [x] HUD scale: the whole HUD drawn in its own units and scaled (rlScalef; RenderView::uiScale divides Project's
+  answers, SetMouseScale the mouse): auto from the window height (H / 1000, 0.85..2.2) times the player's own
+  (Ctrl = / Ctrl - / Ctrl 0, 70..160%, saved in hud.cfg next to the exe). The upgrade picker sits a little higher.
