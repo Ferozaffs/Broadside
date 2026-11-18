@@ -769,3 +769,12 @@ If the session runs out of tokens, continue when they refresh.
   Odyssey block. The HUD's upgrade list wraps (and its separator was mojibake: fixed).
 - [x] BS_PERKTEST=1 --simtest: each upgrade and combo alone through the first sea battle - how often it did its work
   (World::perkUse / comboUse), the battle's length against none.
+
+## Women in the crew (2026-11-18, user: "we should have some hot female pirates in our crew", then "Model your own for now")
+- [x] tools/make_female_crew.py (Blender, headless): three pirate women modelled from lofted shapes on the sailor's
+  own skeleton, skinned by copying his weights from the nearest point of his mesh, his idle / run / work kept;
+  textures (cloth, skin with the face painted on the head's cylindrical map, hair, a details atlas) painted in the
+  script. assets/crew/sailor_f, sailor_f_2, sailor_f_3 (auburn + tricorn, black braid + bandana, blonde ponytail).
+  The game loads them after the men's three outfits; the outfits go round each crew in turn.
+- [ ] A bought model later (Maksim Bugrimov's "Pirate Female" fits: same artist and rig as the sailors) would replace
+  these through tools/ue4char_to_game_crew.py. Hands are mittens, the neck a little long.
