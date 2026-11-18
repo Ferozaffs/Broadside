@@ -51,7 +51,8 @@ key that is not published; see tools/pack_ship.py), as their licences require.
   (reduced, textures baked to albedo, stretched to fit the hull).
 - **Sailors**: "Pirate" by Bugrimov Maksim, used under the Fab Standard License (exported from Unreal with
   tools/ue_export_pack.py, reduced, textures baked to albedo). Only the pirate's own meshes and textures are used;
-  the Unreal sample mannequins and animations that come with the pack are not.
+  the Unreal sample mannequins and animations that come with the pack are not. The women of the crew are made from
+  the same pack's parts (tools/make_female_crew.py: reshaped, with hair and textures derived from the pack's).
 - **Sailor animations**: Breathing Idle, Running and Working On Device from Adobe Mixamo (https://www.mixamo.com),
   used royalty free under Adobe's terms for Mixamo content, retargeted onto the pirate
   (tools/ue4char_to_game_crew.py).
