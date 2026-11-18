@@ -60,15 +60,15 @@ def seg(bone, child):
 SEGS = {}
 for s in ("l", "r"):
     SEGS.update({
-        "clavicle_" + s: (seg("clavicle_" + s, "upperarm_" + s), 0.90),
-        "upperarm_" + s: (seg("upperarm_" + s, "lowerarm_" + s), 0.80), "upperarm_twist_01_" + s: (seg("upperarm_" + s, "lowerarm_" + s), 0.80),
-        "lowerarm_" + s: (seg("lowerarm_" + s, "hand_" + s), 0.84), "lowerarm_twist_01_" + s: (seg("lowerarm_" + s, "hand_" + s), 0.84),
-        "thigh_" + s: (seg("thigh_" + s, "calf_" + s), 0.97), "thigh_twist_01_" + s: (seg("thigh_" + s, "calf_" + s), 0.97),
-        "calf_" + s: (seg("calf_" + s, "foot_" + s), 0.88), "calf_twist_01_" + s: (seg("calf_" + s, "foot_" + s), 0.88),
+        "clavicle_" + s: (seg("clavicle_" + s, "upperarm_" + s), 0.85),
+        "upperarm_" + s: (seg("upperarm_" + s, "lowerarm_" + s), 0.74), "upperarm_twist_01_" + s: (seg("upperarm_" + s, "lowerarm_" + s), 0.74),
+        "lowerarm_" + s: (seg("lowerarm_" + s, "hand_" + s), 0.80), "lowerarm_twist_01_" + s: (seg("lowerarm_" + s, "hand_" + s), 0.80),
+        "thigh_" + s: (seg("thigh_" + s, "calf_" + s), 1.04), "thigh_twist_01_" + s: (seg("thigh_" + s, "calf_" + s), 1.0),
+        "calf_" + s: (seg("calf_" + s, "foot_" + s), 0.86), "calf_twist_01_" + s: (seg("calf_" + s, "foot_" + s), 0.84),
     })
 SEGS.update({
-    "spine_01": (seg("spine_01", "spine_02"), 0.78), "spine_02": (seg("spine_02", "spine_03"), 0.84), "spine_03": (seg("spine_03", "neck_01"), 0.90),
-    "neck_01": (seg("neck_01", "head"), 0.80),
+    "spine_01": (seg("spine_01", "spine_02"), 0.68), "spine_02": (seg("spine_02", "spine_03"), 0.76), "spine_03": (seg("spine_03", "neck_01"), 0.88),
+    "neck_01": (seg("neck_01", "head"), 0.76),
 })
 HANDS = [b for b in H if any(b.startswith(k) for k in ("hand_", "index_", "middle_", "ring_", "pinky_", "thumb_"))]
 FEET = [b for b in H if b.startswith("foot_") or b.startswith("ball_")]
@@ -128,16 +128,16 @@ def femme(p, w):
             d += wt * (c + (p - c) * 0.92 - p)
         elif bn == "pelvis":  # hips: fuller to the sides and behind
             q = p - H["pelvis"]
-            d += wt * Vector((q.x * 0.13, max(0.0, q.y) * 0.16, 0.0))
+            d += wt * Vector((q.x * 0.22, max(0.0, q.y) * 0.26, 0.0))
         elif bn == "head":
             d += wt * face_field(p)
     # the bust: forward from the chest, either side of the breastbone
     chest = sum(w.get(b, 0.0) for b in ("spine_02", "spine_03", "clavicle_l", "clavicle_r"))
     if chest > 0.0:
-        zb, sx, sz = H["spine_03"].z - 0.040, 0.070, 0.060
+        zb, sx, sz = H["spine_03"].z - 0.038, 0.074, 0.064
         front = max(0.0, min(1.0, (H["spine_03"].y + 0.01 - p.y) / 0.05))
         g = sum(math.exp(-(((p.x - cx) / sx) ** 2 + ((p.z - zb) / sz) ** 2)) for cx in (-0.085, 0.085))
-        d += min(1.0, chest) * front * g * Vector((0.0, -0.062, 0.010))
+        d += min(1.0, chest) * front * g * Vector((0.0, -0.090, 0.016))
     return d
 
 
@@ -234,6 +234,44 @@ def weights_of(ob):
 SLOTS = [bpy.data.materials.new(f"slot{k}") for k in range(4)]
 
 
+def tighten(ob, keep=0.35, least=0.006, reach=0.08):
+    """Clothes cut close: every cloth (and belt) point's gap to the skin shrunk to a share of itself (never under a few
+    millimetres); what hangs well clear of the body (coat tails, a sash's ends) moves as far as the edge of that and
+    keeps hanging. The same rule for every layer keeps them in their order."""
+    me = ob.data
+    sbm = bmesh.new()
+    sbm.from_mesh(me)
+    for f in [f for f in sbm.faces if f.material_index != SKIN]:
+        sbm.faces.remove(f)
+    sbm.normal_update()
+    bvh = BVHTree.FromBMesh(sbm)
+    cloth = set(k for poly in me.polygons if poly.material_index in (CLOTH, DET) for k in poly.vertices)
+    gi = ob.vertex_groups["head"].index  # (not the hat: it sits on the head as it is)
+    cloth = set(k for k in cloth if not any(g.group == gi and g.weight > 0.3 for g in me.vertices[k].groups))
+
+    def shrink(g):
+        if g <= least:
+            return least
+        if g < reach:
+            return least + (g - least) * keep
+        return least + (reach - least) * keep + (g - reach)
+    moved = 0
+    for k in cloth:
+        v = me.vertices[k]
+        hit = bvh.find_nearest(v.co)
+        if hit[0] is None:
+            continue
+        loc, nrm = hit[0], hit[1]
+        off = v.co - loc
+        g = off.length if off.dot(nrm) >= 0 else -off.length
+        out = nrm if off.length < 1e-6 or g < 0 else off.normalized()
+        v.co = loc + out * shrink(max(g, 0.0))
+        moved += 1
+    sbm.free()
+    me.update()
+    print(f"   tightened {moved} cloth points")
+
+
 def find_landmarks(ob):
     """The eyes are their own little spheres in the body mesh (their UVs on the eye painted in the texture's right
     margin): their centres; the nose tip in front between them; the mouth below."""
@@ -296,6 +334,7 @@ def build(v):
             w = {k: x / tot for k, x in w.items()}
         vert.co = vert.co + femme(Vector(vert.co), w)
     me.update()
+    tighten(ob)
     # the skin the clothes hide: gone (a ray out along its normal meets cloth within a few centimetres)
     bm = bmesh.new()
     bm.from_mesh(me)
@@ -323,7 +362,7 @@ def build(v):
     dead = [f for f in bm.faces if f.material_index == SKIN and all(vt.index in hidden for vt in f.verts)]
     for vt in bm.verts:  # (and what's left of it under the cloth, tucked in: no skin poking through after the reshaping)
         if vt.index in hidden:
-            vt.co -= vt.normal * 0.006
+            vt.co -= vt.normal * 0.004
     bmesh.ops.delete(bm, geom=dead, context="FACES_ONLY")
     bmesh.ops.delete(bm, geom=[vt for vt in bm.verts if not vt.link_faces], context="VERTS")
     bm.to_mesh(me)
