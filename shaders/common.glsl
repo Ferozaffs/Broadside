@@ -9,6 +9,9 @@ uniform vec4 uOceanLen;         // cascade length scales
 uniform float uOceanN;          // FFT resolution
 uniform vec3 uSunDir;           // unit vector towards the sun
 uniform vec3 uSunColor;         // HDR sun irradiance
+uniform vec3 uWaterScatter;     // the sea's colour (0: the default, the Atlantic's)
+uniform vec3 uWaterPeak;
+uniform vec3 uWaterDeep;
 uniform float uTime;
 uniform vec3 uCamPos;
 // atmosphere (time of day x weather)
@@ -131,7 +134,8 @@ vec3 SkyColor(vec3 d) {
 const vec3 kWaterAbsorb = vec3(0.42, 0.105, 0.075);
 
 vec3 UnderwaterFogColor(float depthBelow, float viewY) {
-    vec3 base = vec3(0.005, 0.036, 0.064) * (0.4 + 0.6 * uSunColor.g);
+    vec3 deepC = dot(uWaterDeep, vec3(1.0)) > 0.0 ? uWaterDeep : vec3(0.005, 0.036, 0.064);
+    vec3 base = deepC * (0.4 + 0.6 * uSunColor.g);
     base *= mix(0.45, 1.5, clamp(viewY * 0.5 + 0.5, 0.0, 1.0));
     return base * exp(-max(depthBelow, 0.0) * 0.035);
 }

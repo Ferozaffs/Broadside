@@ -410,6 +410,9 @@ void Renderer::SetCommonUniforms(unsigned int p) {
     Uniform1f(GetUniformLocation(p, "uOceanN"), (float)OCEAN_GPU_N);
     Uniform3f(GetUniformLocation(p, "uSunDir"), sunDir.x, sunDir.y, sunDir.z);
     Uniform3f(GetUniformLocation(p, "uSunColor"), sunColor.x, sunColor.y, sunColor.z);
+    Uniform3f(GetUniformLocation(p, "uWaterScatter"), atm.waterScatter.x, atm.waterScatter.y, atm.waterScatter.z);
+    Uniform3f(GetUniformLocation(p, "uWaterPeak"), atm.waterPeak.x, atm.waterPeak.y, atm.waterPeak.z);
+    Uniform3f(GetUniformLocation(p, "uWaterDeep"), atm.waterDeep.x, atm.waterDeep.y, atm.waterDeep.z);
     Uniform1f(GetUniformLocation(p, "uTime"), time);
     Uniform3f(GetUniformLocation(p, "uCamPos"), view.pos.x, view.pos.y, view.pos.z);
     Uniform3f(GetUniformLocation(p, "uSkyZenith"), atm.zenith.x, atm.zenith.y, atm.zenith.z);

@@ -23,6 +23,9 @@ struct Atmos {
     float lanterns = 0.2f;        // lantern brightness / how much they matter
     Vector3 ambient{0.55f, 0.6f, 0.68f};  // sky light on particles (0..1)
     Vector3 smokeSun{1.0f, 0.9f, 0.8f};   // sun on particles (0..1)
+    // the sea's own colour (the campaign's regions change it): light scattered in the body, through the crests, deep down
+    Vector3 waterScatter{0.0065f, 0.041f, 0.057f}, waterPeak{0.012f, 0.11f, 0.085f}, waterDeep{0.005f, 0.036f, 0.064f};
+    float snow = 0.0f, ash = 0.0f;        // flakes in the air (the Frozen North's snow, the Ember Reach's ash)
 };
 
 inline Vector3 V3Lerp(Vector3 a, Vector3 b, float t) { return Vector3Lerp(a, b, t); }

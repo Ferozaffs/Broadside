@@ -15,7 +15,8 @@ public:
     void Build(const std::vector<Rock>& rocks, bool maelstrom = false);  // (the waterline sits lower in a maelstrom)
     void DrawIslands(Renderer& r, const RenderView& v, bool cull = true);
     // pos = centre of the crate, rot = how the swell tilts it
-    void DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, float glow);  // type PU_COUNT = booty chest
+    void DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, float glow);
+    void DrawFloe(Renderer& r, const OceanCPU& ocean, Vector3 pos, float yaw, float size);  // an ice floe riding the swell (the Frozen North)  // type PU_COUNT = booty chest
     // Harbours: a pier out from the island, a lighthouse on its end and a ring of buoys around the
     // anchorage. flag[i] = owner colour of harbour i. Returns the lighthouse lamp positions in `lamps`.
     void BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Rock>& rocks);

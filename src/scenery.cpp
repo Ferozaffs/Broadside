@@ -236,7 +236,7 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
         const float treeK = k.biome == campaign::EMBER ? 0.0f : k.biome == campaign::FROZEN ? 0.35f : k.biome == campaign::TROPICS ? 1.4f : 1.0f;
         int want = (int)(k.r * 1.1f * treeK) / (coarse ? 3 : 1);
         const int SL = 7;
-        for (int t = 0; t < want * 6 && want > 0 && P.size() + 40 < 65000; ++t) {
+        for (int t = 0; t < want * 6 && want > 0 && P.size() + 100 < 65000; ++t) {
             float a = rnd(0, 2 * PI), u = sqrtf(rnd(0.0f, 0.7f));
             float d = u * RockCoast(k, a);
             float x = k.x + cosf(a) * d, z = k.z + sinf(a) * d;
@@ -249,6 +249,55 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
             Vector3 lean = {rnd(-0.6f, 0.6f), 0, rnd(-0.6f, 0.6f)};
             float tone = rnd(0.75f, 1.15f);
             Color dark = Shade({30, 52, 30, 255}, tone), mid = Shade({44, 72, 40, 255}, tone), tip = Shade({70, 98, 52, 255}, tone);
+            if (k.biome == campaign::TROPICS) {  // a palm: a slender curved trunk, a crown of drooping fronds
+                const float ph = h * 0.95f, fl = rnd(4.5f, 6.5f);
+                const Vector2 ld = Vector2Normalize({lean.x + 0.01f, lean.z});
+                auto trunkAt = [&](float t) { return Vector3{x + ld.x * ph * 0.3f * t * t, y - 0.5f + ph * t, z + ld.y * ph * 0.3f * t * t}; };
+                const int segs = 6, tb = (int)P.size();
+                for (int sgi = 0; sgi <= segs; ++sgi) {
+                    const float t = sgi / (float)segs, rad = 0.32f * (1.0f - 0.35f * t);
+                    const Vector3 c = trunkAt(t);
+                    for (int q = 0; q < 4; ++q) {
+                        const float b = q * PI * 0.5f;
+                        P.push_back({c.x + cosf(b) * rad, c.y, c.z + sinf(b) * rad});
+                        N.push_back({cosf(b), 0, sinf(b)});
+                        C.push_back(Shade({118, 94, 62, 255}, tone * (sgi % 2 ? 0.9f : 1.05f)));
+                        A.push_back(128);
+                    }
+                }
+                for (int sgi = 0; sgi < segs; ++sgi)
+                    for (int q = 0; q < 4; ++q) {
+                        const int a0 = tb + sgi * 4 + q, a1 = tb + sgi * 4 + (q + 1) % 4;
+                        tri(a0, a1, a0 + 4);
+                        tri(a1, a1 + 4, a0 + 4);
+                    }
+                const Vector3 top = trunkAt(1.0f);
+                const Color fr = Shade({58, 116, 42, 255}, tone), frTip = Shade({84, 140, 50, 255}, tone);
+                const float r0 = rnd(0.0f, 2.0f * PI);
+                for (int f = 0; f < 8; ++f) {
+                    const float b = r0 + f * 2.0f * PI / 8.0f + rnd(-0.15f, 0.15f);
+                    const Vector3 dir = {cosf(b), 0, sinf(b)}, side = {-sinf(b), 0, cosf(b)};
+                    const float L = fl * rnd(0.85f, 1.1f), droop = rnd(1.6f, 2.6f);
+                    const Vector3 p1 = Vector3Add(top, Vector3Add(Vector3Scale(dir, L * 0.4f), {0, 0.5f, 0}));
+                    const Vector3 p2 = Vector3Add(top, Vector3Add(Vector3Scale(dir, L * 0.78f), {0, -droop * 0.45f, 0}));
+                    const Vector3 p3 = Vector3Add(top, Vector3Add(Vector3Scale(dir, L), {0, -droop, 0}));
+                    const int fb = (int)P.size();
+                    const Vector3 pts[6] = {top, Vector3Add(p1, Vector3Scale(side, 0.9f)), Vector3Subtract(p1, Vector3Scale(side, 0.9f)),
+                                            Vector3Add(p2, Vector3Scale(side, 0.55f)), Vector3Subtract(p2, Vector3Scale(side, 0.55f)), p3};
+                    for (int q = 0; q < 6; ++q) {
+                        P.push_back(pts[q]);
+                        N.push_back(Vector3Normalize({dir.x * 0.3f, 1.0f, dir.z * 0.3f}));
+                        C.push_back(q >= 3 ? frTip : fr);
+                        A.push_back(0);
+                    }
+                    tri(fb, fb + 1, fb + 2);
+                    tri(fb + 1, fb + 3, fb + 2);
+                    tri(fb + 2, fb + 3, fb + 4);
+                    tri(fb + 3, fb + 5, fb + 4);
+                }
+                if (--want <= 0) break;
+                continue;
+            }
             if (k.biome == campaign::FROZEN) { mid = Shade({70, 86, 76, 255}, tone); tip = Shade({236, 240, 244, 255}, tone); }  // (snow on the tops)
             else if (k.biome == campaign::TROPICS) { mid = Shade({52, 98, 40, 255}, tone); tip = Shade({88, 136, 56, 255}, tone); }
             else if (k.biome == campaign::FOG) { dark = Shade({24, 34, 28, 255}, tone); mid = Shade({34, 46, 38, 255}, tone); tip = Shade({48, 60, 48, 255}, tone); }
@@ -355,6 +404,27 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
 }
 
 // ---- harbours ------------------------------------------------------------------------
+void Scenery::DrawFloe(Renderer& r, const OceanCPU& ocean, Vector3 pos, float yaw, float size) {
+    if (!ready) return;
+    const float h = ocean.Height(pos.x, pos.z);
+    const float hx = ocean.Height(pos.x + 3.0f, pos.z) - ocean.Height(pos.x - 3.0f, pos.z), hz = ocean.Height(pos.x, pos.z + 3.0f) - ocean.Height(pos.x, pos.z - 3.0f);
+    const Vector3 n = Vector3Normalize({-hx / 6.0f, 1.0f, -hz / 6.0f});
+    const Matrix tilt = QuaternionToMatrix(QuaternionFromVector3ToVector3({0, 1, 0}, n));
+    r.SetLitParams(0.0f, 0.0f);
+    // two overlapping slabs and a small one: a ragged outline, a little above the water and a lot below
+    const float s = size;
+    for (int k = 0; k < 3; ++k) {
+        const float w = (k == 2 ? 4.0f : 9.0f) * s, d = (k == 0 ? 7.0f : k == 1 ? 10.0f : 5.0f) * s, rot = yaw + k * 0.9f;
+        const Vector3 off = k == 2 ? Vector3{4.0f * s, 0.0f, -3.0f * s} : Vector3{0, 0, 0};
+        // (a slab standing a metre or so proud of the swell, blue-white at its waterline)
+        Matrix m = MatrixMultiply(MatrixMultiply(MatrixScale(w, 2.4f * s, d), MatrixRotateY(rot)), MatrixTranslate(off.x, 0.55f * s, off.z));
+        m = MatrixMultiply(MatrixMultiply(m, tilt), MatrixTranslate(pos.x, h, pos.z));
+        Part(cube, m, k == 1 ? Color{196, 216, 232, 255} : Color{240, 246, 252, 255});
+        Matrix lip = MatrixMultiply(MatrixMultiply(MatrixScale(w * 1.04f, 0.5f * s, d * 1.04f), MatrixRotateY(rot)), MatrixTranslate(off.x, -0.35f * s, off.z));
+        Part(cube, MatrixMultiply(MatrixMultiply(lip, tilt), MatrixTranslate(pos.x, h, pos.z)), Color{120, 170, 200, 255});
+    }
+}
+
 void Scenery::Part(const Mesh& m, Matrix world, Color c) {
     partMat.maps[MATERIAL_MAP_DIFFUSE].color = c;
     DrawMesh(m, partMat, world);

@@ -920,5 +920,14 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   - The fleet: up to three escorts (the escort AI), bought, or a struck pirate taken as a prize (below 20% hull a
     pirate may strike: come alongside, 1 = into the fleet, 2 = plunder her hold). Sunk, an escort is gone. They follow
     her into the lairs. All saved. Test: BS_FLEETTEST; BS_CAMPGOLD, BS_CAMPFLEET, BS_PORTTAB for screenshots.
-- [ ] Phase 4: each region's water, sky, fog and weather; palms, ice floes, ash; the Fog Banks' fog.
+- [x] Phase 4: the regions' looks (2026-11-19, after v0.21.0). The region round the camera (nine samples on a 650 m ring,
+  smoothed) blends each region's fog (density x, colour tint), sky tint, sunlight, cloud, haze and the sea's own
+  colour (water.frag's scatter / crest colours and the deep colour are uniforms now, Atmos::waterScatter / Peak /
+  Deep): the Tropics clear with turquoise water, the Frozen North cold light, steel water and snow, the Ember Reach a
+  brown haze, a red-orange sun and falling ash, the Fog Banks a thick grey-green fog (lanterns up). Palms on the
+  Tropics' islands (curved trunks, drooping fronds); ice floes drifting in the north (visual only: ships pass through
+  them); the Ember Reach's tall cones smoke (big slow plumes) and glow red at the crater, brightest at night.
+  BS_LOOKLOG logs what's drawn.
+- [ ] Phase 4 next: floes ships can hit (or push aside), wrecks on the Fog Banks' beaches, the Fog Banks' ghost lights,
+  regional weather (storms in the Frozen North), time of day passing with the campaign's days.
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

@@ -538,6 +538,9 @@ public:
     std::vector<Vector3> rain;
     void UpdateAtmosphere(float dt, bool menu);
     void DrawRain(const Camera3D& cam, float dt);
+    void DrawFlakes(const Camera3D& cam, float dt);  // the campaign's snow and ash
+    std::vector<Vector3> flakes;
+    float regionW[campaign::BIOMES] = {1, 0, 0, 0, 0};  // the campaign: how much of each region is round the camera (smoothed)
     void DrawLanternHalos(bool menu);  // lantern brightness: low at noon, full at night and in fog
     float aimZoom = 0;
     float aimRange = -1, aimElevDeg = 0;
@@ -4136,6 +4139,56 @@ void Game::ShipDamageFx(int id, const NetShip& s, float dt) {
 void Game::UpdateAtmosphere(float dt, bool menu) {
     int tod = menu ? todSel : curTod, w = menu ? weatherSel : curWeather;
     Atmos a = MakeAtmos(tod, w, pred.oceanParams.windDir);
+    if (!menu && curMode == MODE_CAMPAIGN && pred.arena == ARENA_WORLD) {  // the campaign: the region round us, blended across its borders
+        float want[campaign::BIOMES] = {};
+        const float rr = 650.0f;
+        for (int k = 0; k < 9; ++k) {
+            const float ang = k * 2.0f * PI / 8.0f;
+            const float x = rv.pos.x + (k < 8 ? cosf(ang) * rr : 0.0f), z = rv.pos.z + (k < 8 ? sinf(ang) * rr : 0.0f);
+            want[campaign::BiomeAt(x, z)] += 1.0f / 9.0f;
+        }
+        for (int b = 0; b < campaign::BIOMES; ++b) regionW[b] += (want[b] - regionW[b]) * fminf(1.0f, dt * 0.4f);
+        // each region: its fog (x density, colour tint), sky tint, sunlight, cloud, and its sea's colour
+        struct Look { float fog; Vector3 fogTint, skyTint, sunTint; float cloud, haze; Vector3 scatter, peak, deep; float snow, ash; };
+        static const Look kLook[campaign::BIOMES] = {
+            {1.0f, {1, 1, 1}, {1, 1, 1}, {1, 1, 1}, 0.0f, 0.0f, {0.0065f, 0.041f, 0.057f}, {0.012f, 0.11f, 0.085f}, {0.005f, 0.036f, 0.064f}, 0.0f, 0.0f},
+            {0.55f, {1.02f, 1.03f, 0.98f}, {0.92f, 1.04f, 1.08f}, {1.1f, 1.05f, 0.92f}, -0.08f, -0.05f, {0.004f, 0.075f, 0.078f}, {0.02f, 0.17f, 0.12f}, {0.004f, 0.06f, 0.075f}, 0.0f, 0.0f},
+            {1.6f, {1.06f, 1.1f, 1.16f}, {0.95f, 1.0f, 1.08f}, {0.86f, 0.95f, 1.1f}, 0.25f, 0.1f, {0.008f, 0.028f, 0.042f}, {0.018f, 0.07f, 0.085f}, {0.006f, 0.026f, 0.044f}, 0.75f, 0.0f},
+            {1.9f, {1.12f, 0.82f, 0.66f}, {1.15f, 0.82f, 0.7f}, {1.02f, 0.74f, 0.52f}, 0.35f, 0.2f, {0.007f, 0.024f, 0.028f}, {0.022f, 0.05f, 0.04f}, {0.006f, 0.02f, 0.026f}, 0.0f, 0.7f},
+            {4.6f, {0.74f, 0.86f, 0.84f}, {0.7f, 0.84f, 0.82f}, {0.55f, 0.62f, 0.62f}, 0.6f, 0.45f, {0.005f, 0.03f, 0.033f}, {0.012f, 0.07f, 0.06f}, {0.004f, 0.026f, 0.03f}, 0.0f, 0.0f},
+        };
+        Look m{0.0f, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, 0.0f, 0.0f, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, 0.0f, 0.0f};
+        for (int b = 0; b < campaign::BIOMES; ++b) {
+            const float w = regionW[b];
+            const Look& l = kLook[b];
+            m.fog += l.fog * w;
+            m.fogTint = Vector3Add(m.fogTint, Vector3Scale(l.fogTint, w));
+            m.skyTint = Vector3Add(m.skyTint, Vector3Scale(l.skyTint, w));
+            m.sunTint = Vector3Add(m.sunTint, Vector3Scale(l.sunTint, w));
+            m.cloud += l.cloud * w;
+            m.haze += l.haze * w;
+            m.scatter = Vector3Add(m.scatter, Vector3Scale(l.scatter, w));
+            m.peak = Vector3Add(m.peak, Vector3Scale(l.peak, w));
+            m.deep = Vector3Add(m.deep, Vector3Scale(l.deep, w));
+            m.snow += l.snow * w;
+            m.ash += l.ash * w;
+        }
+        a.fogDensity *= m.fog;
+        a.fogColor = Vector3Multiply(a.fogColor, m.fogTint);
+        a.horizon = Vector3Multiply(a.horizon, m.skyTint);
+        a.zenith = Vector3Multiply(a.zenith, m.skyTint);
+        a.sunColor = Vector3Multiply(a.sunColor, m.sunTint);
+        a.ambient = Vector3Multiply(a.ambient, Vector3Lerp({1, 1, 1}, m.sunTint, 0.5f));
+        a.smokeSun = Vector3Multiply(a.smokeSun, m.sunTint);
+        a.cloud = Clamp(a.cloud + m.cloud, 0.0f, 1.0f);
+        a.haze = Clamp(a.haze + m.haze, 0.0f, 1.0f);
+        a.waterScatter = m.scatter;
+        a.waterPeak = m.peak;
+        a.waterDeep = m.deep;
+        a.snow = m.snow;
+        a.ash = m.ash;
+        a.lanterns = fmaxf(a.lanterns, Clamp((m.fog - 1.5f) * 0.18f, 0.0f, 0.7f));  // (in the fog the lanterns matter)
+    }
     if (a.rain > 0.0f) {
         lightningTimer -= dt;
         if (lightningTimer <= 0.0f) {
@@ -4188,6 +4241,37 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
     a.sunColor = Vector3Add(a.sunColor, Vector3Scale({1.0f, 1.1f, 1.4f}, L));
     renderer.atm = a;
     lanternBoost = a.lanterns;
+}
+
+// Snow in the Frozen North, ash in the Ember Reach: slow flakes drifting down round the camera, fewer where the region
+// thins out at its border
+void Game::DrawFlakes(const Camera3D& cam, float dt) {
+    const float B = 40.0f, top = 30.0f, bottom = -10.0f;
+    if (flakes.empty())
+        for (int i = 0; i < 1400; ++i) flakes.push_back({Rnd(-B, B), Rnd(bottom, top), Rnd(-B, B)});
+    const float waterAtCam = Ocean().Height(cam.position.x, cam.position.z);
+    if (cam.position.y < waterAtCam) return;
+    const Atmos& a = renderer.atm;
+    const float amount = fmaxf(a.snow, a.ash);
+    const bool snow = a.snow >= a.ash;
+    const int n = (int)(flakes.size() * Clamp(amount, 0.0f, 1.0f));
+    const float lum = Clamp(Vector3Length(a.ambient) * 0.8f, 0.15f, 1.0f);
+    const Color c = snow ? Color{(unsigned char)(235 * lum), (unsigned char)(240 * lum), (unsigned char)(250 * lum), 200}
+                         : Color{(unsigned char)(110 * lum), (unsigned char)(100 * lum), (unsigned char)(95 * lum), 190};
+    const float t = (float)GetTime();
+    const Vector3 v = {wind.x * (snow ? 1.2f : 1.8f), snow ? -2.2f : -1.4f, wind.z * (snow ? 1.2f : 1.8f)};
+    rlDrawRenderBatchActive();
+    for (int i = 0; i < n; ++i) {
+        Vector3& f = flakes[i];
+        f = Vector3Add(f, Vector3Scale({v.x + sinf(t * 0.7f + i) * 0.6f, v.y, v.z + cosf(t * 0.6f + i * 1.3f) * 0.6f}, dt));
+        if (f.y < bottom) f.y += top - bottom;
+        if (f.x < -B) f.x += 2 * B; else if (f.x > B) f.x -= 2 * B;
+        if (f.z < -B) f.z += 2 * B; else if (f.z > B) f.z -= 2 * B;
+        const Vector3 p = Vector3Add(cam.position, f);
+        if (p.y < waterAtCam - 1.0f) continue;
+        DrawBillboard(cam, fx.soft, p, snow ? 0.42f : 0.3f, c);
+    }
+    rlDrawRenderBatchActive();
 }
 
 void Game::DrawRain(const Camera3D& cam, float dt) {
@@ -4480,6 +4564,54 @@ void Game::RenderWorld(float dt, bool menu) {
             fx.Lantern(L, (2.2f + d * 0.0025f) * fl, Fade({255, 214, 150, 255}, 0.7f + 0.3f * lanternBoost));
             if (d < 1200.0f) fx.ShipFire(Vector3Add(L, {0, -0.6f, 0}), 0.22f, dt, {0, 0, 0});  // (close to: real flames, sparks)
         }
+        if (!menu && campaign && pred.arena == ARENA_WORLD) {
+            // the Ember Reach: the tall cones smoke, and glow red at the top at night (the nearest few)
+            int lit = 0;
+            for (const Rock& k : pred.rocks) {
+                if (lit >= 6 || k.biome != campaign::EMBER || k.stack || k.h < 100.0f) continue;
+                const float d = Vector2Distance({k.x, k.z}, {rv.pos.x, rv.pos.z});
+                if (d > 6000.0f) continue;
+                ++lit;
+                const Vector3 top = {k.x, k.h * 0.97f, k.z};
+                if (Rnd(0.0f, 1.0f) < dt * 2.5f) {  // (its plume: big slow puffs, rising and drifting downwind, seen from kilometres off)
+                    const Vector3 p = Vector3Add(top, {Rnd(-6.0f, 6.0f), Rnd(0.0f, 4.0f), Rnd(-6.0f, 6.0f)});
+                    fx::Particle& q = fx.Add(fx::Smoke, p, {wind.x * 1.5f + Rnd(-1, 1), Rnd(4.0f, 7.0f), wind.z * 1.5f + Rnd(-1, 1)}, Rnd(22.0f, 34.0f),
+                                             Rnd(18.0f, 28.0f), Rnd(4.0f, 7.0f), {74, 68, 64, 150});
+                    q.drag = 0.05f;
+                    q.rise = 2.5f;
+                    q.spin = Rnd(-6.0f, 6.0f);
+                }
+                // (the crater's glow: a wide dull red over the top, a hot core in it; strong at night, faint by day)
+                fx.Lantern(Vector3Add(top, {0, 6, 0}), (70.0f + d * 0.02f) * (0.3f + 0.9f * lanternBoost), Fade({255, 70, 30, 255}, 0.12f + 0.5f * lanternBoost));
+                fx.Lantern(Vector3Add(top, {0, 2, 0}), (18.0f + d * 0.006f) * (0.3f + 0.9f * lanternBoost), Fade({255, 150, 60, 255}, 0.1f + 0.7f * lanternBoost));
+            }
+            int floesDrawn = 0;
+            // the Frozen North: ice floes on the water round us (where the sea is the north's, and open)
+            if (regionW[campaign::FROZEN] > 0.05f) {
+                const float cell = 170.0f;
+                const int ci = (int)floorf(rv.pos.x / cell), cj = (int)floorf(rv.pos.z / cell);
+                for (int j = cj - 8; j <= cj + 8; ++j)
+                    for (int i = ci - 8; i <= ci + 8; ++i) {
+                        uint32_t hh = (uint32_t)(i * 73856093) ^ (uint32_t)(j * 19349663);
+                        hh = hh * 1664525u + 1013904223u;
+                        if ((hh >> 24) > 70) continue;  // (about a cell in four)
+                        const float fx0 = (i + ((hh >> 8) & 255) / 255.0f) * cell, fz0 = (j + ((hh >> 16) & 255) / 255.0f) * cell;
+                        if (campaign::BiomeAt(fx0, fz0) != campaign::FROZEN || RocksHeight(pred.rocks, fx0, fz0) > -6.0f) continue;
+                        const float drift = (float)GetTime() * 0.4f;  // (they drift with the wind)
+                        const Vector3 p = {fx0 + wind.x * drift * 0.3f, 0.0f, fz0 + wind.z * drift * 0.3f};
+                        if (Vector2Distance({p.x, p.z}, {rv.pos.x, rv.pos.z}) > 1400.0f) continue;
+                        scenery.DrawFloe(renderer, Ocean(), p, (hh & 255) / 255.0f * 6.28f, 1.0f + ((hh >> 4) & 15) / 15.0f * 1.4f);
+                        ++floesDrawn;
+                    }
+            }
+            static double lookLogAt = 0.0;
+            if (getenv("BS_LOOKLOG") && GetTime() - lookLogAt > 3.0) {
+                lookLogAt = GetTime();
+                printf("[look] cones lit %d, floes %d, snow %.2f ash %.2f, regions %.2f %.2f %.2f %.2f %.2f\n", lit, floesDrawn, renderer.atm.snow, renderer.atm.ash,
+                       regionW[0], regionW[1], regionW[2], regionW[3], regionW[4]);
+                fflush(stdout);
+            }
+        }
         if (!menu && campaign)
             for (const Quest& q : campQuests)  // the castaways' signal fire: a column of smoke off the beach
                 if (q.type == campaign::Q_CASTAWAYS && q.state == campaign::QS_ACTIVE && Vector2Distance({q.x, q.z}, {rv.pos.x, rv.pos.z}) < 6000.0f) {
@@ -4573,6 +4705,7 @@ void Game::RenderWorld(float dt, bool menu) {
         EndBlendMode();
     }
     if (renderer.atm.rain > 0.0f) DrawRain(cam, dt);
+    if (renderer.atm.snow > 0.01f || renderer.atm.ash > 0.01f) DrawFlakes(cam, dt);
     if (!menu) DrawTrajectory();
     if (!menu) DrawFiringArcs();
     rlDrawRenderBatchActive();

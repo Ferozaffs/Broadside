@@ -18,8 +18,9 @@ uniform float uWakeExtent;
 
 out vec4 fragColor;
 
-const vec3 kScatterColor = vec3(0.0065, 0.041, 0.057);  // dark Atlantic blue-green (Garrett's was a light 0.016, 0.0736, 0.16)
-const vec3 kPeakColor = vec3(0.012, 0.11, 0.085);      // light through the thin crests turns green
+const vec3 kScatter0 = vec3(0.0065, 0.041, 0.057);  // dark Atlantic blue-green (Garrett's was a light 0.016, 0.0736, 0.16)
+const vec3 kPeak0 = vec3(0.012, 0.11, 0.085);      // light through the thin crests turns green
+// (the campaign's regions give the sea a colour of their own: uWaterScatter / uWaterPeak, 0 for these)
 const vec3 kBubbleColor = vec3(0.0, 0.012, 0.014);
 const vec3 kFoamColor = vec3(0.6, 0.5568, 0.492);
 const float kRoughness = 0.075;
@@ -198,6 +199,9 @@ void main() {
         float k2 = kScatterStrength * pow(max(dot(viewDir, N), 0.0), 2.0);
         float k3 = kScatterShadow * NdotL;
         float k4 = kBubbleDensity;
+        const vec3 kZero = vec3(0.0);
+        vec3 kScatterColor = dot(uWaterScatter, vec3(1.0)) > 0.0 ? uWaterScatter : kScatter0;
+        vec3 kPeakColor = dot(uWaterPeak, vec3(1.0)) > 0.0 ? uWaterPeak : kPeak0;
         vec3 scatter = (k1 * kPeakColor * 1.6 + k2 * kScatterColor) * uSunColor / (1.0 + lightMask) * shScatter;
         scatter += k3 * kScatterColor * uSunColor * sh + k4 * kBubbleColor * uSunColor * shScatter;
 
