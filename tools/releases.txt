@@ -1,0 +1,20 @@
+v0.3.0	2026-11-12T23:13:18Z	Broadside v0.3.0
+v0.5.0	2026-11-13T08:58:05Z	Broadside v0.5.0
+v0.6.0	2026-11-13T12:38:44Z	Broadside v0.6.0 – sound, deck view, wakes, new look
+v0.7.0	2026-11-13T15:49:42Z	Broadside v0.7.0 – ship classes, rounds, tracers, easier hosting
+v0.8.0	2026-11-13T16:42:18Z	Broadside v0.8.0 – momentum, calmer shores, darker nights, pirate hunt
+v0.9.0	2026-11-14T02:37:32Z	Broadside v0.9.0
+v0.10.0	2026-11-14T11:07:00Z	Broadside v0.10.0: the Maelstrom
+v0.11.0	2026-11-14T17:46:49Z	Broadside v0.11.0: All hands
+v0.12.0	2026-11-15T23:15:00Z	Broadside v0.12.0: Race
+v0.12.1	2026-11-16T10:58:48Z	Broadside v0.12.1: a steadier deck view
+v0.13.0	2026-11-16T16:52:12Z	Broadside v0.13.0: the Shipwright
+v0.14.0	2026-11-16T21:40:40Z	Broadside v0.14.0: rooms, realistic handling, no limits
+v0.14.1	2026-11-16T23:04:45Z	Broadside v0.14.1: wider Shipwright sliders
+v0.15.0	2026-11-17T09:09:34Z	Broadside v0.15.0
+v0.16.0	2026-11-17T12:31:07Z	Broadside v0.16.0: Voyage (co-op), difficulties and sea monsters
+v0.17.0	2026-11-17T13:32:14Z	Broadside v0.17.0: Raid - you are the pirates
+v0.18.0	2026-11-17T15:08:59Z	Broadside v0.18.0: Boss mode (the Leviathan) and a new menu
+v0.19.0	2026-11-17T20:38:56Z	Broadside v0.19.0: seven new bosses, revives
+v0.20.0	2026-11-18T14:21:00Z	Broadside v0.20.0: the Odyssey (roguelike co-op), 57 upgrades and 34 combos
+v0.21.0	2026-11-19T16:33:04Z	Broadside v0.21.0: the Campaign
