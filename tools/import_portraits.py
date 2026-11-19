@@ -19,7 +19,8 @@ want = sys.argv[1:] or list(picks)
 out_dir = os.path.join(ROOT, "data", "portraits")
 os.makedirs(out_dir, exist_ok=True)
 for pid in want:
-    seed = picks[pid]
+    pick = picks[pid]
+    seed, cut = (pick[0], pick[1]) if isinstance(pick, list) else (pick, None)  # ([seed, cut]: where to cut her off, of her height)
     src = f"{REMOTE}/{pid}/{pid}_amadmir_s{seed}_alpha.png"
     data = subprocess.run(["ssh", "-o", "BatchMode=yes", "zwuuup", f"[Console]::OpenStandardOutput().Write([IO.File]::ReadAllBytes(\"$HOME/{src}\"), 0, (Get-Item \"$HOME/{src}\").Length)"],
                           capture_output=True).stdout
@@ -32,7 +33,14 @@ for pid in want:
     box = im.getchannel("A").point(lambda a: 255 if a > 12 else 0).getbbox()
     if box:  # (trim the sides and the top; the bottom stays where the frame cut her off)
         pad = 12
-        im = im.crop((max(0, box[0] - pad), max(0, box[1] - pad), min(im.width, box[2] + pad), im.height))
+        bottom = im.height
+        full = box[3] < im.height * 0.97  # (head to feet, the floor under her: cut her off at mid-thigh, as the screen's edge would)
+        if cut is None and full:
+            cut = 0.6
+        if cut is not None:
+            bottom = min(im.height, round(box[1] + (box[3] - box[1]) * cut))
+        sub = im.crop((0, 0, im.width, bottom)).getchannel("A").point(lambda a: 255 if a > 12 else 0).getbbox() or box
+        im = im.crop((max(0, sub[0] - pad), max(0, box[1] - pad), min(im.width, sub[2] + pad), bottom))
     s = HEIGHT / im.height
     im = im.resize((round(im.width * s), HEIGHT), Image.LANCZOS)
     dst = os.path.join(out_dir, f"{pid}.png")
