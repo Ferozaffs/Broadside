@@ -483,6 +483,7 @@ public:
     std::string banner;            // big centre message ("YOU ARE THE PIRATE")
     double bannerTime = -100;
     int menuWeather = -1, oceanWeather = -1;
+    int menuClass = -1;  // the backdrop's first ship (the one the camera circles): ours, the class we've chosen
     float lightning = 0, lightningTimer = 6, lightningSecond = -1;
     std::vector<Vector3> rain;
     void UpdateAtmosphere(float dt, bool menu);
@@ -792,6 +793,11 @@ void Game::Init() {
             classModel[c].Init(renderer.litShader);
             if (classModel[c].LoadExternal(d.c_str(), renderer.litShader)) TraceLog(LOG_WARNING, "Ship model: the %s sails as %s", ClassOf(c).name, d.c_str());
         }
+    }
+    if (getenv("BS_TESTLIVERY") && myLivery.IsDefault()) {  // (screenshots: a paint job, without touching livery.dat)
+        myLivery.hull = {150, 32, 30, 255};
+        myLivery.sail = {36, 34, 40, 255};
+        myLivery.flag = 1;
     }
     if (!myLivery.IsDefault()) myLiveryGpu.Set(myLivery);
     soundOn = sfx::Init();
@@ -3839,7 +3845,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
     ShipModel& model = ModelOf(cls);
     // the captain's paint; in teams (and for the pirate) the sails still show whose side she's on
-    const LiveryGpu* liv = id == -2 ? &yard.gpu : LiveryFor(id);
+    const LiveryGpu* liv = id == -2 ? &yard.gpu : id == -3 ? (myLiveryGpu.on ? &myLiveryGpu : nullptr) : LiveryFor(id);  // (-3: ours, in the menu)
     bool teamSails = id >= 0 && (curMode == MODE_TEAMS || (curMode == MODE_PIRATE && ns && IsCarrier(ns->leader >= 0 ? ns->leader : id)) ||
                                  ((PassageMode(curMode) || curMode == MODE_BOSS) && ns && ns->team == 1));  // (the voyage's pirates: black sails, whatever they're painted)
     if (shadowPass) {
@@ -4170,7 +4176,7 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
     } else if (menu) {
         for (const Ship& s : menuWorld.ships)
             if (s.active && (!shadow || inShadowBox(s.pos)))
-                DrawShip(s.cls, -1, ShipModelMatrix(s.pos, s.rot, ClassOf(s.cls).scale), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp,
+                DrawShip(s.cls, s.id == 0 ? -3 : -1, ShipModelMatrix(s.pos, s.rot, ClassOf(s.cls).scale), nullptr, fabsf(s.sail), kPalette[s.id % 8], 0.0f, s.hp / s.maxHp,
                          s.alive, s.pos, s.rot, s.id * 1.7f, ClassOf(s.cls).scale);
         if (!shadow)
             for (const Ball& b : menuWorld.balls) shipModel.DrawBall(renderer, b.pos);
@@ -6486,12 +6492,14 @@ void Game::Frame() {
             PollNet();
             if (mode == Mode::Connecting && GetTime() - connectStart > 6.0) Disconnect("Connection timed out");
         }
-        if (menuWeather != weatherSel || menuArena != arenaSel) {  // rebuild the backdrop battle on the chosen sea
+        if (menuWeather != weatherSel || menuArena != arenaSel || menuClass != classSel) {  // rebuild the backdrop battle on the chosen sea
             menuWeather = weatherSel;
             menuArena = arenaSel;
+            menuClass = classSel;
             menuWorld.rounds = false;
             menuWorld.Init(7, (uint8_t)weatherSel, 0, MODE_FFA, false, (uint8_t)arenaSel);
-            for (int i = 0; i < 3; ++i) menuWorld.AddShip("bot", true);
+            menuWorld.AddShip("bot", true, classSel);  // (ours: the camera circles her, in our paint)
+            for (int i = 0; i < 2; ++i) menuWorld.AddShip("bot", true);
             for (int i = 0; i < 600; ++i) menuWorld.Step();
             menuWorld.events.clear();
         }
@@ -6511,8 +6519,9 @@ void Game::Frame() {
         // slow orbit around the battle
         const Ship& s = menuWorld.ships[0];
         float a = (float)GetTime() * 0.05f;
-        rv.target = Vector3Add(s.pos, {0, 6, 0});
-        rv.pos = Vector3Add(rv.target, {sinf(a) * 90.0f, 22.0f, cosf(a) * 90.0f});
+        rv.pos = Vector3Add(s.pos, {sinf(a) * 90.0f, 28.0f, cosf(a) * 90.0f});
+        // aim to her left, so she sits in the open sea right of the menu (and the class cards), not behind it
+        rv.target = Vector3Add(Vector3Add(s.pos, {0, 6, 0}), Vector3Scale({cosf(a), 0.0f, -sinf(a)}, -(GetScreenWidth() > 1.6f * GetScreenHeight() ? 46.0f : 40.0f)));
         if (arenaSel == ARENA_MAELSTROM) {  // preview the arena: circle the whirlpool instead
             rv.pos = {sinf(a) * 300.0f, 40.0f, cosf(a) * 300.0f};
             Vector3 right = {cosf(a), 0.0f, -sinf(a)};  // aim left of the eye, so it sits clear of the menu
