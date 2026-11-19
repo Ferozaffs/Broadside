@@ -1802,7 +1802,7 @@ void Game::RecordFrame() {
 // The guns' reach on the water: two dashed lines either side of the beam where the carriages stop,
 // gold on the side you're aiming when it's loaded, faint on the other side.
 void Game::DrawFiringArcs() {
-    if (myId < 0 || !view[myId].present || matchState != 0 || DeckView() > 0.5f) return;
+    if (myId < 0 || !view[myId].present || matchState != 0 || DeckView() > 0.5f || (campaign && portOpen)) return;  // (not ashore)
     const NetShip& s = view[myId].s;
     if (!(s.flags & SF_ALIVE)) return;
     Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
@@ -5150,6 +5150,10 @@ static const char* SideName(int s) { return s == 0 ? "PORT" : (s == 1 ? "STARBOA
 void Game::DrawHUD() {
     using namespace ui;
     const float W = (float)GetScreenWidth() / rv.uiScale, H = (float)GetScreenHeight() / rv.uiScale;  // (in the HUD's units)
+    if (campaign && portOpen) {  // ashore: the port screen alone, none of the sailing HUD under it
+        DrawPort(W, H);
+        return;
+    }
     if (DeckGlass() > 0.01f) {  // the spyglass on deck: its rim darkens the edges of the view (the sights stay clear)
         const float g = DeckGlass(), R = 0.5f * H * (1.6f - 0.6f * g), soft = 0.3f * H;
         Vector2 c = {W * 0.5f, H * 0.5f};
@@ -7260,7 +7264,7 @@ void Game::Frame() {
             rlScalef(s, s, 1.0f);
             SetMouseScale(1.0f / s, 1.0f / s);
             rv.uiScale = s;
-            DrawMonsterLabels();
+            if (!(campaign && portOpen)) DrawMonsterLabels();
             DrawHUD();
             rlDrawRenderBatchActive();
             rlPopMatrix();
@@ -8751,6 +8755,7 @@ const Texture2D* Game::Portrait(const std::string& id) {
             if (t.id) {
                 GenTextureMipmaps(&t);
                 SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+                SetTextureWrap(t, TEXTURE_WRAP_CLAMP);  // (repeating, the top edge picked up a line of her boots from the bottom)
             }
         }
         it = portraits.emplace(id, t).first;
