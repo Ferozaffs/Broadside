@@ -832,7 +832,11 @@ If the session runs out of tokens, continue when they refresh.
   us; the ball and tracer just out of a gun beside us aren't drawn for the first 14 m (they filled the view).
 - [x] Crew HUD: red arrows round the reticle to the nearest three enemies that are off the screen (the nearest with
   its range); at a gun on the wrong side, "THE ENEMY IS TO PORT · CROSS THE DECK".
-- [ ] Left alone (they'd touch the sim): walking through the masts, the deck dunked under in big landings.
+- [x] (2026-11-20, still client-side only) Walking through the masts: DeckStep keeps her body (0.3 m round) off
+  anything well over head height (ShipModel::TallAt: masts, cabin sides; rails and guns as before). The deck dunked
+  under: the crewman's eye is held just above the sea while the deck's under (crewDunkLift, up quick, down gently),
+  the ship's physics untouched. BS_WALLDUMP prints the deck's walls; BS_CREWLOG logs the lift. Storm cutter, 100 s:
+  never stuck, the eye held up 3 s (at most 1.4 m).
 
 ## Playtest notes (2026-11-19)
 - [x] The Flying Dutchman solid 18 s (20 in its last phase), away 4.5 s (3.5): it phased far too often.

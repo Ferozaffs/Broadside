@@ -474,6 +474,7 @@ public:
     float crewBob = 0.0f, crewBobAmt = 0.0f;  // crew: the stride's phase and how much the head goes with it (the eye only)
     Vector3 crewLastLocal{};
     float crewKick = 0.0f;                    // ...a gun going off beside us: a jolt, dying away
+    float crewDunkLift = 0.0f;                // ...the deck dunked under: how far the eye is held up above the sea (m)
     bool crewPlaced = false;
     float stepAcc = 0.0f;
     double lastLadder = 0.0;
@@ -6351,7 +6352,13 @@ bool Game::DeckStep(float fromFoot, float x, float z) const {
     float h = M.DeckAt(x, z);
     float up = h - fromFoot;
     bool scramble = up < 1.25f && (M.HighDeck(h) || fromFoot < M.DeckLevel() - 0.5f);
-    return M.Walkable(h) && (up < 0.8f || scramble) && !M.WallAt(x, z, fmaxf(fromFoot, h));
+    if (!M.Walkable(h) || !(up < 0.8f || scramble) || M.WallAt(x, z, fmaxf(fromFoot, h))) return false;
+    // (her body, not just her feet: keep a shoulder's width off a mast or a cabin's side - she walked half into them)
+    const float r = 0.3f, y = fmaxf(fromFoot, h);
+    for (const Vector2 o : {Vector2{r, 0}, Vector2{-r, 0}, Vector2{0, r}, Vector2{0, -r}, Vector2{0.7f * r, 0.7f * r}, Vector2{-0.7f * r, 0.7f * r},
+                            Vector2{0.7f * r, -0.7f * r}, Vector2{-0.7f * r, -0.7f * r}})
+        if (M.TallAt(x + o.x, z + o.y, y)) return false;
+    return true;
 }
 
 int Game::DeckReach(int cap) const {
@@ -6706,8 +6713,9 @@ void Game::CrewAutopilot(float dt, float& mx, float& mz) {
         static double last = 0;
         if (GetTime() - last > 1.0) {
             last = GetTime();
-            printf("[crew] at %.2f %.2f %.2f (deck %.2f) goal %.2f %.2f (deck %.2f) gun %d/%d leak %d near %d\n", crewLocal.x, crewFoot, crewLocal.z,
-                   DeckModel().DeckAt(crewLocal.x, crewLocal.z), goal.x, goal.z, DeckModel().DeckAt(goal.x, goal.z), gun, crewGun, leak, NearGun(nullptr));
+            printf("[crew] at %.2f %.2f %.2f (deck %.2f) goal %.2f %.2f (deck %.2f) gun %d/%d leak %d near %d lift %.1f\n", crewLocal.x, crewFoot, crewLocal.z,
+                   DeckModel().DeckAt(crewLocal.x, crewLocal.z), goal.x, goal.z, DeckModel().DeckAt(goal.x, goal.z), gun, crewGun, leak, NearGun(nullptr),
+                   crewDunkLift);
             fflush(stdout);
         }
     }
@@ -6772,6 +6780,12 @@ void Game::CrewCamera(float dt) {
     if (crewOverboard) {  // head just above the waves
         yw = swimYaw;
         eye = Vector3Add(swimPos, {0, 1.65f, 0});
+        crewDunkLift = 0.0f;
+    } else {  // the deck dunked under in a big landing: she holds on and keeps her head above the sea (the ship's as it was)
+        const float sea = Ocean().Height(eye.x, eye.z) + 0.45f;
+        const float want = Clamp(sea - eye.y, 0.0f, 16.0f);
+        crewDunkLift += (want - crewDunkLift) * fminf(1.0f, dt * (want > crewDunkLift ? 14.0f : 4.0f));  // (up quick, down gently)
+        eye.y += crewDunkLift;
     }
     const float pitchK = crewPitch + 0.05f * kick + 0.004f * crewBobAmt * sinf(crewBob * 2.0f + 0.6f);
     const float ywK = yw + 0.012f * kick * sinf(crewBob * 9.0f);

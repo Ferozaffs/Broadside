@@ -833,6 +833,15 @@ void ShipModel::BuildDeckMap(const Model& m, const Matrix& fix, const std::vecto
         if (deckAft > deckFore) { deckAft = -15.0f; deckFore = 15.0f; }
     }
     TraceLog(LOG_WARNING, "Ship model: deck map %d walkable cells, main deck at %.2f, deck from %.1f to %.1f", n, deckLevel, deckAft, deckFore);
+    if (getenv("BS_WALLDUMP"))  // (testing: what stops a sailor on the main deck - # a wall, . deck, blank off the deck)
+        for (int j = 0; j < kNZ; j += 2) {
+            printf("z %6.1f ", kZ0 + (j + 0.5f) * kDX);
+            for (int i = 0; i < kNX; ++i) {
+                const float x = kX0 + (i + 0.5f) * kDX, z = kZ0 + (j + 0.5f) * kDX, h = deckH[j * kNX + i];
+                putchar(!Walkable(h) ? ' ' : WallAt(x, z, h) ? '#' : '.');
+            }
+            printf("\n");
+        }
     if (getenv("BS_DECKDUMP"))  // (testing: the floor heights, a row per metre fore and aft)
         for (int j = 0; j < kNZ; j += 4) {
             printf("z %6.1f ", kZ0 + (j + 0.5f) * kDX);
@@ -881,6 +890,13 @@ bool ShipModel::WallAt(float x, float z, float y) const {
     int i = (int)floorf((x - kX0) / kDX), j = (int)floorf((z - kZ0) / kDX);
     if (i < 0 || j < 0 || i >= kNX || j >= kNZ) return true;
     return wallHi[j * kNX + i] > y + 0.6f && wallLo[j * kNX + i] < y + 1.6f;
+}
+
+bool ShipModel::TallAt(float x, float z, float y) const {
+    if (wallLo.empty()) return false;
+    int i = (int)floorf((x - kX0) / kDX), j = (int)floorf((z - kZ0) / kDX);
+    if (i < 0 || j < 0 || i >= kNX || j >= kNZ) return false;
+    return wallHi[j * kNX + i] > y + 2.2f && wallLo[j * kNX + i] < y + 1.0f;
 }
 
 // An extra level of detail: same hull space as the standard model (both come out of

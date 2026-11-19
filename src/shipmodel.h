@@ -33,6 +33,7 @@ public:
     // and whether a wall (bulwark, mast, cabin side) stands across (x, z) at a person's height above feet y.
     float DeckAt(float x, float z) const;
     bool WallAt(float x, float z, float y) const;
+    bool TallAt(float x, float z, float y) const;  // a wall well over head height there (a mast, a cabin's side: not a rail or a gun)
     // the deck as a whole (every model has its own heights): the main deck's level, and where the deck runs from aft
     // to forward. Walking rules and the captain's eye are measured from these.
     float DeckLevel() const { return deckLevel; }
