@@ -2,6 +2,8 @@
 // data/portraits/<id>.png (drawn when there; the talk works without them).
 #pragma once
 #include "sim.h"
+#include "audio.h"
+#include <cstring>
 
 namespace people {
 
@@ -258,6 +260,54 @@ inline const DreadVoice kDread[campaign::BIOMES] = {
     {"dread_kate", "Smell that? That's your ship burning. Not yet. Soon."},
     {"dread_widow", "I buried every captain who ever sailed against me. I have room for one more."},
 };
+
+// Their voices: no words, a hum or an ah or a laugh as each line comes up (sfx::Utter). Pitch (Hz), formant scale,
+// breath, rasp, and their manner: 0 plain, 1 cheerful (laughs), 2 gruff (hmphs), 3 eerie (long low hums)
+struct Voice { const char* id; float pitch, formant, breath, rasp; int manner; };
+inline const Voice kVoices[] = {
+    {"haverly_harbour", 190, 1.12f, 0.15f, 0.10f, 2}, {"haverly_tavern", 95, 0.92f, 0.10f, 0.20f, 1}, {"haverly_wright", 120, 0.98f, 0.25f, 0.35f, 2},
+    {"saltmarsh_harbour", 150, 1.05f, 0.20f, 0.00f, 0}, {"saltmarsh_tavern", 230, 1.18f, 0.12f, 0.00f, 1}, {"saltmarsh_wright", 115, 1.00f, 0.08f, 0.05f, 1},
+    {"greywater_harbour", 100, 0.95f, 0.10f, 0.25f, 2}, {"greywater_tavern", 175, 1.10f, 0.30f, 0.10f, 3}, {"greywater_wright", 105, 0.93f, 0.10f, 0.30f, 2},
+    {"coral_harbour", 210, 1.15f, 0.12f, 0.00f, 1}, {"coral_tavern", 85, 0.90f, 0.08f, 0.15f, 1}, {"coral_wright", 130, 1.02f, 0.10f, 0.05f, 1},
+    {"dorada_harbour", 125, 1.00f, 0.15f, 0.05f, 2}, {"dorada_tavern", 220, 1.17f, 0.28f, 0.00f, 0}, {"dorada_wright", 185, 1.10f, 0.20f, 0.25f, 1},
+    {"palmhaven_harbour", 115, 0.97f, 0.20f, 0.40f, 1}, {"palmhaven_tavern", 195, 1.12f, 0.15f, 0.10f, 2}, {"palmhaven_wright", 95, 0.93f, 0.08f, 0.05f, 0},
+    {"frostholm_harbour", 200, 1.12f, 0.12f, 0.00f, 0}, {"frostholm_tavern", 80, 0.88f, 0.10f, 0.35f, 1}, {"frostholm_wright", 205, 1.13f, 0.10f, 0.05f, 2},
+    {"iceward_harbour", 110, 0.96f, 0.30f, 0.30f, 0}, {"iceward_tavern", 205, 1.12f, 0.12f, 0.10f, 1}, {"iceward_wright", 90, 0.92f, 0.15f, 0.40f, 2},
+    {"cinderport_harbour", 115, 0.98f, 0.20f, 0.15f, 2}, {"cinderport_tavern", 210, 1.15f, 0.18f, 0.08f, 1}, {"cinderport_wright", 85, 0.90f, 0.10f, 0.30f, 2},
+    {"ashfall_harbour", 170, 1.06f, 0.20f, 0.45f, 2}, {"ashfall_tavern", 120, 1.00f, 0.30f, 0.05f, 3}, {"ashfall_wright", 250, 1.22f, 0.08f, 0.00f, 1},
+    {"mournwick_harbour", 100, 0.95f, 0.25f, 0.05f, 3}, {"mournwick_tavern", 175, 1.08f, 0.50f, 0.30f, 3}, {"mournwick_wright", 105, 0.96f, 0.20f, 0.05f, 3},
+    {"lantern_harbour", 95, 0.94f, 0.35f, 0.20f, 3}, {"lantern_tavern", 200, 1.14f, 0.35f, 0.00f, 3}, {"lantern_wright", 110, 0.96f, 0.12f, 0.05f, 1},
+    {"sea_merchant", 120, 0.98f, 0.12f, 0.10f, 0}, {"sea_navy", 190, 1.10f, 0.08f, 0.00f, 0}, {"sea_castaway", 120, 0.98f, 0.35f, 0.35f, 0},
+    {"sea_captive", 225, 1.17f, 0.15f, 0.00f, 0}, {"sea_captive_m", 135, 1.03f, 0.15f, 0.05f, 0}, {"sea_pirate", 105, 0.95f, 0.15f, 0.35f, 2},
+    {"dread_corwin", 120, 1.00f, 0.15f, 0.00f, 1}, {"dread_calypso", 195, 1.13f, 0.20f, 0.05f, 1}, {"dread_rime", 80, 0.90f, 0.40f, 0.45f, 3},
+    {"dread_kate", 215, 1.15f, 0.12f, 0.20f, 1}, {"dread_widow", 185, 1.10f, 0.55f, 0.05f, 3},
+};
+
+// the sound they make for a line: a question gets an eh?, a laugh a heh-heh, an exclamation an oh! (or a laugh, from
+// the cheerful); otherwise their manner: a hmph from the gruff, a long hum from the eerie, an ah or a mm-hm
+inline void Voiced(const char* id, const char* line, uint32_t salt) {
+    const Voice* v = nullptr;
+    for (const Voice& x : kVoices)
+        if (!strcmp(x.id, id)) v = &x;
+    if (!v || !line) return;
+    const uint32_t h = salt * 2654435761u + (uint32_t)strlen(line) * 40503u;
+    const bool ask = strchr(line, '?') != nullptr, bang = strchr(line, '!') != nullptr;
+    const bool laugh = !strncmp(line, "Ha", 2) || !strncmp(line, "HA", 2) || strstr(line, "Heh") || strstr(line, "Blimey");
+    int k;
+    if (laugh) k = sfx::UT_HEH;
+    else if (v->manner == 3) k = (h >> 3) % 3 ? sfx::UT_HUM : sfx::UT_AH;
+    else if (ask) k = sfx::UT_EH;
+    else if (bang) k = v->manner == 1 && (h >> 5) % 2 ? sfx::UT_HEH : sfx::UT_OH;
+    else if (v->manner == 2) k = (h >> 4) % 2 ? sfx::UT_HMPH : sfx::UT_HMM;
+    else if (v->manner == 1) k = (h >> 4) % 3 == 0 ? sfx::UT_HEH : sfx::UT_AH;
+    else k = (h >> 4) % 2 ? sfx::UT_AH : sfx::UT_HMM;
+    sfx::VoiceParams p;
+    p.pitch = v->pitch;
+    p.formant = v->formant;
+    p.breath = v->breath;
+    p.rasp = v->rasp;
+    sfx::Utter(p, k, 0.75f, h);
+}
 
 // is a captive (campaign::CaptiveName, a story's) a woman? (for the portrait)
 inline bool CaptiveIsWoman(const std::string& c) {

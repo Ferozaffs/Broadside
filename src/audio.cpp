@@ -659,7 +659,105 @@ void Fire(Id id, Vector3 pos, bool positional, float vol, float pitch) {
     PlaySound(s);
 }
 
+// ---- voices: hums, ahs and ehs ----------------------------------------------------------------
+// A glottal pulse train (with jitter, vibrato and, for a rough voice, a subharmonic) and aspiration noise, through
+// three formant band-passes that move from vowel to vowel; an h at the front where the utterance has one.
+struct Vowel { float f1, f2, f3; };
+constexpr Vowel kAh = {730, 1090, 2440}, kEh = {530, 1840, 2480}, kOh = {570, 840, 2410}, kUh = {440, 1020, 2240}, kMm = {250, 1100, 2300};
+
+struct Seg {           // one stretch of sound
+    float dur;         // s
+    Vowel from, to;    // the vowel it moves between
+    float p0, p1;      // pitch at the start and end (x the voice's own)
+    float amp;         // loudness
+    float h;           // s of breathy h before the voicing comes in
+    bool nasal;        // mouth closed: a hum, the highs gone
+};
+
+Buf Speak(const VoiceParams& v, const std::vector<Seg>& segs, uint32_t seed) {
+    Rng r(seed * 7919u + 13u);
+    Buf out;
+    float ph = 0.0f, sub = 0.0f;
+    Biquad f1, f2, f3;
+    OnePole tilt, nasalLp;
+    tilt.Set(900.0f);
+    nasalLp.Set(420.0f);
+    Wander jit, shimmer;
+    for (const Seg& s : segs) {
+        const int n = (int)(s.dur * SR);
+        for (int i = 0; i < n; ++i) {
+            const float t = (float)i / n, ts = (float)i / SR;
+            const float k = t * t * (3.0f - 2.0f * t);
+            // pitch: the contour, a slow vibrato, and a little jitter (more for a rough voice)
+            const float vib = 1.0f + 0.012f * sinf(TAU * 5.2f * (ts + out.size() / (float)SR));
+            const float f0 = v.pitch * (s.p0 + (s.p1 - s.p0) * k) * vib * (1.0f + (jit.Next(r, 40.0f) - 0.5f) * (0.02f + 0.08f * v.rasp));
+            ph += f0 / SR;
+            if (ph >= 1.0f) { ph -= 1.0f; sub = r.F() < v.rasp * 0.6f ? r.R(0.3f, 1.0f) : 1.0f; }  // (a rough voice: uneven pulses)
+            float glot = (1.0f - 2.0f * ph) * sub;  // (a sawtooth: its harmonics fall off like a voice's)
+            glot = tilt.Lp(glot) * 3.0f;
+            const float voiced = t * s.dur < s.h ? 0.0f : 1.0f;
+            const float hEnv = t * s.dur < s.h ? 1.0f : expf(-(t * s.dur - s.h) * 30.0f);
+            const float noise = r.W() * (0.25f * v.breath + 0.4f * hEnv * (s.h > 0.0f ? 1.0f : 0.0f));
+            float src = glot * voiced * (1.0f - 0.5f * v.breath) + noise;
+            // the vowel's formants (scaled for the voice), moving from one vowel to the next
+            const float fs = v.formant;
+            f1.Band((s.from.f1 + (s.to.f1 - s.from.f1) * k) * fs, 6.0f);
+            f2.Band((s.from.f2 + (s.to.f2 - s.from.f2) * k) * fs, 9.0f);
+            f3.Band((s.from.f3 + (s.to.f3 - s.from.f3) * k) * fs, 12.0f);
+            float y = f1.Run(src) * 1.0f + f2.Run(src) * 0.9f + f3.Run(src) * 0.4f;
+            if (s.nasal) y = nasalLp.Lp(y * 0.6f + glot * voiced * 0.25f) * 1.8f;
+            // the envelope: soft in, soft out
+            const float a = fminf(1.0f, t * s.dur / 0.03f) * fminf(1.0f, (1.0f - t) * s.dur / 0.07f) * (0.85f + 0.3f * shimmer.Next(r, 6.0f));
+            out.push_back(y * a * s.amp);
+        }
+    }
+    float peak = 1e-4f;  // (the same loudness for every voice)
+    for (float x : out) peak = fmaxf(peak, fabsf(x));
+    for (float& x : out) x *= 0.8f / peak;
+    return out;
+}
+
+Buf UtterBuf(const VoiceParams& v, int kind, uint32_t seed) {
+    Rng r(seed);
+    const float j = r.R(0.96f, 1.04f);
+    std::vector<Seg> s;
+    switch (kind) {
+        case UT_HMM:  s = {{0.42f * j, kMm, kMm, 1.0f, 1.12f, 1.0f, 0.0f, true}, {0.22f, kMm, kMm, 1.12f, 0.92f, 0.8f, 0.0f, true}}; break;  // mm-hm
+        case UT_AH:   s = {{0.5f * j, kAh, kUh, 1.12f, 0.86f, 1.0f, 0.06f, false}}; break;                                         // ahh.
+        case UT_EH:   s = {{0.34f * j, kEh, kEh, 0.95f, 1.32f, 1.0f, 0.0f, false}}; break;                                         // eh?
+        case UT_OH:   s = {{0.32f * j, kOh, kUh, 1.38f, 1.02f, 1.0f, 0.03f, false}}; break;                                        // oh!
+        case UT_HEH: {                                                                                                                 // heh-heh-heh
+            const float p = r.R(1.05f, 1.15f);
+            s = {{0.13f, kEh, kEh, p, p * 0.96f, 1.0f, 0.045f, false}, {0.05f, kEh, kEh, 1.0f, 1.0f, 0.0f, 0.0f, false},
+                 {0.12f, kEh, kAh, p * 0.95f, p * 0.9f, 0.9f, 0.045f, false}, {0.05f, kEh, kEh, 1.0f, 1.0f, 0.0f, 0.0f, false},
+                 {0.16f, kEh, kAh, p * 0.88f, p * 0.8f, 0.75f, 0.045f, false}};
+            break;
+        }
+        case UT_HMPH: s = {{0.08f, kMm, kMm, 1.0f, 1.0f, 0.3f, 0.06f, true}, {0.24f * j, kMm, kMm, 1.02f, 0.84f, 1.0f, 0.0f, true}}; break;  // hmph.
+        default:      s = {{0.85f * j, kMm, kUh, 0.98f, 0.9f, 1.0f, 0.0f, true}}; break;                                          // a long low hum
+    }
+    return Speak(v, s, seed);
+}
+
+constexpr int kUtterSlots = 4;
+Sound utterSounds[kUtterSlots];
+int utterNext = 0;
+
 }  // namespace
+
+void Utter(const VoiceParams& v, int kind, float vol, uint32_t seed) {
+    if (!ready || muted) return;
+    Sound& s = utterSounds[utterNext];
+    utterNext = (utterNext + 1) % kUtterSlots;
+    if (s.frameCount) { StopSound(s); UnloadSound(s); }
+    Wave w = ToWave(UtterBuf(v, kind, seed));
+    s = LoadSoundFromWave(w);
+    UnloadWave(w);
+    SetSoundVolume(s, Clamp(vol, 0.0f, 1.0f));
+    PlaySound(s);
+}
+
+Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed) { return ToWave(UtterBuf(v, kind, seed)); }
 
 bool Init() {
     InitAudioDevice();
@@ -773,6 +871,22 @@ bool ExportAll(const char* dir) {
             ExportWave(w, (d + kNames[i] + "_" + std::to_string(v + 1) + ".wav").c_str());
             UnloadWave(w);
         }
+    }
+    // the campaign's voices: each utterance in four voices (a deep man, a woman, an old rough one, a ghostly whisper)
+    {
+        static const char* const kVoiceNames[4] = {"deep", "woman", "old", "ghost"};
+        static const char* const kUtterNames[UT_COUNT] = {"hmm", "ah", "eh", "oh", "heh", "hmph", "hum"};
+        VoiceParams vp[4];
+        vp[0].pitch = 90; vp[0].formant = 0.92f; vp[0].breath = 0.1f; vp[0].rasp = 0.2f;
+        vp[1].pitch = 215; vp[1].formant = 1.15f; vp[1].breath = 0.12f; vp[1].rasp = 0.0f;
+        vp[2].pitch = 120; vp[2].formant = 0.98f; vp[2].breath = 0.25f; vp[2].rasp = 0.45f;
+        vp[3].pitch = 185; vp[3].formant = 1.1f; vp[3].breath = 0.55f; vp[3].rasp = 0.05f;
+        for (int v = 0; v < 4; ++v)
+            for (int k = 0; k < UT_COUNT; ++k) {
+                Wave w = ToWave(UtterBuf(vp[v], k, 7));
+                ExportWave(w, (d + "voice_" + kVoiceNames[v] + "_" + kUtterNames[k] + ".wav").c_str());
+                UnloadWave(w);
+            }
     }
     // a sampler: the ambience with the effects played over it, as you might hear them in a fight
     const float len = 46.0f;

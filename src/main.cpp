@@ -414,6 +414,7 @@ public:
     const Texture2D* Portrait(const std::string& id);
     int talkKey = -1;                // the port screen: the port and shop of whoever's talking (a new one: the line's typed out again)
     double talkAt = 0.0;
+    int talkVoiced = -1;             // (the last one whose voice was heard)
     struct SeaSay { std::string id, name, title, line; double at = -100.0; };
     SeaSay seaSay;                   // someone at sea saying something (a few seconds)
     double hailAt = -1000.0;         // the last hail from a passing trader or the navy
@@ -1489,6 +1490,7 @@ void Game::UpdateInput(float dt) {
         }
         if (IsKeyPressed(KEY_E) && campDocked >= 0) {
             portOpen = !portOpen;
+            talkKey = talkVoiced = -1;  // (ashore again: they greet you again)
             chartOpen = false;
             if (portOpen) EnableCursor();
             else DisableCursor();
@@ -8768,6 +8770,7 @@ void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, 
 
 void Game::Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line) {
     seaSay = {id, name, title, line, GetTime()};
+    people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 10.0));
 }
 
 // At sea, whoever's talking: low on the left, over the sea, for a few seconds
@@ -8835,6 +8838,10 @@ void Game::DrawPort(float W, float H) {
         const bool special = portTab == 0 ? sore : portTab == 1 ? campOffers.empty() : campGold < 150;
         const int day = (int)(campClock / dayLength);
         const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 3];
+        if (key != talkVoiced) {  // (a new face: their hum, their ah)
+            talkVoiced = key;
+            people::Voiced(who.id, line, (uint32_t)(day * 31 + key));
+        }
         const Texture2D* tex = Portrait(who.id);
         const float room = r.x - 12.0f;  // (left of the panel)
         DrawRectangleGradientH(0, 0, (int)(room + 12.0f), (int)H, {2, 4, 8, 190}, {2, 4, 8, 40});  // (the HUD behind them, dimmed)

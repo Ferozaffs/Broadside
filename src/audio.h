@@ -52,6 +52,18 @@ float Volume();
 // Offline: write every sound (and a short sampler with the ambience under it) as .wav files
 bool ExportAll(const char* dir);
 
+// The campaign's people don't speak: they hum, ah and eh as their line comes up (synthesised: a pitched glottal buzz
+// through the vowel's formants). Each one has their own voice.
+struct VoiceParams {
+    float pitch = 120.0f;   // Hz: ~85 a deep man .. ~250 a bright young woman
+    float formant = 1.0f;   // formant scale: 1 a man's vocal tract, ~1.15 a woman's
+    float breath = 0.1f;    // 0..1: aspiration noise (whispery, ghostly)
+    float rasp = 0.1f;      // 0..1: rough, irregular voicing (old, gruff)
+};
+enum Utterance { UT_HMM = 0, UT_AH, UT_EH, UT_OH, UT_HEH, UT_HMPH, UT_HUM, UT_COUNT };
+void Utter(const VoiceParams& v, int kind, float vol = 0.8f, uint32_t seed = 1);
+Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed = 1);  // (the same, as a wave: tests, --sfx-export)
+
 // Music: tracks streamed from data/music, one per state of the game, crossfaded as it changes. Each state's
 // file is <name>.ogg (or .mp3 / .wav / .qoa), with more takes as <name>_2, <name>_3...: a state with several
 // plays them in turn, one into the next. A state with no file borrows another's (boss -> battle -> sail,
