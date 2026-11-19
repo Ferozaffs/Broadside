@@ -213,6 +213,22 @@ inline const Person kPort[campaign::kPorts][SHOPS] = {
       "I'd give my labour for free, but the timber merchants are not so holy."}},
 };
 
+// each tavern keeper, once the last story is on offer: the black sails, as the port has heard of them
+inline const char* const kBlackSails[campaign::kPorts] = {
+    "Black sails, Captain. Fellow swore he saw a whole fleet of them off the Fog Banks. Paid for his drinks in a hurry and left.",
+    "Have you heard? Black sails, dozens of them. Even the fishermen have stopped making jokes about it.",
+    "My husband's ship had black sails at the end. I'm told there are a great many more now. Sit down. Listen.",
+    "The sea's gone quiet, my friend. Too quiet. Every captain who comes in talks about black sails.",
+    "They say an armada is gathering. Black sails, every pirate who ever lived. Even the music is sad tonight.",
+    "Black sails? I know a few of the old crews who flew them. They're all keeping very quiet. That frightens me more.",
+    "Five beasts, woken in one year. And now black sails. Drink first, Captain. Then listen.",
+    "Black sails in the fog, they say! The whalers won't go out. Have some mead, friend: you'll need it!",
+    "The whalers saw them: black sails, going east, a long line of them. Eat something, dear. You'll want your strength.",
+    "Black sails off the Reach. The foundries have been working night and day, and nobody will say for whom.",
+    "Something called the beasts up, Captain. Something's calling the black sails now. The fog's been listening.",
+    "The Lamplighter came down from the rock last night. He never comes down. He asked for you, Captain.",
+};
+
 // at sea
 struct SeaVoice { const char* id; const char* name; const char* title; const char* lines[3]; };
 enum SeaTalk { ST_HAIL = 0, ST_NAVY, ST_DISTRESS, ST_SAVED, ST_CASTAWAY, ST_CAPTIVE_F, ST_CAPTIVE_M, ST_STRUCK, ST_COUNT };
@@ -281,6 +297,10 @@ inline const Voice kVoices[] = {
     {"sea_captive", 225, 1.17f, 0.15f, 0.00f, 0}, {"sea_captive_m", 135, 1.03f, 0.15f, 0.05f, 0}, {"sea_pirate", 105, 0.95f, 0.15f, 0.35f, 2},
     {"dread_corwin", 120, 1.00f, 0.15f, 0.00f, 1}, {"dread_calypso", 195, 1.13f, 0.20f, 0.05f, 1}, {"dread_rime", 80, 0.90f, 0.40f, 0.45f, 3},
     {"dread_kate", 215, 1.15f, 0.12f, 0.20f, 1}, {"dread_widow", 185, 1.10f, 0.55f, 0.05f, 3},
+    {"fleet_1", 220, 1.17f, 0.10f, 0.00f, 1}, {"fleet_2", 105, 0.95f, 0.20f, 0.40f, 2}, {"fleet_3", 100, 0.94f, 0.08f, 0.05f, 0},
+    {"fleet_4", 200, 1.13f, 0.15f, 0.00f, 0}, {"fleet_5", 90, 0.92f, 0.10f, 0.30f, 1}, {"fleet_6", 125, 1.00f, 0.20f, 0.20f, 0},
+    {"pirate_1", 95, 0.93f, 0.15f, 0.40f, 2}, {"pirate_2", 215, 1.15f, 0.20f, 0.05f, 1}, {"pirate_3", 80, 0.88f, 0.10f, 0.45f, 2},
+    {"pirate_4", 130, 1.00f, 0.40f, 0.10f, 3}, {"pirate_5", 140, 1.03f, 0.10f, 0.00f, 1}, {"pirate_6", 100, 0.95f, 0.30f, 0.20f, 3},
 };
 
 // the sound they make for a line: a question gets an eh?, a laugh a heh-heh, an exclamation an oh! (or a laugh, from
@@ -308,6 +328,33 @@ inline void Voiced(const char* id, const char* line, uint32_t salt) {
     p.rasp = v->rasp;
     sfx::Utter(p, k, 0.75f, h);
 }
+
+// Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line)
+constexpr int kFleetFaces = 6, kPirateFaces = 6;
+inline const char* FleetFace(int seed) { static const char* const k[kFleetFaces] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6"}; return k[(unsigned)seed % kFleetFaces]; }
+inline const char* PirateFace(int seed) { static const char* const k[kPirateFaces] = {"pirate_1", "pirate_2", "pirate_3", "pirate_4", "pirate_5", "pirate_6"}; return k[(unsigned)seed % kPirateFaces]; }
+enum FleetBark { FB_IDLE = 0, FB_ENEMY, FB_HURT, FB_KILL, FB_JOINED, FB_COUNT };
+inline const char* const kFleetLines[FB_COUNT][6] = {
+    {"Fair wind today, Captain. Long may it last.", "The men are in good spirits. Mostly about the rum.", "Keeping station off your quarter, Captain.",
+     "Quiet sea. I don't trust a quiet sea.", "Whenever you want a fight, we're with you.", "Lookout says nothing on the horizon. Nothing yet."},
+    {"Sail ho! Pirates, Captain!", "Enemy in sight! Guns ready!", "Black flag on the horizon, Captain!",
+     "Here they come! Stand by to fire!", "Pirates closing! We're with you!", "Beat to quarters! Enemy off the bow!"},
+    {"We're taking water, Captain!", "She's hurt bad! Can't take much more!", "Holed below the waterline!",
+     "Our rigging's in tatters!", "We're in trouble here, Captain!", "Another hit like that and we're done!"},
+    {"Got her! She's going down!", "Ha! That's one less pirate!", "A fine shot, Captain!",
+     "She's sinking! Huzzah!", "Look at her burn! Well done!", "That'll teach them to fly black!"},
+    {"Reporting for duty, Captain. Where you sail, we sail.", "Glad to be sailing with you, Captain.", "At your service. Just point us at the enemy.",
+     "We'll keep up, Captain, don't you worry.", "Signal when you need us. We'll be there.", "An honour to sail in your fleet, Captain."},
+};
+enum PirateBark { PB_APPROACH = 0, PB_TAUNT, PB_SINKING, PB_COUNT };
+inline const char* const kPirateLines[PB_COUNT][6] = {
+    {"Strike your colours and we'll let you live! Probably!", "Fresh meat on the water, lads!", "That's a pretty ship. She'll be mine by sundown.",
+     "Run if you like. We'll catch you.", "Your gold or your life! Both, actually!", "Well, well. Somebody's lost."},
+    {"Is that all you've got?", "My grandmother shoots better than you!", "Ha! You missed!",
+     "Keep firing, I need the practice!", "Your hull's leaking, Captain!", "Board her, lads! Board her!"},
+    {"Curse you! Curse you to the depths!", "Abandon ship! Abandon ship!", "This isn't over! I'll be back!",
+     "Davy Jones, here I come...", "My ship! My beautiful ship!", "You'll pay for this!"},
+};
 
 // is a captive (campaign::CaptiveName, a story's) a woman? (for the portrait)
 inline bool CaptiveIsWoman(const std::string& c) {

@@ -1182,16 +1182,21 @@ static int ChainTest() {
             if (k >= 0 && k < g.ShipCount() && g.ships[k].active && g.ships[k].questRole == role) return (int)k;
         return -1;
     };
-    const int regions[2] = {TEMPERATE, EMBER};
+    // (BS_CHAINFINAL: the last story instead - the five told already, taken at home; three lairs in a row)
+    const bool finalOnly = getenv("BS_CHAINFINAL") != nullptr;
+    if (finalOnly)
+        for (int b = 0; b < BIOMES; ++b) g.campChain[b] = chainSteps + 1;
+    std::vector<int> regions = finalOnly ? std::vector<int>{FINAL} : std::vector<int>{TEMPERATE, EMBER};
+    auto storyName = [&](int b) { return b == FINAL ? "The last story" : kBiomeNames[b]; };
     for (int b : regions) {
-        int port = -1;
-        for (int p = 0; p < kPorts; ++p)
+        int port = b == FINAL ? homePort : -1;
+        for (int p = 0; p < kPorts && port < 0; ++p)
             if (PortBiome(p) == b) { port = p; break; }
         dock(port);
         int idx = -1;
         for (size_t k = 0; k < g.campOffers.size(); ++k)
             if (g.campOffers[k].chain == b + 1) idx = (int)k;
-        if (idx < 0 || !g.CampaignAct(me, ACT_ACCEPT, idx)) { printf("   %s: no story offered at %s   <-- PROBLEM\n", kBiomeNames[b], PortName(port)); ++problems; continue; }
+        if (idx < 0 || !g.CampaignAct(me, ACT_ACCEPT, idx)) { printf("   %s: no story offered at %s   <-- PROBLEM\n", storyName(b), PortName(port)); ++problems; continue; }
         int slot = -1;
         for (int k = 0; k < maxQuests; ++k)
             if (g.campQuests[k].chain == b + 1) slot = k;
@@ -1232,11 +1237,17 @@ static int ChainTest() {
                     const bool inLair = g.mode == MODE_BOSS;
                     tick(60 * 4);
                     const bool boss = g.bossId >= 0;
-                    printf("      the lair: %s, %s\n", inLair ? "into a boss fight" : "NO FIGHT", boss ? BossName(g.bossKind) : "no boss came");
+                    printf("      the lair (danger %.1f): %s, %s\n", ZoneLevel(spot.x, spot.y), inLair ? "into a boss fight" : "NO FIGHT", boss ? BossName(g.bossKind) : "no boss came");
                     if (!inLair || !boss) { ++problems; told = true; break; }
+                    if (boss && g.bossKind != StoryBoss(q)) { printf("      the wrong boss (wanted %s)   <-- PROBLEM\n", BossName(StoryBoss(q))); ++problems; }
                     g.TestWinBoss();
                     tick(60 * 11);
-                    told = true;
+                    told = !(b == FINAL && step < chainSteps);  // (the last story's first lairs: on to the next)
+                    if (!told) {
+                        tick(60 * 9);
+                        if (g.campQuests[slot].chain != b + 1 || g.campQuests[slot].step != step + 1) { printf("      no next step after the lair   <-- PROBLEM\n"); ++problems; told = true; }
+                        continue;
+                    }
                     break;
                 }
             }
@@ -1249,8 +1260,8 @@ static int ChainTest() {
         }
         const bool back = g.mode == MODE_CAMPAIGN && g.arena == ARENA_WORLD;
         const bool done = g.campChain[b] == chainSteps + 1;
-        printf("   %s: %s, back on the campaign's sea: %s, gold %d -> %d (the boss: %d)%s\n", kBiomeNames[b], done ? "the story is told" : "NOT TOLD", back ? "yes" : "NO",
-               gold0, g.campGold, ChainReward(b), done && back ? "" : "   <-- PROBLEM");
+        printf("   %s: %s, back on the campaign's sea: %s, gold %d -> %d (the boss: %d)%s\n", storyName(b), done ? "the story is told" : "NOT TOLD", back ? "yes" : "NO",
+               gold0, g.campGold, b < BIOMES ? ChainReward(b) : 0, done && back ? "" : "   <-- PROBLEM");
         problems += !(done && back);
         for (int k = 0; k < maxQuests; ++k) g.ClearQuest(k);
     }

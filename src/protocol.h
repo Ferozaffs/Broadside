@@ -273,7 +273,7 @@ struct Snapshot {
     uint16_t campSunk = 0;
     Quest campQuests[campaign::maxQuests];  // under way
     std::vector<Quest> campOffers;          // the tavern's (in port)
-    uint8_t campChain[campaign::BIOMES] = {};
+    uint8_t campChain[campaign::CHAINS] = {};
     int16_t campDread = -1;  // the dread pirate hunting her
     uint8_t campUpg[campaign::kUpgradeCount] = {};
     uint8_t campOfficer[campaign::OFFICERS] = {};

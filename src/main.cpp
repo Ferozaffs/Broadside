@@ -408,7 +408,7 @@ public:
     uint16_t campOfficerSeedC[campaign::OFFICERS] = {};
     std::vector<Snapshot::CampFleet> campFleetC;
     std::vector<campaign::Recruit> campRecruitsC;
-    uint8_t campChainC[campaign::BIOMES] = {};
+    uint8_t campChainC[campaign::CHAINS] = {};
     int16_t campPrizeC = -1;
     int portTab = 0;                 // the port screen: harbour, tavern, shipwright
     // the campaign's people: their portraits (data/portraits/<id>.png, loaded when first wanted) and who's talking
@@ -426,6 +426,15 @@ public:
                   float age, float alpha);
     void DrawSeaSay(float W, float H);
     void UpdateHails();
+    // barks: a quick word from her fleet's captains and from the pirates (a small portrait and one line, on the right)
+    struct Bark { std::string id, name, line; Color color; double at; };
+    std::deque<Bark> barks;
+    double barkFleetAt = -1000.0, barkPirateAt = -1000.0;
+    std::set<int> barkSeen;          // (pirates that have hailed us already)
+    bool barkInFight = false;
+    void AddBark(const std::string& id, const std::string& name, const std::string& line, Color c);
+    void UpdateBarks();
+    void DrawBarks(float W, float H);
     float CampRating() const {       // how strong her ship and fleet are, on the zones' scale (1-10): for the HUD only, nothing adapts to it
         float p = 0.0f;
         for (uint8_t u : campUpgC) p += u;
@@ -1322,7 +1331,7 @@ void Game::Interpolate() {
             for (int k = 0; k < campaign::OFFICERS; ++k) { campOfficerC[k] = sn.campOfficer[k]; campOfficerSeedC[k] = sn.campOfficerSeed[k]; }
             campFleetC = sn.campFleet;
             campRecruitsC = sn.campRecruits;
-            for (int k = 0; k < campaign::BIOMES; ++k) campChainC[k] = sn.campChain[k];
+            for (int k = 0; k < campaign::CHAINS; ++k) campChainC[k] = sn.campChain[k];
             campPrizeC = sn.campPrize;
             campPartsC = sn.campParts;
             campHullsC = sn.campHulls;
@@ -3010,6 +3019,17 @@ void Game::PlayEvent(const GameEvent& e) {
             break;
         }
         case EventType::Kill: {
+            if (campaign && curMode == MODE_CAMPAIGN && !(e.flags & EF_CRIPPLE) && e.b < NumShips() && myId >= 0 && myId < NumShips() && view[myId].present &&
+                IsEnemy(e.b) && Vector3Distance(e.pos, view[myId].s.pos) < 1500.0f) {  // (a pirate down near her: its last curse, her fleet's cheer)
+                AddBark(people::PirateFace(e.b * 7 + view[e.b].s.cls), NameOf(e.b), people::kPirateLines[people::PB_SINKING][GetRandomValue(0, 5)], ui::kRed);
+                std::vector<const Snapshot::CampFleet*> mine;
+                for (const Snapshot::CampFleet& f : campFleetC)
+                    if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present && (view[f.ship].s.flags & SF_ALIVE)) mine.push_back(&f);
+                if (!mine.empty() && GetRandomValue(0, 1) == 0) {
+                    const Snapshot::CampFleet& f = *mine[(size_t)GetRandomValue(0, (int)mine.size() - 1)];
+                    AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[people::FB_KILL][GetRandomValue(0, 5)], ui::kGreen);
+                }
+            }
             if (e.flags & EF_CRIPPLE) {  // a race: crippled, not sunk
                 fx.Explosion(e.pos, {0, 1, 0}, 1.6f);
                 sfx::Play(sfx::Hit, e.pos, 1.0f, 0.8f);
@@ -3284,6 +3304,13 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_PRIZE: Feed3("A PRIZE", "  she sails with your fleet now", "", ui::kGold, ui::kText); sfx::PlayFlat(sfx::Treasure, 0.8f, 0.9f); break;
                 case EV_PLUNDER: Feed3("PLUNDERED", "  her hold emptied", gold, ui::kGold, ui::kGold); sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
                 case EV_ESCORTLOST: Feed3(NameOf(e.a), "  is lost, with all hands", "", ui::kRed, ui::kText); break;
+                case EV_FINALE:
+                    Notice("THE LAST STORY IS TOLD", ui::kGold, 6.0f);
+                    Feed3("THE LEVIATHAN", "  is sunk: the lights out there have gone dark", "", ui::kGold, ui::kText);
+                    Say("lantern_harbour", "The Lamplighter", "Keeper of Lantern Rock",
+                        "So it's done. The lights out there have gone dark, Captain, all but mine. Sail where you like now: the sea is yours.");
+                    sfx::PlayFlat(sfx::Treasure, 1.0f, 0.7f);
+                    break;
                 case EV_JOINED:
                     if (e.value > 0.0f) Feed3("A SHIP", TextFormat("  a %s for your fleet, but no berth: her owners pay", ClassOf(e.flags % SC_COUNT).name), gold, ui::kGold, ui::kGold);
                     else {
@@ -5512,7 +5539,9 @@ void Game::DrawHUD() {
         DrawSeaLife(W, H);
         if (!portOpen && !chartOpen) {
             UpdateHails();
+            UpdateBarks();
             DrawSeaSay(W, H);
+            DrawBarks(W, H);
         }
     }
     else if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
@@ -8311,8 +8340,10 @@ void Game::CampaignAct(int act, int arg) {
 }
 
 // ---- the regions' stories ---------------------------------------------------------------------------------------
-static const char* const kStoryName[campaign::BIOMES] = {"The Guns of the Grey Isle", "The Queen Beneath the Reef", "The Coil in the Ice",
-                                                         "The Iron Beast", "The Ship Without a Crew"};
+static const char* const kStoryName[campaign::CHAINS] = {"The Guns of the Grey Isle", "The Queen Beneath the Reef", "The Coil in the Ice",
+                                                         "The Iron Beast", "The Ship Without a Crew", "The Last Voyage"};
+// the last story (campaign::FINAL), told by the Lamplighter of Lantern Rock
+struct StoryStep;
 struct StoryStep { const char* title; const char* brief; const char* captive; };
 // {where}: how far and which way; {region}; {pirate}: the step's pirate captain; {a} / {b}: a convoy's ports
 static const StoryStep kStory[campaign::BIOMES][campaign::chainSteps + 1] = {
@@ -8337,9 +8368,15 @@ static const StoryStep kStory[campaign::BIOMES][campaign::chainSteps + 1] = {
      {"The Last of His Crew", "The chest's papers name the one man who left that ship alive, now held aboard {pirate}'s ship {where} of here. Free him.", "the last of his crew"},
      {"The Ship Without a Crew", "He knows where it comes through the fog: {where} of here. It sails through shot like mist; strike when it's solid.", nullptr}},
 };
+static const StoryStep kFinalStory[campaign::chainSteps + 1] = {
+    {"The Black Sails", "Five beasts woken in five seas, all in one year. The Lamplighter of Lantern Rock says it was no chance: a fleet under black sails gathers, and its herald, {pirate}, carries its orders through {region}. Find the ship, {where} of here, and sink it.", nullptr},
+    {"The Armada", "The herald's orders name a gathering place in {region}: an armada, every pirate who ever flew black, in line of battle. Break it, {where} of here.", nullptr},
+    {"The Storm Caller", "The Armada's survivors speak of the one who called them: a ship that walks in its own storm, out in {region}. Sail into the weather, {where} of here, and end it.", nullptr},
+    {"The Leviathan", "With its caller gone, the thing it called is loose: the Leviathan, a man-o'-war three times over, coming up out of the deep at the end of the world, past the last of the Ember Reach. It lies {where} of here. This is the last voyage.", nullptr},
+};
 static const StoryStep* StoryOf(const Quest& q) {
-    if (q.chain < 1 || q.chain > campaign::BIOMES || q.step > campaign::chainSteps) return nullptr;
-    return &kStory[q.chain - 1][q.step];
+    if (q.chain < 1 || q.chain > campaign::CHAINS || q.step > campaign::chainSteps) return nullptr;
+    return q.chain == campaign::FINAL + 1 ? &kFinalStory[q.step] : &kStory[q.chain - 1][q.step];
 }
 static void ReplaceAll(std::string& s, const std::string& a, const std::string& b) {
     for (size_t p = s.find(a); p != std::string::npos; p = s.find(a, p + b.size())) s.replace(p, a.size(), b);
@@ -8493,7 +8530,7 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
             return true;
         }
         case Q_LAIR:
-            what = TextFormat("Sail into the lair of %s", BossName(ChainBoss(q.chain - 1)));
+            what = TextFormat("Sail into the lair of %s", BossName(StoryBoss(q)));
             at = {q.x, 10.0f, q.z};
             return true;
         case Q_CONVOY: {
@@ -8819,12 +8856,117 @@ void Game::DrawSeaSay(float W, float H) {
     DrawTalk(tex, pb, bx, fminf(520.0f, W * 0.42f), bottom, seaSay.name.c_str(), seaSay.title.c_str(), seaSay.line.c_str(), age, alpha);
 }
 
+void Game::AddBark(const std::string& id, const std::string& name, const std::string& line, Color c) {
+    for (const Bark& b : barks)
+        if (b.line == line) return;  // (not twice at once)
+    barks.push_back({id, name, line, c, GetTime()});
+    while (barks.size() > 3) barks.pop_front();
+    people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 7.0) + (uint32_t)barks.size());
+}
+
+// Who says what: her fleet's captains between fights (now and then), when a fight starts, when they're badly hurt,
+// when an enemy goes down; the pirates as they come at her, while they fight, and as they sink
+void Game::UpdateBarks() {
+    if (myId < 0 || myId >= NumShips() || !view[myId].present || campDocked >= 0 || curMode != MODE_CAMPAIGN) return;
+    const NetShip& me = view[myId].s;
+    if (!(me.flags & SF_ALIVE)) return;
+    const double now = GetTime();
+    auto pick = [](int n) { return GetRandomValue(0, n - 1); };
+    // the nearest enemy, and is there a fight on
+    int nearest = -1;
+    float nd = 1e9f;
+    for (int id = 0; id < NumShips(); ++id)
+        if (view[id].present && (view[id].s.flags & SF_ALIVE) && IsEnemy(id)) {
+            const float d = Vector3Distance(view[id].s.pos, me.pos);
+            if (d < nd) { nd = d; nearest = id; }
+        }
+    const bool fight = nd < 700.0f;
+    // her fleet
+    std::vector<const Snapshot::CampFleet*> mine;
+    for (const Snapshot::CampFleet& f : campFleetC)
+        if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present && (view[f.ship].s.flags & SF_ALIVE)) mine.push_back(&f);
+    auto fleetSays = [&](const Snapshot::CampFleet& f, int kind) {
+        AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[kind][pick(6)], ui::kGreen);
+        barkFleetAt = now;
+    };
+    if (!mine.empty()) {
+        const Snapshot::CampFleet& f = *mine[(size_t)pick((int)mine.size())];
+        if (fight && !barkInFight && now - barkFleetAt > 4.0) fleetSays(f, people::FB_ENEMY);
+        else if (!fight && now - barkFleetAt > 110.0 && now - seaSay.at > 10.0 && GetRandomValue(0, 600) == 0) fleetSays(f, people::FB_IDLE);
+        for (const Snapshot::CampFleet* g : mine) {  // (badly hurt: once in a while)
+            const NetShip& s = view[g->ship].s;
+            if (s.maxHp > 0.0f && s.hp < s.maxHp * 0.3f && now - barkFleetAt > 25.0 && GetRandomValue(0, 120) == 0) fleetSays(*g, people::FB_HURT);
+        }
+    }
+    barkInFight = fight;
+    static size_t fleetWas = (size_t)-1;  // (a ship new to her fleet says hello)
+    if (fleetWas != (size_t)-1 && campFleetC.size() > fleetWas) {
+        const Snapshot::CampFleet& f = campFleetC.back();
+        AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[people::FB_JOINED][pick(6)], ui::kGreen);
+        barkFleetAt = now;
+    }
+    fleetWas = campFleetC.size();
+    // the pirates: a word as each one comes at her, a jeer now and then in the fight
+    if (nearest >= 0 && nd < 650.0f && !barkSeen.count(nearest) && now - barkPirateAt > 6.0) {
+        barkSeen.insert(nearest);
+        AddBark(people::PirateFace(nearest * 7 + view[nearest].s.cls), NameOf(nearest), people::kPirateLines[people::PB_APPROACH][pick(6)], ui::kRed);
+        barkPirateAt = now;
+    } else if (nearest >= 0 && nd < 450.0f && now - barkPirateAt > 22.0 && GetRandomValue(0, 240) == 0) {
+        AddBark(people::PirateFace(nearest * 7 + view[nearest].s.cls), NameOf(nearest), people::kPirateLines[people::PB_TAUNT][pick(6)], ui::kRed);
+        barkPirateAt = now;
+    }
+}
+
+void Game::DrawBarks(float W, float H) {
+    using namespace ui;
+    const double now = GetTime();
+    while (!barks.empty() && now - barks.front().at > 5.5) barks.pop_front();
+    float y = H * 0.3f;
+    const float bw = fminf(400.0f, W * 0.34f), x = W - bw - 16.0f;
+    for (const Bark& b : barks) {
+        const float age = (float)(now - b.at), a = Clamp(age / 0.2f, 0.0f, 1.0f) * Clamp((5.5f - age) / 0.5f, 0.0f, 1.0f);
+        const float slide = (1.0f - Clamp(age / 0.2f, 0.0f, 1.0f)) * 30.0f;
+        const std::vector<std::string> lines = Wrap(b.line, 13, bw - 96.0f);
+        const float h = fmaxf(66.0f, 30.0f + 17.0f * lines.size());
+        const Rectangle r = {x + slide, y, bw, h};
+        Panel(r, A({10, 14, 22, 230}, a), 8);
+        DrawRectangleRec({r.x, r.y + 8, 3, h - 16}, A(b.color, 0.9f * a));
+        // the face: the top of the portrait (her head and shoulders), in a frame
+        const Rectangle face = {r.x + 10, r.y + 7, 52, 52};
+        DrawRectangleRec(face, A({30, 34, 40, 255}, a));
+        if (const Texture2D* tex = Portrait(b.id)) {
+            const float s = tex->width * 0.62f;
+            BeginScissorMode((int)(face.x * rv.uiScale), (int)(face.y * rv.uiScale), (int)(face.width * rv.uiScale), (int)(face.height * rv.uiScale));
+            DrawTexturePro(*tex, {tex->width * 0.19f, 0.0f, s, s}, face, {0, 0}, 0.0f, Fade(WHITE, a));
+            EndScissorMode();
+        }
+        DrawRectangleLinesEx(face, 1.0f, A(b.color, 0.6f * a));
+        Text(b.name.c_str(), r.x + 74, r.y + 7, 13, A(b.color, a), true);
+        int left = (int)(age * 80.0f) + 1;
+        float ty = r.y + 26;
+        for (const std::string& l : lines) {
+            if (left <= 0) break;
+            Text(l.substr(0, (size_t)std::min<int>((int)l.size(), left)).c_str(), r.x + 74, ty, 13, A(kText, a), false);
+            left -= (int)l.size() + 1;
+            ty += 17;
+        }
+        y += h + 8;
+    }
+}
+
 // A trader or the navy passing close hails us (one at a time, now and then, never in a fight)
 void Game::UpdateHails() {
     static bool sayTest = getenv("BS_SAY") != nullptr;  // (screenshots: someone at sea says something, BS_SAY=<portrait id>)
     if (sayTest && GetTime() > 3.0) {
         sayTest = false;
         Say(getenv("BS_SAY"), "Gentleman Corwin", "Dread pirate of The Temperate Isles", people::kDread[0].line);
+    }
+    static bool barkTest = getenv("BS_BARKTEST") != nullptr;  // (screenshots: a fleet captain and two pirates bark)
+    if (barkTest && GetTime() > 3.5) {
+        barkTest = false;
+        AddBark(getenv("BS_BARKTEST"), "the Valiant", people::kFleetLines[people::FB_ENEMY][0], ui::kGreen);
+        AddBark("palmhaven_tavern", "Bloody Bess", people::kPirateLines[people::PB_APPROACH][0], ui::kRed);
+        AddBark("greywater_wright", "Red Morgan", people::kPirateLines[people::PB_TAUNT][2], ui::kRed);
     }
     if (GetTime() - hailAt < 120.0 || GetTime() - seaSay.at < 12.0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
@@ -8867,6 +9009,9 @@ void Game::DrawPort(float W, float H) {
         const bool special = portTab == 0 ? sore : portTab == 1 ? campOffers.empty() : campGold < 150;
         const int day = (int)(campClock / dayLength);
         const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 3];
+        if (portTab == 1)  // (the last story on offer: the black sails are all the talk)
+            for (const Quest& o : campOffers)
+                if (o.chain == FINAL + 1 && o.step == 0) line = people::kBlackSails[campDocked % kPorts];
         if (key != talkVoiced) {  // (a new face: their hum, their ah)
             talkVoiced = key;
             people::Voiced(who.id, line, (uint32_t)(day * 31 + key));
@@ -8928,8 +9073,8 @@ void Game::DrawPort(float W, float H) {
         Label(TextFormat("PORTS PUT INTO %d OF %d   \xC2\xB7   %d PIRATES SUNK   \xC2\xB7   DAY %d", seenN, kPorts, campSunk, (int)(campClock / dayLength) + 1), x0, y, 11, kDim);
         y += 24;
         int told = 0;
-        for (int k = 0; k < BIOMES; ++k) told += campChainC[k] > chainSteps;
-        Label(TextFormat("STORIES TOLD %d OF %d", told, BIOMES), x0, y, 11, told ? kGold : kDim);
+        for (int k = 0; k < CHAINS; ++k) told += campChainC[k] > chainSteps;
+        Label(TextFormat("STORIES TOLD %d OF %d%s", told, CHAINS, campChainC[FINAL] > chainSteps ? "   \xC2\xB7   THE SEA IS YOURS" : ""), x0, y, 11, told ? kGold : kDim);
         y += 24;
         std::string hold;  // (the ship's parts she's won: the shipwright builds from them)
         for (int p = 0; p < PARTS; ++p)
@@ -8945,7 +9090,8 @@ void Game::DrawPort(float W, float H) {
         for (size_t k = 0; k < campOffers.size(); ++k) {
             const Quest& q = campOffers[k];
             if (q.chain) {
-                Label(TextFormat("A STORY OF %s   \xC2\xB7   PART %d OF %d", TextToUpper(kBiomeNames[q.chain - 1]), q.step + 1, chainSteps + 1), x0, y - 2, 10, kGold);
+                Label(q.chain == FINAL + 1 ? TextFormat("THE LAST STORY   \xC2\xB7   PART %d OF %d", q.step + 1, chainSteps + 1)
+                                           : TextFormat("A STORY OF %s   \xC2\xB7   PART %d OF %d", TextToUpper(kBiomeNames[q.chain - 1]), q.step + 1, chainSteps + 1), x0, y - 2, 10, kGold);
                 y += 14;
             }
             Text(QuestTitle(q).c_str(), x0, y, 17, q.chain ? kGold : kText, true);

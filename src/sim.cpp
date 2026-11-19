@@ -1522,6 +1522,8 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campOffersDay = -1;
     campCargo = false;
     for (uint8_t& c : campChain) c = 0;
+    if (getenv("BS_CAMPTOLD"))  // (screenshots: the five stories told, the last one offered)
+        for (int b = 0; b < campaign::BIOMES; ++b) campChain[b] = campaign::chainSteps + 1;
     campBossSlot = -1;
     campEventT = 120.0f;
     campNpcT = 0.0f;
@@ -5162,19 +5164,47 @@ uint8_t ChainBoss(int b) {
     static const uint8_t k[BIOMES] = {BOSS_FORTRESS, BOSS_KRAKEN, BOSS_SERPENT, BOSS_IRONCLAD, BOSS_DUTCHMAN};
     return b >= 0 && b < BIOMES ? k[b] : BOSS_LEVIATHAN;
 }
+uint8_t StoryBoss(const Quest& q) {
+    static const uint8_t kFinalBoss[chainSteps + 1] = {BOSS_LEVIATHAN, BOSS_ARMADA, BOSS_STORM, BOSS_LEVIATHAN};
+    if (q.chain == FINAL + 1) return kFinalBoss[q.step <= chainSteps ? q.step : chainSteps];
+    return ChainBoss(q.chain >= 1 && q.chain <= BIOMES ? q.chain - 1 : q.biome);
+}
 int ChainReward(int b) { return (int)(roundf(2500.0f * Danger((uint8_t)b) / 50.0f) * 50.0f); }  // (about: a lair pays as where it is, ChainQuest)
 }  // namespace campaign
 
 // A step of a region's story: the kind its table says, in that region (a little better paid than the tavern's own)
 bool World::ChainQuest(Quest& q, int biome, int step, int port, uint32_t& h) {
     using namespace campaign;
-    if (biome < 0 || biome >= BIOMES || step < 0 || step > chainSteps || port < 0) return false;
-    const int type = step < chainSteps ? kChainStep[biome][step] : Q_LAIR;
-    if (!BuildQuest(q, type, port, biome, h)) return false;
+    if (biome < 0 || biome >= CHAINS || step < 0 || step > chainSteps || port < 0) return false;
+    const bool last = biome == FINAL;
+    const int type = step < chainSteps ? (last ? kFinalStep[step] : kChainStep[biome][step]) : Q_LAIR;
+    const int where = last ? kFinalWhere[step] : biome;
+    int from = port;
+    if (last)  // (from the far port of the step's region: its wildest waters)
+        for (int p = 0; p < kPorts; ++p)
+            if (PortBiome(p) == where) from = p;
+    if (!BuildQuest(q, type, from, where, h)) return false;
+    q.from = (int8_t)port;
+    if (last) {  // (out where the step's danger is: the open water in its region nearest that level, clear of the ports)
+        float best = 1e9f;
+        for (int k = 0; k < 600; ++k) {
+            h = h * 1664525u + 1013904223u;
+            const float x = ((h >> 8) / 16777216.0f * 2.0f - 1.0f) * (edge - 900.0f);
+            h = h * 1664525u + 1013904223u;
+            const float z = ((h >> 8) / 16777216.0f * 2.0f - 1.0f) * (edge - 900.0f);
+            if (BiomeAt(x, z) != where || RocksHeight(rocks, x, z) > -40.0f) continue;
+            bool nearPort = false;
+            for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, {x, z}) < portSafe * 1.5f;
+            const float miss = fabsf(ZoneLevel(x, z) - kFinalDanger[step]);
+            if (!nearPort && miss < best) { best = miss; q.x = x; q.z = z; }
+        }
+        q.biome = (uint8_t)where;
+    }
     q.chain = (uint8_t)(biome + 1);
     q.step = (uint8_t)step;
     q.deadline = 0.0f;  // (the story waits for her)
     q.reward = type == Q_LAIR ? (int32_t)(roundf(2500.0f * LevelMul(ZoneLevel(q.x, q.z)) / 50.0f) * 50.0f) : (int32_t)(roundf(q.reward * 1.3f / 10.0f) * 10.0f);
+    if (last) q.reward = (int32_t)(roundf(q.reward * (step == chainSteps ? 2.5f : 1.5f) / 50.0f) * 50.0f);  // (the last story pays as it should)
     if (type == Q_CONVOY && q.to >= 0 && q.to == port) q.to = (int8_t)((port + 1) % kPorts);
     return true;
 }
@@ -5195,6 +5225,13 @@ void World::MakeOffers(int port) {
     if (!storyOn && campChain[pb] < chainSteps) {
         Quest q;
         if (ChainQuest(q, pb, campChain[pb], port, h)) campOffers.push_back(q);
+    }
+    bool allTold = true, lastOn = false;  // (the last story: in any port, once the five are told)
+    for (int b = 0; b < BIOMES; ++b) allTold &= campChain[b] > chainSteps;
+    for (const Quest& o : campQuests) lastOn |= o.chain == FINAL + 1 && (o.state == QS_ACTIVE || o.state == QS_RETURN || o.state == QS_DONE);
+    if (allTold && !lastOn && campChain[FINAL] < chainSteps && (int)campOffers.size() < offersPer) {
+        Quest q;
+        if (ChainQuest(q, FINAL, campChain[FINAL], port, h)) campOffers.push_back(q);
     }
     int order[Q_TYPES];
     for (int i = 0; i < Q_TYPES; ++i) order[i] = i;
@@ -5306,7 +5343,7 @@ void World::CampaignBoss(int slot) {
         crates[i].active = false;
         crates[i].timer = 0.5f + 0.4f * i;
     }
-    bossChoice = ChainBoss(q.biome < BIOMES ? q.biome : q.chain - 1);
+    bossChoice = StoryBoss(q);
     difficulty = (uint8_t)LevelDifficulty(ZoneLevel(q.x, q.z));  // (the boss as strong as where its lair is)
     bossId = -1;
     bossPhase = bossPat = 0;
@@ -5365,6 +5402,15 @@ void World::CampaignBack(bool won) {
         Quest& q = campQuests[slot];
         if (won) {
             if (q.chain >= 1 && q.chain <= BIOMES) campChain[q.chain - 1] = chainSteps + 1;
+            if (q.chain == FINAL + 1) {
+                campChain[FINAL] = (uint8_t)std::max<int>(campChain[FINAL], q.step + 1);
+                if (q.step >= chainSteps) {  // the Leviathan: the last story told
+                    campChain[FINAL] = chainSteps + 1;
+                    GameEvent fe{EventType::CampEvent};
+                    fe.b = EV_FINALE;
+                    events.push_back(fe);
+                }
+            }
             EndQuest(slot, true);
             GivePart(NextPart(10.0f, true), {q.x, 0.0f, q.z});
         } else {
@@ -5468,7 +5514,7 @@ void World::UpdateQuests(float dt, Ship& cap) {
             if (q.t > 8.0f) {
                 const Quest was = q;
                 ClearQuest(slot);
-                if (was.chain && was.state == QS_DONE && was.type != Q_LAIR) {  // the story goes on: its next step
+                if (was.chain && was.state == QS_DONE && (was.type != Q_LAIR || (was.chain == FINAL + 1 && was.step < chainSteps))) {  // the story goes on: its next step
                     const int b = was.chain - 1;
                     campChain[b] = (uint8_t)std::max<int>(campChain[b], was.step + 1);
                     uint32_t hh = (uint32_t)was.seed * 2246822519u + (uint32_t)b * 3266489917u + 77u;

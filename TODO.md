@@ -907,7 +907,14 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   pirates, monsters and the lairs' bosses (voyage::Difficulty by level) the same. Pay x LevelMul (0.53-1.7). Nothing
   reads her strength. HUD: DANGER n against YOUR SHIP n (a rating from upgrades, officers, class, fleet) in green /
   gold / red ("out of your depth"); the chart's regions show their ranges. Test: BS_ZONETEST.
-- [ ] Next: the Leviathan, the Armada and the Storm Caller (a last story across the regions?), reputation per port,
+- [x] The last story (2026-11-20): "The Last Voyage", campaign::FINAL (campChain[CHAINS]). Once the five regional
+  stories are told every tavern offers it (and its keeper talks of black sails, people.h kBlackSails); the Lamplighter
+  of Lantern Rock tells it. The Black Sails (a bounty on the herald, the Fog Banks, danger ~7), then three lairs in a
+  row: the Admiral's Armada (the Ember Reach, ~8.5), the Storm Caller (the far Fog Banks, ~8), the Leviathan (the very
+  edge of the Ember Reach, 10). Each step is placed by danger (kFinalDanger), from its region's port; its lairs go on
+  to the next step; the Leviathan ends it (EV_FINALE: a word from the Lamplighter, "the sea is yours"). It pays 1.5x,
+  the finale 2.5x. Test: BS_CHAINTEST=1 BS_CHAINFINAL=1; BS_CAMPTOLD=1 for screenshots.
+- [ ] Next: reputation per port,
   fleet and crew (phase 3), balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
 - [x] Phase 3: fleet, officers, the shipwright (2026-11-19).
   - The port screen in three tabs: Harbour (repairs for the flagship and the fleet), Tavern (quests; officers looking

@@ -471,6 +471,7 @@ inline const char* RaceCourseName(int a) {
 }
 // Distances along a course (s) are measured down the middle of the channel, from one end to the other
 // The campaign's sea (ARENA_WORLD): a square 2 x half across, open sea with archipelagos, in five regions
+struct Quest;  // (below: a quest taken in a tavern)
 namespace campaign {
 constexpr float half = 12000.0f;   // m from the middle to the edge of the chart
 constexpr float edge = 11300.0f;   // past this the sea turns a ship back (the fog at the end of the world)
@@ -552,7 +553,14 @@ inline constexpr uint8_t kChainStep[BIOMES][chainSteps] = {
     {Q_TREASURE, Q_CAPTIVE, Q_CONVOY},    // the Ember Reach: the Ironclad
     {Q_CASTAWAYS, Q_TREASURE, Q_CAPTIVE}, // the Fog Banks: the Flying Dutchman
 };
+// The last story, once all five are told: who woke the five beasts. A herald to hunt, then three lairs in a row - the
+// Armada, the Storm Caller, and at the end of the world the Leviathan
+constexpr int FINAL = BIOMES, CHAINS = BIOMES + 1;  // (campChain[FINAL]: the last story's steps)
+inline constexpr uint8_t kFinalStep[chainSteps] = {Q_BOUNTY, Q_LAIR, Q_LAIR};
+inline constexpr uint8_t kFinalWhere[chainSteps + 1] = {FOG, EMBER, FOG, EMBER};  // (each step's region: the wildest two)
+inline constexpr float kFinalDanger[chainSteps + 1] = {7.0f, 8.5f, 8.5f, 10.0f};  // (and how far out: the Leviathan at the end of the world)
 uint8_t ChainBoss(int biome);  // (BossKind)
+uint8_t StoryBoss(const Quest& q);  // the boss in a story's lair (the last story: its step's)
 int ChainReward(int biome);    // gold for its boss
 enum QuestState : uint8_t { QS_NONE = 0, QS_OFFER, QS_ACTIVE, QS_RETURN, QS_DONE, QS_FAILED };  // (return: the castaways / the captive aboard, for port)
 enum QuestRole : uint8_t { QR_NONE = 0, QR_TARGET, QR_MERCHANT, QR_GUARD, QR_CAPTOR, QR_ESCORTED };  // (a quest's ships)
@@ -563,7 +571,8 @@ enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMAT
 enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN,
                           EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST,
                           EV_PART,  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
-                          EV_JOINED };  // (a ship joins her fleet, flags = her class; value = gold instead, if the fleet's full)
+                          EV_JOINED,  // (a ship joins her fleet, flags = her class; value = gold instead, if the fleet's full)
+                          EV_FINALE };  // (the last story told: the Leviathan sunk)
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -1116,7 +1125,7 @@ public:
     int8_t campOffersPort = -1;              // (which port, which day they're for)
     int campOffersDay = -1;
     bool campCargo = false;                  // a hold full (a cargo quest under way): she's a little slower
-    uint8_t campChain[campaign::BIOMES] = {};  // each region's story: steps done (chainSteps + 1: its boss beaten)
+    uint8_t campChain[campaign::CHAINS] = {};  // each region's story, then the last one: steps done (chainSteps + 1: its boss beaten)
     int8_t campBossSlot = -1;                // the lair's quest while its boss is fought (the world is in MODE_BOSS on the Isles)
     float campEventT = 120.0f;               // s to the next thing that happens at sea
     struct FleetShip { uint8_t cls = SC_FRIGATE; float hull = 1.0f; uint16_t seed = 0; int16_t ship = -1; };

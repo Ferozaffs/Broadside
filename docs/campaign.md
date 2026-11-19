@@ -49,6 +49,16 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
   - the Fog Banks, *The Ship Without a Crew*: lanterns on an empty beach, a drowned captain's chest, the last of his
     crew -> the Flying Dutchman.
   The lair turns the sea into the boss's arena for the fight, then back to the last port.
+- **The last story**, *The Last Voyage* (once all five are told, offered in every tavern; the Lamplighter of Lantern
+  Rock tells it): who woke the five beasts. A bounty on the herald of the black sails (the Fog Banks), then three
+  lairs in a row: the Admiral's Armada (the Ember Reach), the Storm Caller (the far Fog Banks), and at the end of the
+  world the Leviathan (the Ember Reach's very edge, danger 10). Then the sea is yours.
+
+## Progression (built)
+- She starts in a **cutter**. The frigate and the ship of the line are **built**, not bought: three parts each (a
+  keel, rigging and 18-pounders; frames, a mainmast and 32-pounders) won on quests, from dread pirates and in lairs,
+  and the shipwright's labour. Ships she's built stay hers.
+- The **fleet** is won: prizes, quests that pay a ship, a merchantman's guard ship after a rescue. Nothing for sale.
 
 ## The sea's own life (built)
 - **Traffic**: traders sailing port to port (the pirates hunt them; fire on one and she fights back) and navy patrols
@@ -60,7 +70,7 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
   spectral).
 
 ## Fleet and crew (built: see TODO.md, phase 3)
-- **Fleet**: up to 3 escort ships, recruited in port or captured, following you (the existing escort AI), each with
+- **Fleet**: up to 3 escort ships, won (prizes, quests, rescues), following you (the existing escort AI), each with
   its own hull that carries over.
 - **Crew**: named officers with a trait (gunner: reload, bosun: repairs, navigator: speed, surgeon: crew losses...)
   built on the Odyssey's perks; they can be lost.
