@@ -4833,8 +4833,8 @@ bool World::CampaignAct(int shipId, int act, int arg) {
             campSaveDue = true;
             return true;
         }
-        case campaign::ACT_BUY_ESCORT: {  // (the shipwright sells cutters and gunboats; bigger ones are prizes)
-            if (campDocked < 0 || !campaign::Buyable(arg) || (int)campFleet.size() >= campaign::fleetMax) return false;
+        case campaign::ACT_BUY_ESCORT: {  // (no more: her fleet is won - prizes, quests, a merchantman saved)
+            if (true) return false;
             const int cost = campaign::ShipPrice(arg);
             if (campGold < cost) return false;
             campGold -= cost;
@@ -5213,6 +5213,16 @@ void World::MakeOffers(int port) {
             q.reward = (int32_t)(roundf(q.reward * 0.6f / 10.0f) * 10.0f);
         }
     }
+    // and now and then one brings a ship for her fleet (while she has a berth for one): a cutter or a gunboat near
+    // home, a frigate perhaps far out
+    if ((int)campFleet.size() < fleetMax && R() < 0.3f && !campOffers.empty()) {
+        Quest& q = campOffers[(size_t)(R() * campOffers.size()) % campOffers.size()];
+        if (!q.chain && q.part < 0) {
+            const float lv = ZoneLevel(q.x, q.z);
+            q.ship = (int8_t)(lv >= 5.0f && R() < 0.4f ? SC_FRIGATE : R() < 0.5f ? SC_GUNBOAT : SC_CUTTER);
+            q.reward = (int32_t)(roundf(q.reward * 0.6f / 10.0f) * 10.0f);
+        }
+    }
 }
 
 int World::NextPart(float level, bool line) {
@@ -5227,6 +5237,27 @@ int World::NextPart(float level, bool line) {
     if (pick < 0) consider(PT_KEEL, PT_FRAMES);
     if (pick < 0 && lineOk) consider(PT_FRAMES, PARTS);
     return pick;
+}
+
+void World::JoinFleet(int cls, Vector3 at) {
+    using namespace campaign;
+    if (cls < 0 || cls >= SC_COUNT) return;
+    GameEvent ce{EventType::CampEvent};
+    ce.b = EV_JOINED;
+    ce.flags = (uint8_t)cls;
+    ce.pos = at;
+    if ((int)campFleet.size() >= fleetMax) {  // (no berth for her: her owners pay instead)
+        const int gold = (int)(ShipPrice(cls) * 0.4f);
+        campGold += gold;
+        ce.value = (float)gold;
+    } else {
+        FleetShip f;
+        f.cls = (uint8_t)cls;
+        f.seed = (uint16_t)(RandF() * 65535.0f);
+        campFleet.push_back(f);
+    }
+    events.push_back(ce);
+    campSaveDue = true;
 }
 
 void World::GivePart(int part, Vector3 at) {
@@ -5389,6 +5420,7 @@ void World::EndQuest(int slot, bool won) {
     q.t = 0.0f;
     if (won && q.type != campaign::Q_CONVOY) campGold += q.reward;  // (the convoy pays a share a ship, as they go down)
     if (won && q.part >= 0) GivePart(q.part, {q.x, 0.0f, q.z});
+    if (won && q.ship >= 0) JoinFleet(q.ship, {q.x, 0.0f, q.z});
     for (Ship& s : ships)  // the guards and the pirates fight on as pirates; a captor that's struck stays struck
         if (s.active && s.questSlot == slot && !s.merchant) { s.questSlot = -1; s.questRole = 0; }
     GameEvent ev{EventType::Quest};
@@ -5735,6 +5767,8 @@ void World::UpdateSeaLife(float dt, Ship& cap, float nearFoe) {
                 campGold += gold;
                 ce.b = EV_SAVED;
                 ce.value = (float)gold;
+                if (RandF() < 0.35f && (int)campFleet.size() < fleetMax)  // (now and then her guard ship comes over to you)
+                    JoinFleet(ZoneLevel(me.x, me.y) >= 5.0f && RandF() < 0.3f ? SC_FRIGATE : SC_GUNBOAT, ships[m].pos);
                 ships[m].npc = NPC_TRADER;  // (she goes on her way: to the nearest port)
                 int best = -1;
                 float bd = 1e9f;
@@ -5882,8 +5916,8 @@ bool World::SaveCampaign() const {
             (unsigned)campSeen, campClock, campSunk);
     for (const Quest& q : campQuests)
         if (q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN)
-            fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
-                    q.biome, q.count, q.sunk, q.gone, q.chain, q.step, q.part);
+            fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
+                    q.biome, q.count, q.sunk, q.gone, q.chain, q.step, q.part, q.ship);
     fprintf(f, "chains");
     for (uint8_t c : campChain) fprintf(f, " %d", c);
     fprintf(f, "\nupgrades");
@@ -5929,12 +5963,12 @@ bool World::LoadCampaign() {
         else if (!strcmp(key, "laidup")) { for (float& h : campHullFrac) { float v; if (fscanf(f, "%f", &v) == 1) h = Clamp(v, 0.15f, 1.0f); } }
         else if (!strcmp(key, "hull")) { float v; if (fscanf(f, "%f", &v) == 1) campLoadHull = v; }
         else if (!strcmp(key, "quest")) {
-            int ty, st, fr, to, rw, bi, co, su, go, ch = 0, sp = 0, pt = -1;
+            int ty, st, fr, to, rw, bi, co, su, go, ch = 0, sp = 0, pt = -1, sh = -1;
             unsigned sd;
             float x, z, dl;
             char line[256] = {};
             if (!fgets(line, sizeof line, f)) break;
-            const int got = sscanf(line, "%d %d %d %d %f %f %d %f %u %d %d %d %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go, &ch, &sp, &pt);
+            const int got = sscanf(line, "%d %d %d %d %f %f %d %f %u %d %d %d %d %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go, &ch, &sp, &pt, &sh);
             if (got >= 13 && ty >= 0 && ty <= campaign::Q_LAIR)
                 for (Quest& q : campQuests)
                     if (q.state == campaign::QS_NONE) {
@@ -5943,6 +5977,7 @@ bool World::LoadCampaign() {
                         q.deadline = dl; q.seed = (uint16_t)sd; q.biome = (uint8_t)bi; q.count = (uint8_t)co; q.sunk = (uint8_t)su; q.gone = (uint8_t)go;
                         q.chain = (uint8_t)ch; q.step = (uint8_t)sp;
                         q.part = (int8_t)(pt >= 0 && pt < campaign::PARTS ? pt : -1);
+                        q.ship = (int8_t)(sh >= 0 && sh < SC_COUNT ? sh : -1);
                         break;
                     }
         } else if (!strcmp(key, "chains")) {

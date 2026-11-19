@@ -3283,6 +3283,14 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_PRIZE: Feed3("A PRIZE", "  she sails with your fleet now", "", ui::kGold, ui::kText); sfx::PlayFlat(sfx::Treasure, 0.8f, 0.9f); break;
                 case EV_PLUNDER: Feed3("PLUNDERED", "  her hold emptied", gold, ui::kGold, ui::kGold); sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
                 case EV_ESCORTLOST: Feed3(NameOf(e.a), "  is lost, with all hands", "", ui::kRed, ui::kText); break;
+                case EV_JOINED:
+                    if (e.value > 0.0f) Feed3("A SHIP", TextFormat("  a %s for your fleet, but no berth: her owners pay", ClassOf(e.flags % SC_COUNT).name), gold, ui::kGold, ui::kGold);
+                    else {
+                        Feed3("A SHIP", TextFormat("  a %s joins your fleet", ClassOf(e.flags % SC_COUNT).name), "", ui::kGreen, ui::kText);
+                        Notice(TextFormat("A %s JOINS YOUR FLEET", TextToUpper(ClassOf(e.flags % SC_COUNT).name)), ui::kGreen, 3.5f);
+                    }
+                    sfx::PlayFlat(sfx::Treasure, 0.9f, 0.9f);
+                    break;
                 case EV_PART:
                     if (e.value > 0.0f) Feed3("A SHIP'S PART", TextFormat("  %s: the shipwrights buy it, you have one", kPartNames[e.flags % PARTS]), gold, ui::kGold, ui::kGold);
                     else {
@@ -8877,7 +8885,7 @@ void Game::DrawPort(float W, float H) {
     auto shipLine = [&](const char* who, int cls, float frac, float yy) {
         Text(who, x0, yy, 16, kText, true);
         Label(TextFormat("%s   \xC2\xB7   HULL %d%%", TextToUpper(ClassOf(cls).name), (int)roundf(frac * 100.0f)), x0 + 260, yy + 3, 11, kDim);
-        Bar({x0 + 470, yy + 6, w0 - 470, 6}, frac, frac > 0.6f ? kGreen : frac > 0.3f ? kGold : kRed);
+        Bar({x0 + 470, yy + 6, w0 - 470 - 112, 6}, frac, frac > 0.6f ? kGreen : frac > 0.3f ? kGold : kRed);  // (room at the end: paying an escort off)
     };
     if (portTab == 0) {  // the harbourmaster: repairs, flagship and fleet
         Label("THE HARBOURMASTER", x0, y, 12, kDim);
@@ -8892,7 +8900,12 @@ void Game::DrawPort(float W, float H) {
                 missing += fmaxf(0.0f, view[f.ship].s.maxHp - view[f.ship].s.hp);
             }
             shipLine(TextFormat("the %s", FleetName(f.seed)), f.cls, frac, y);
-            y += 28;
+            if (Button({x0 + w0 - 100, y - 4, 100, 26}, "Pay off")) CampaignAct(ACT_SELL_ESCORT, (int)(&f - campFleetC.data()));
+            y += 30;
+        }
+        if (campFleetC.empty()) {
+            Text("No ships with you yet: take a struck pirate as a prize, or win one on a quest.", x0, y + 2, 13, kDim, false);
+            y += 24;
         }
         const int cost = (int)ceilf(missing * repairPerHp);
         const bool damaged = cost > 0;
@@ -8926,6 +8939,8 @@ void Game::DrawPort(float W, float H) {
             Text(TextFormat("%s gold", Thousands(q.reward).c_str()), x0 + w0 - 140, y + 1, 15, kGold, true, Right);
             if (q.part >= 0 && q.part < PARTS) {  // (and a part for her next ship)
                 Label(TextFormat("+ %s", TextToUpper(kPartShort[q.part])), x0 + w0 - 140, y + 20, 10, kGreen, Right);
+            } else if (q.ship >= 0 && q.ship < SC_COUNT) {  // (or a ship for her fleet)
+                Label(TextFormat("+ A %s", TextToUpper(ClassOf(q.ship).name)), x0 + w0 - 140, y + 20, 10, kGreen, Right);
             }
             const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 13, w0 - 170);
             for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), x0, y + 22 + l * 16.0f, 13, kDim, false);
@@ -9016,23 +9031,6 @@ void Game::DrawPort(float W, float H) {
             }
         }
         y += 66;
-        Label(TextFormat("YOUR FLEET   \xC2\xB7   %d OF %d", (int)campFleetC.size(), fleetMax), x0, y, 12, kDim);
-        y += 20;
-        for (size_t k = 0; k < campFleetC.size(); ++k) {
-            const Snapshot::CampFleet& f = campFleetC[k];
-            Text(TextFormat("the %s, a %s", FleetName(f.seed), ClassOf(f.cls).name), x0, y + 6, 14, kText, true);
-            if (Button({x0 + w0 - 160, y, 160, 30}, TextFormat("Sell  \xC2\xB7  %s", Thousands((int)(ShipPrice(f.cls) * 0.4f * f.hull)).c_str()))) CampaignAct(ACT_SELL_ESCORT, (int)k);
-            y += 34;
-        }
-        if ((int)campFleetC.size() < fleetMax)
-            for (int k = 0; k < 2; ++k) {  // (the shipwright sells cutters and gunboats; a frigate or a ship of the line joins her as a prize)
-                const int c = k ? SC_GUNBOAT : SC_CUTTER;
-                const float bx = x0 + k * ((w0 + 10) / 3.0f), bw = (w0 + 10) / 3.0f - 10;
-                if (Button({bx, y, bw, 36}, TextFormat("Buy a %s  \xC2\xB7  %s", ClassOf(c).name, Thousands(ShipPrice(c)).c_str()), false, campGold >= ShipPrice(c))) {
-                    CampaignAct(ACT_BUY_ESCORT, c);
-                    sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
-                }
-            }
     }
     if (Button({r.x + 30, r.y + ph - 64, pw - 60, 44}, "Set sail  (E)", true)) {
         portOpen = false;

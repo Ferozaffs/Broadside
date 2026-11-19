@@ -1387,8 +1387,10 @@ static int FleetTest() {
     check(!g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE), "no ship of the line without her parts");
     g.campParts = PartsFor(SC_LINE);
     check(g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE) && g.ships[me].cls == SC_LINE && g.campParts == 0 && ((g.campHulls >> SC_LINE) & 1), "a ship of the line built from her parts");
-    check(!g.CampaignAct(me, ACT_BUY_ESCORT, SC_FRIGATE), "no frigates for sale");
-    check(g.CampaignAct(me, ACT_BUY_ESCORT, SC_GUNBOAT) && g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "a gunboat and a cutter for her fleet");
+    check(!g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "no ships for sale");
+    g.JoinFleet(SC_GUNBOAT, g.ships[me].pos);  // (as a quest's reward, or a merchantman's thanks)
+    g.JoinFleet(SC_CUTTER, g.ships[me].pos);
+    check(g.campFleet.size() == 2, "a gunboat and a cutter won for her fleet");
     tick(60);
     int out = 0;
     for (const World::FleetShip& f : g.campFleet) out += f.ship >= 0 && g.ships[f.ship].active && g.ships[f.ship].leader == me;

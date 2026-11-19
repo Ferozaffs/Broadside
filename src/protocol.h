@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 29;  // 29: the campaign's ship parts (quests carry one, her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 29;  // 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -99,7 +99,7 @@ inline void PutQuest(ByteWriter& w, const Quest& q) {
     w.Put(q.seed); w.Put(q.biome); w.Put(q.flags); w.Put(q.count); w.Put(q.sunk); w.Put(q.gone);
     w.Put((uint8_t)(q.t < 0.0f ? 0.0f : q.t > 12.0f ? 240.0f : q.t * 20.0f));
     for (int16_t k : q.ships) w.Put(k);
-    w.Put(q.chain); w.Put(q.step); w.Put(q.part);
+    w.Put(q.chain); w.Put(q.step); w.Put(q.part); w.Put(q.ship);
 }
 inline Quest GetQuest(ByteReader& r) {
     Quest q;
@@ -107,7 +107,7 @@ inline Quest GetQuest(ByteReader& r) {
     q.reward = r.Get<int32_t>(); q.deadline = r.Get<float>(); q.seed = r.Get<uint16_t>(); q.biome = r.Get<uint8_t>(); q.flags = r.Get<uint8_t>();
     q.count = r.Get<uint8_t>(); q.sunk = r.Get<uint8_t>(); q.gone = r.Get<uint8_t>(); q.t = r.Get<uint8_t>() / 20.0f;
     for (int16_t& k : q.ships) k = r.Get<int16_t>();
-    q.chain = r.Get<uint8_t>(); q.step = r.Get<uint8_t>(); q.part = r.Get<int8_t>();
+    q.chain = r.Get<uint8_t>(); q.step = r.Get<uint8_t>(); q.part = r.Get<int8_t>(); q.ship = r.Get<int8_t>();
     return q;
 }
 

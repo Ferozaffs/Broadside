@@ -956,7 +956,10 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   32-pounders (+3,500). Parts: about every other day one of the tavern's quests pays one (less gold); a frigate's
   anywhere, a line's only in waters of danger 5+; every dread pirate sunk gives one; every lair's boss one (a line's
   first). A part she has already sells for 400. Hulls she's built are hers to switch between (laid up as sound as she
-  left them). The shipwright sells only cutters and gunboats for the fleet; bigger escorts are prizes. Near home the
+  left them). The fleet is won, never bought (the user: "Fleet should also be behind quests and events. Shipwright
+  should only be upgrades"): prizes (struck pirates), some tavern quests pay a ship (a cutter or gunboat; a frigate
+  perhaps in danger 5+), and a merchantman saved sometimes sends her guard ship (35%). Escorts are paid off in the
+  Harbour tab; a ship won with no berth pays 40% of her worth. Near home the
   pirates and the quests' ships are cutters (no ships of the line under danger 3). Protocol 29. Tests: BS_FLEETTEST;
   BS_CAMPPARTS=<bits> for screenshots; BS_ZONETEST runs 5-6 are a stock cutter (danger 1.5: 7% of her hull a minute).
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

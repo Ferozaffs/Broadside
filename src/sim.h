@@ -562,7 +562,8 @@ constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
 enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS };
 enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN,
                           EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST,
-                          EV_PART };  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
+                          EV_PART,  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
+                          EV_JOINED };  // (a ship joins her fleet, flags = her class; value = gold instead, if the fleet's full)
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -597,6 +598,7 @@ struct Quest {
     uint8_t chain = 0;             // a region's story: its biome + 1 (0: an ordinary quest), and which step of it
     uint8_t step = 0;
     int8_t part = -1;              // a ship's part it pays as well (campaign::Part), -1 none
+    int8_t ship = -1;              // a ship for her fleet it pays as well (a class), -1 none
 };
 
 namespace strait {
@@ -1124,6 +1126,7 @@ public:
     float campHullFrac[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};  // how sound each one she's not sailing is
     int NextPart(float level, bool line);  // the part a reward brings: a frigate's she lacks first (or a line's, line), -1 none
     void GivePart(int part, Vector3 at);         // into her hold (or its worth in gold, if she has it)
+    void JoinFleet(int cls, Vector3 at);         // a ship comes to sail with her (a reward: there's no buying them; gold, if the fleet's full)
     uint8_t campUpg[campaign::kUpgradeCount] = {};  // the shipwright's upgrades bought (levels)
     uint8_t campOfficer[campaign::OFFICERS] = {};   // her officers' levels (0: none)
     uint16_t campOfficerSeed[campaign::OFFICERS] = {};
