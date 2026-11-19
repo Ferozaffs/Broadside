@@ -565,6 +565,11 @@ public:
     void DrawWakeMap(bool menu);
     bool soundOn = false;
     float creakTimer = 2.0f;
+    double combatAt = -100.0;  // the music: when there was last fighting near us (guns, hits, an enemy close)
+    std::string AudioCfgPath() const { return std::string(GetApplicationDirectory()) + "audio.cfg"; }
+    void SaveAudioCfg() const { SaveFileText(AudioCfgPath().c_str(), (char*)TextFormat("music %.2f\nsound %.2f\n", sfx::music::Volume(), sfx::Volume())); }
+    bool VolumeRow(Rectangle r, const char* label, float v, float& out);  // a volume bar: true when changed (out)
+    void DrawVolumes(float x, float y, float w);                         // music and sound, side by side
     void UpdateSound(float dt, bool menu);
     bool shadowPass = false;        // DrawShip: geometry only, no lanterns/fx
     uint32_t arenaShadowKey = 0;    // what the arena shadow cascade was last drawn for
@@ -791,7 +796,22 @@ void Game::Init() {
     if (!myLivery.IsDefault()) myLiveryGpu.Set(myLivery);
     soundOn = sfx::Init();
     if (soundOn) {
-        sfx::SetVolume(getenv("BS_VOLUME") ? (float)atof(getenv("BS_VOLUME")) : 0.8f);
+        float vm = 0.6f, vs = 0.8f;
+        if (FileExists(AudioCfgPath().c_str())) {  // (the volumes the player chose last time)
+            char* t = LoadFileText(AudioCfgPath().c_str());
+            if (t) {
+                sscanf(t, "music %f sound %f", &vm, &vs);
+                UnloadFileText(t);
+            }
+        }
+        sfx::SetVolume(getenv("BS_VOLUME") ? (float)atof(getenv("BS_VOLUME")) : Clamp(vs, 0.0f, 1.0f));
+        sfx::music::SetVolume(getenv("BS_MUSICVOL") ? (float)atof(getenv("BS_MUSICVOL")) : Clamp(vm, 0.0f, 1.0f));
+        {  // music: data/music beside the game (or the source tree's, running from the build)
+            std::string md = std::string(GetApplicationDirectory()) + "data/music";
+            if (!DirectoryExists(md.c_str())) md = std::string(GetApplicationDirectory()) + "../data/music";
+            if (getenv("BS_MUSICDIR")) md = getenv("BS_MUSICDIR");
+            sfx::music::Init(md.c_str());
+        }
         if (opt.shotTime > 0 || !opt.recordPath.empty()) sfx::SetMuted(true);  // automated runs stay quiet
     }
     Image img = GenImageGradientRadial(64, 64, 0.0f, WHITE, BLANK);
@@ -853,7 +873,10 @@ void Game::Shutdown() {
     net.Disconnect();
     server.Stop();
     if (portOpened) { upnp::Stop(); portOpened = false; }
-    if (soundOn) sfx::Shutdown();
+    if (soundOn) {
+        sfx::music::Shutdown();
+        sfx::Shutdown();
+    }
 }
 
 void Game::SetOcean(uint32_t seed, int weather, int arena, int mode) {
@@ -1309,6 +1332,8 @@ void Game::Interpolate() {
 // Input & camera
 // ----------------------------------------------------------------------------
 void Game::UpdateInput(float dt) {
+    static bool autoPause = getenv("BS_PAUSED") != nullptr;  // (screenshots: the pause menu)
+    if (autoPause && GetTime() - sessionStart > 4.0) { autoPause = false; paused = true; EnableCursor(); }
     if (IsKeyPressed(KEY_ESCAPE)) {
         paused = !paused;
         if (paused) EnableCursor();
@@ -1806,6 +1831,56 @@ void Game::UpdateSound(float dt, bool menu) {
     }
     sfx::SetAmbience(a);
     sfx::Update();
+
+    // the music: the menu; sailing; a fight (guns or an enemy close, until 14 s after the last); a boss; and the
+    // round's end, won or lost
+    sfx::music::Track mt = menu ? sfx::music::Menu : sfx::music::Sail;
+    if (!menu && matchState == 1) {
+        const bool won = (winShip >= 0 && winShip == myId) || (winTeam >= 0 && myId >= 0 && view[myId].present && view[myId].s.team == winTeam);
+        if (odyssey) mt = odWon && odLast == 0 ? (odReached > 0 ? sfx::music::Defeat : sfx::music::Sail)  // (a run's opening: sailing; a lost one's: defeat)
+                                               : odWon ? sfx::music::Victory : sfx::music::Defeat;
+        else if (winShip < 0 && winTeam < 0) mt = sfx::music::Sail;  // (a draw, nobody scored)
+        else mt = won ? sfx::music::Victory : sfx::music::Defeat;
+    } else if (!menu) {
+        if (myId >= 0 && view[myId].present)
+            for (int id = 0; id < NumShips(); ++id)
+                if (view[id].present && (view[id].s.flags & SF_ALIVE) && IsEnemy(id) && Vector3Distance(view[id].s.pos, view[myId].s.pos) < 420.0f) {
+                    combatAt = GetTime();
+                    break;
+                }
+        if (bossView.hasBoss && bossView.bossState != 2) mt = sfx::music::Boss;
+        else if (GetTime() - combatAt < 14.0) mt = sfx::music::Battle;
+    }
+    sfx::music::Set(mt);
+    sfx::music::SetDuck(a.underwater > 0.5f ? 0.45f : paused ? 0.6f : 1.0f);
+    sfx::music::Update(dt);
+}
+
+// A volume bar: the label, the bar (click or drag along it), the percentage
+bool Game::VolumeRow(Rectangle r, const char* label, float v, float& out) {
+    using namespace ui;
+    Label(label, r.x, r.y + r.height * 0.5f - 7, 11, kDim);
+    const Rectangle bar = {r.x + 58, r.y + r.height * 0.5f - 4, r.width - 58 - 44, 8};
+    DrawRectangleRounded(bar, 1.0f, 6, {0, 0, 0, 110});
+    DrawRectangleRounded({bar.x, bar.y, fmaxf(bar.height, bar.width * v), bar.height}, 1.0f, 6, v > 0.0f ? kGold : kTrack);
+    DrawCircleV({bar.x + bar.width * v, bar.y + bar.height * 0.5f}, 7, {244, 232, 206, 255});
+    Label(v <= 0.0f ? "OFF" : TextFormat("%d%%", (int)roundf(v * 100.0f)), r.x + r.width, r.y + r.height * 0.5f - 7, 11, kText, Right);
+    const Vector2 m = GetMousePosition();
+    const Rectangle hit = {bar.x - 8, r.y, bar.width + 16, r.height};
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(m, hit)) {
+        float nv = Clamp((m.x - bar.x) / bar.width, 0.0f, 1.0f);
+        nv = roundf(nv * 20.0f) / 20.0f;  // (in 5 % steps)
+        if (nv != v) { out = nv; return true; }
+    }
+    return false;
+}
+
+void Game::DrawVolumes(float x, float y, float w) {
+    if (!soundOn) return;
+    const float half = (w - 24.0f) * 0.5f;
+    float v;
+    if (VolumeRow({x, y, half, 30}, "MUSIC", sfx::music::Volume(), v)) { sfx::music::SetVolume(v); SaveAudioCfg(); }
+    if (VolumeRow({x + half + 24.0f, y, half, 30}, "SOUND", sfx::Volume(), v)) { sfx::SetVolume(v); SaveAudioCfg(); }
 }
 
 void Game::PickClass(int c) {
@@ -2679,12 +2754,14 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::Fire: {
             if (IsCrew() && !crewOverboard && Vector3Distance(e.pos, rv.pos) < 9.0f) {  // (crew: a gun beside us - our own, or the next one)
                 crewKick = fmaxf(crewKick, 1.0f - Vector3Distance(e.pos, rv.pos) / 12.0f);
+                combatAt = GetTime();
                 shake = fmaxf(shake, 0.25f);
                 // its blast out of the port, a little further out: the smoke rolls away from us rather than over us
                 fx.CannonFire(Vector3Add(e.pos, Vector3Scale(e.dir, 2.5f)), e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
                 sfx::Play(sfx::Cannon, e.pos, 0.55f, 1.0f);
                 break;
             }
+            if (Vector3Distance(e.pos, rv.pos) < 550.0f || e.a == myId) combatAt = GetTime();  // (the music: a fight near us)
             fx.CannonFire(e.pos, e.dir, view[e.a].present ? view[e.a].s.vel : Vector3{0, 0, 0});
             sfx::Play(sfx::Cannon, e.pos, e.b == 2 ? 0.35f : 0.55f,
                       e.a < NumShips() && view[e.a].present ? (view[e.a].s.cls == SC_LINE ? 0.82f : view[e.a].s.cls == SC_CUTTER ? 1.18f : 1.0f) : 1.0f);
@@ -2732,6 +2809,7 @@ void Game::PlayEvent(const GameEvent& e) {
         }
         case EventType::Hit: {
             hitFlash[e.b] = 1.0f;
+            if (e.b == myId || Vector3Distance(e.pos, rv.pos) < 550.0f) combatAt = GetTime();
             sfx::Play(sfx::Hit, e.pos, (e.flags & EF_PLUNGING) ? 0.9f : 0.75f, (e.flags & EF_PLUNGING) ? 0.85f : 1.0f);
             fx.Explosion(e.pos, e.dir, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 1.4f : 1.0f);
             if (e.b < NumShips() && view[e.b].present) {
@@ -5359,6 +5437,8 @@ void Game::DrawHUD() {
             yb += 64;
         }
         if (Button({W * 0.5f - 150, yb, 300, 52}, "Leave battle")) Disconnect("");
+        if (soundOn) Panel({W * 0.5f - 206, yb + 64, 412, 42}, {10, 16, 24, 220}, 12);
+        DrawVolumes(W * 0.5f - 190, yb + 70, 380);
     }
 }
 
@@ -5406,6 +5486,7 @@ void Game::DrawMenu() {
         if (Button({x, y, fw, bh}, "Shipwright  \xC2\xB7  paint your ship")) OpenShipyard();
         y += bh + gap;
         if (Button({x, y, fw, bh}, "Quit")) quit = true;
+        DrawVolumes(x + 4, y + bh + 8, fw - 8);
         float cx = x + fw + 36, cwid = fminf(360.0f, W * (compact ? 0.66f : 0.55f) - cx - 20);
         if (cwid > 220) {
             Label("YOU SAIL AS", cx + 2, y0 + head - 62, 13, kGold);

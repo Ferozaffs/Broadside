@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -758,6 +759,7 @@ void SetVolume(float v) {
     volume = Clamp(v, 0.0f, 1.0f);
     if (ready && !muted) SetMasterVolume(volume);
 }
+float Volume() { return volume; }
 
 bool ExportAll(const char* dir) {
     std::string d = dir;
@@ -846,5 +848,145 @@ bool ExportAll(const char* dir) {
     UnloadWave(w);
     return ok;
 }
+
+
+// ---- music -----------------------------------------------------------------------------------
+namespace music {
+namespace {
+const char* const kTrackNames[Count] = {"menu", "sail", "battle", "boss", "victory", "defeat"};
+std::vector<std::string> files[Count];
+struct Voice {
+    Music m{};
+    Track t = None;
+    float gain = 0.0f, target = 1.0f, fadeIn = 2.0f;
+    bool next = false;  // (the next take of this state has been started: this one only fades now)
+};
+std::vector<Voice> voices;
+Track want = None;     // the state the game is in
+Track acted = None;    // ...the one last acted on
+Track sounding = None; // the track playing after the fallbacks (what's fading in)
+float vol = 0.6f, duck = 1.0f, duckNow = 1.0f;
+int lastTake[Count] = {-1, -1, -1, -1, -1, -1};
+bool logOn = false;
+
+bool Stinger(Track t) { return t == Victory || t == Defeat; }
+
+Track Resolve(Track t) {  // this state's music, or the one it borrows
+    for (int hop = 0; hop < 4 && t != None; ++hop) {
+        if (!files[t].empty()) return t;
+        switch (t) {
+            case Boss: t = Battle; break;
+            case Battle: t = Sail; break;
+            case Victory: case Defeat: t = Sail; break;
+            case Menu: t = Sail; break;
+            case Sail: t = files[Menu].empty() ? None : Menu; break;
+            default: t = None; break;
+        }
+    }
+    return t != None && !files[t].empty() ? t : None;
+}
+
+void Start(Track t) {  // fade out what's playing, bring in a take of `t`
+    for (Voice& v : voices) v.target = 0.0f;
+    sounding = t;
+    if (t == None) return;
+    const int n = (int)files[t].size();
+    int k = (int)(prng.F() * n) % n;
+    if (n > 1 && k == lastTake[t]) k = (k + 1) % n;  // (not the same take twice running)
+    lastTake[t] = k;
+    Voice v;
+    v.m = LoadMusicStream(files[t][k].c_str());
+    if (!IsMusicValid(v.m)) {
+        TraceLog(LOG_WARNING, "[music] couldn't open %s", files[t][k].c_str());
+        return;
+    }
+    v.t = t;
+    v.m.looping = n == 1 && !Stinger(t);  // (several takes: each plays out and the next comes in)
+    v.fadeIn = t == Battle || t == Boss ? 1.2f : Stinger(t) ? 0.4f : 2.5f;
+    PlayMusicStream(v.m);
+    SetMusicVolume(v.m, 0.0f);
+    voices.push_back(v);
+    if (logOn) { printf("[music] %s (%s)\n", kTrackNames[t], GetFileName(files[t][k].c_str())); fflush(stdout); }
+}
+}  // namespace
+
+const char* Name(Track t) { return t >= 0 && t < Count ? kTrackNames[t] : "none"; }
+
+void Init(const char* dir) {
+    logOn = getenv("BS_MUSICLOG") != nullptr;
+    std::string d = dir;
+    if (!d.empty() && d.back() != '/' && d.back() != '\\') d += "/";
+    static const char* const kExt[] = {".ogg", ".mp3", ".wav", ".qoa"};
+    int found = 0;
+    for (int t = 0; t < Count; ++t) {
+        files[t].clear();
+        for (int k = 1; k <= 12; ++k) {
+            const std::string base = d + kTrackNames[t] + (k == 1 ? std::string() : "_" + std::to_string(k));
+            for (const char* e : kExt)
+                if (FileExists((base + e).c_str())) { files[t].push_back(base + e); break; }
+        }
+        found += (int)files[t].size();
+    }
+    // stream buffers big enough to ride out a slow frame (a level loading) without a stutter
+    SetAudioStreamBufferSizeDefault(8192);
+    printf("[music] %d track%s in %s\n", found, found == 1 ? "" : "s", d.c_str());
+    fflush(stdout);
+}
+
+void Shutdown() {
+    for (Voice& v : voices) { StopMusicStream(v.m); UnloadMusicStream(v.m); }
+    voices.clear();
+    sounding = acted = want = None;
+}
+
+int Found() {
+    int n = 0;
+    for (const auto& f : files) n += (int)f.size();
+    return n;
+}
+
+void Set(Track t) { want = t; }
+void SetVolume(float v) { vol = Clamp(v, 0.0f, 1.0f); }
+float Volume() { return vol; }
+void SetDuck(float k) { duck = Clamp(k, 0.0f, 1.0f); }
+Track Playing() { return sounding; }
+
+void Update(float dt) {
+    if (!ready) return;
+    if (want != acted) {  // a new state: its music (unless it borrows what's already playing)
+        acted = want;
+        const Track r = Resolve(want);
+        if (r != sounding || Stinger(r)) Start(r);
+    }
+    duckNow += (duck - duckNow) * fminf(1.0f, dt * 3.0f);
+    bool startNext = false;
+    for (size_t i = 0; i < voices.size(); ++i) {
+        Voice& v = voices[i];
+        UpdateMusicStream(v.m);
+        if (v.target > v.gain) v.gain = fminf(v.target, v.gain + dt / v.fadeIn);
+        else v.gain = fmaxf(v.target, v.gain - dt / 3.0f);
+        SetMusicVolume(v.m, v.gain * v.gain * vol * duckNow);  // (squared: an even fade to the ear)
+        if (v.target > 0.0f && !v.next) {
+            const float len = GetMusicTimeLength(v.m), at = GetMusicTimePlayed(v.m);
+            if (!v.m.looping && (at > len - 3.0f || !IsMusicStreamPlaying(v.m))) {  // (near its end: what comes next)
+                v.next = true;
+                startNext = true;
+            }
+        }
+    }
+    if (startNext) {
+        // a stinger played out: back to sailing; a state with several takes: the next one
+        Start(Stinger(sounding) ? Resolve(Sail) : sounding);
+    }
+    for (size_t i = 0; i < voices.size();) {  // done with: faded out, or played to its end
+        Voice& v = voices[i];
+        if ((v.target <= 0.0f && v.gain <= 0.0f) || (!v.m.looping && !IsMusicStreamPlaying(v.m) && v.next)) {
+            StopMusicStream(v.m);
+            UnloadMusicStream(v.m);
+            voices.erase(voices.begin() + i);
+        } else ++i;
+    }
+}
+}  // namespace music
 
 }  // namespace sfx

@@ -47,7 +47,27 @@ void SetMuted(bool m);
 bool Muted();
 void SetVolume(float v);
 
+float Volume();
+
 // Offline: write every sound (and a short sampler with the ambience under it) as .wav files
 bool ExportAll(const char* dir);
+
+// Music: tracks streamed from data/music, one per state of the game, crossfaded as it changes. Each state's
+// file is <name>.ogg (or .mp3 / .wav / .qoa), with more takes as <name>_2, <name>_3...: a state with several
+// plays them in turn, one into the next. A state with no file borrows another's (boss -> battle -> sail,
+// menu <-> sail, victory / defeat -> sail); with no files at all the game is as it was, without music.
+namespace music {
+enum Track { None = -1, Menu = 0, Sail, Battle, Boss, Victory, Defeat, Count };
+const char* Name(Track t);
+void Init(const char* dir);  // after sfx::Init; finds the files (opens none yet)
+void Shutdown();
+int Found();                 // files found, all states
+void Set(Track t);           // the state the game is in now (cheap: call every frame)
+void Update(float dt);       // streams and fades; call once a frame
+void SetVolume(float v);     // 0..1, under the master volume (M mutes both)
+float Volume();
+void SetDuck(float k);       // 0..1: held down for a moment (under water, paused)
+Track Playing();             // the track sounding now (after the fallbacks)
+}  // namespace music
 
 }  // namespace sfx

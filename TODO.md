@@ -851,3 +851,11 @@ If the session runs out of tokens, continue when they refresh.
 - [x] Crates: picked up within 13 m of the keel (was 7).
 - [x] The Odyssey's pirate waves fire plain iron (BossShot skips BOSS_PIRATES); coloured shot only from bosses and a
   few upgrades (Spectral Powder green, Hot Shot fiery, Witch's Eye blue - PerkShot).
+
+## Music (2026-11-19, "build the music system now, generate on ZWUUUP later")
+- [x] sfx::music: tracks streamed from data/music (menu, sail, battle, boss, victory, defeat; takes as _2, _3...),
+  crossfaded by game state; missing states borrow another's; no files = no music (data/music/README.txt).
+- [x] Battle = guns or hits within 550 m, or an enemy within 420 m, held 14 s; boss = a boss alive; results = won/lost stinger.
+- [x] Music / sound volume bars on the front page and in the pause menu, saved in audio.cfg. Ducked under water / paused.
+- [x] Tested with ffmpeg sine placeholders (BS_MUSICDIR, BS_MUSICLOG): menu -> sail -> battle -> sail -> defeat -> sail -> battle; boss -> battle.
+- [ ] Generate the tracks (YuE on ZWUUUP's ComfyUI once it listens on the LAN; check YuE's licence first).
