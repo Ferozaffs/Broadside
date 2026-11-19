@@ -313,6 +313,39 @@ Aiming: the cannonballs land where the reticle points (on an enemy hull, the sea
 about 34 degrees either side of the beam; the dashed lines on the water show how far. When the reticle is outside
 them the HUD says "GUNS CAN'T BEAR" and which way to steer.
 
+### The Campaign (solo)
+
+A career of your own on **one seamless sea, 24 km across**, in five regions, each with its own islands: the
+**Temperate Isles** in the middle (green islands, your home port), **the Tropics** (white sand, lush green), **the
+Frozen North** (snow on every crag), **the Ember Reach** (black volcanic cones) and **the Fog Banks**. Twelve ports.
+"Campaign" on the front page starts one, "Continue campaign" carries on (saved in `campaign.sav`).
+
+- **Tab** the chart, **F** fast-sail (when no enemy is near), **E** in port: go ashore. Alongside a pirate that has
+  struck her colours, **1** takes her into your fleet, **2** plunders her hold.
+- **Danger by place, no rubber banding**: every part of the sea has a level, 1 to 10 (the Temperate Isles 1-2, the
+  Tropics and the Frozen North 3-6, the Fog Banks 5-8, the Ember Reach 6-10, rising toward the edge of the chart). The
+  pirates, monsters and bosses there are that strong - hull, gunnery, heavy shot, special shot, how many come - and pay
+  that well. The top bar shows the danger against your ship's strength. Venture out before you're ready and you're
+  sunk.
+- **Ports**: the harbourmaster (repairs for your ship and fleet), the **tavern** (three quests a day, officers for
+  hire), the **shipwright** (12 upgrades, a new flagship, ships for your fleet).
+- **Quests**: buried treasure, bounties on named pirates, convoy raids (the convoy sails its own lane between ports),
+  escorts, cargo runs against the clock, castaways (a column of smoke on an island) and captives (cripple the captor
+  until she strikes her colours, come alongside, bring them home).
+- **Stories**: each region's mystery in three quests, then its boss's lair - the Sea Fortress, the Kraken Queen, the
+  Sea Serpent, the Ironclad, the Flying Dutchman.
+- **Fleet and officers**: up to three ships sail with you, bought or taken as prizes; a master gunner, bosun, navigator,
+  surgeon and quartermaster each add to your ship.
+- **The sea's own life**: traders and navy patrols on their lanes; wreckage with sea-chests (sometimes a treasure
+  chart); merchantmen under attack; the kraken and the megalodon; and each region's **dread pirate** (Gentleman
+  Corwin, Calypso Vane, Old Rime, Cinder Kate, the Grey Widow), a ship of the line with special shot and a big bounty.
+
+### Music
+
+Tracks dropped in `data/music` play as the game goes - `menu`, `sail`, `battle`, `boss`, `victory`, `defeat`
+(`.ogg`, `.mp3`, `.wav` or `.qoa`; more takes as `battle_2` and so on), crossfaded. None ship with the game yet.
+Music and sound volume are on the front page and in the Esc menu.
+
 ## Building
 
 Windows with Visual Studio 2026 (C++ workload): run `build.bat`. CMake fetches raylib 5.5 and ENet 1.3.18.
