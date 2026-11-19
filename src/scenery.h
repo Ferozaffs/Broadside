@@ -21,6 +21,7 @@ public:
     void BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Rock>& rocks);
     void DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time, bool cull = true);
     Vector3 Lamp(int i) const { return i < (int)ports.size() ? ports[i].lamp : Vector3{}; }
+    int PortCount() const { return (int)ports.size(); }
 
     static Color PowerColor(int type);  // PU_COUNT = booty (gold)
     static const char* PowerName(int type);

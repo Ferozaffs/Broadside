@@ -496,25 +496,49 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
             float a = k * PI * 0.5f + 0.4f;
             B.Cyl({hb.x + cosf(a) * 5.6f, 4.6f, hb.z + sinf(a) * 5.6f}, 0.35f, 0.3f, 0.8f, 8, iron);
         }
-        // the lighthouse: a tapering tower in red and white bands, gallery, lamp room, domed roof
+        // the lighthouse as they were in the age of sail: a squat tower of rough-coursed stone, slit windows, a corbelled
+        // top with a parapet, and on it an iron basket where a coal fire burns (no lamp room, no glass, no bands of paint:
+        // those came a century later)
         Vector3 lb = at(p.pierTo - 2.0f, 0, 4.6f);
-        const float towerH = 17.4f;
-        for (int band = 0; band < 6; ++band) {
-            float t0 = band / 6.0f, t1 = (band + 1) / 6.0f;
-            B.Cyl({lb.x, lb.y + t0 * towerH, lb.z}, 3.1f - 1.0f * t0, 3.1f - 1.0f * t1, towerH / 6.0f, 20, band % 2 ? red : white, false);
+        const float towerH = 14.0f;
+        const int courses = 14;
+        B.Cyl({lb.x, lb.y - 0.4f, lb.z}, 4.4f, 3.7f, 1.5f, 14, tone(stoneDk, rnd(0.85f, 1.0f)), false);  // the battered foot
+        for (int c = 0; c < courses; ++c) {  // courses of rubble stone, each a slightly different tone
+            float t0 = c / (float)courses, t1 = (c + 1) / (float)courses;
+            B.Cyl({lb.x, lb.y + t0 * towerH, lb.z}, 3.6f - 0.95f * t0, 3.6f - 0.95f * t1, towerH / courses, 14,
+                  tone(stone, rnd(0.86f, 1.0f) - 0.06f * t0), false);  // (no bands: weathered a little darker toward the top)
         }
         float gy = lb.y + towerH;
-        B.Cyl({lb.x, gy, lb.z}, 3.0f, 3.0f, 0.35f, 24, iron);
-        for (int k = 0; k < 16; ++k) {
-            float a = k * 2 * PI / 16;
-            B.Box({lb.x + cosf(a) * 2.8f, gy + 0.85f, lb.z + sinf(a) * 2.8f}, {0.08f, 1.0f, 0.08f}, X, Y, Z, iron);
+        B.Cyl({lb.x, gy - 0.6f, lb.z}, 2.65f, 3.35f, 0.6f, 14, stoneDk, false);  // the corbel
+        B.Cyl({lb.x, gy, lb.z}, 3.35f, 3.35f, 0.4f, 14, tone(stone, 0.9f), true);  // the platform
+        for (int k = 0; k < 10; ++k) {  // the parapet: merlons round the edge
+            const float a = k * 2.0f * PI / 10.0f;
+            const Vector3 rad = {cosf(a), 0, sinf(a)}, tan = {-sinf(a), 0, cosf(a)};
+            B.Box({lb.x + rad.x * 3.05f, gy + 0.95f, lb.z + rad.z * 3.05f}, {1.15f, 1.2f, 0.55f}, tan, Y, rad, tone(stone, rnd(0.8f, 1.0f)));
         }
-        B.Cyl({lb.x, gy + 1.3f, lb.z}, 2.85f, 2.85f, 0.1f, 24, iron, false);  // rail
-        p.glass = {lb.x, gy + 0.35f, lb.z};
-        B.Cyl({lb.x, gy + 3.2f, lb.z}, 2.1f, 2.1f, 0.25f, 20, iron);
-        B.Cyl({lb.x, gy + 3.45f, lb.z}, 2.1f, 0.25f, 1.9f, 20, iron);  // roof
-        B.Cyl({lb.x, gy + 5.35f, lb.z}, 0.25f, 0.05f, 0.9f, 8, iron);   // finial
-        B.Box({lb.x + Z.x * -3.0f, lb.y + 1.2f, lb.z + Z.z * -3.0f}, {1.2f, 2.2f, 0.3f}, X, Y, Z, woodDk);  // door
+        // the fire basket: an iron post, a grate, bars flaring out, two hoops
+        B.Cyl({lb.x, gy + 0.4f, lb.z}, 0.2f, 0.16f, 1.7f, 6, iron);
+        B.Cyl({lb.x, gy + 2.0f, lb.z}, 0.75f, 0.8f, 0.14f, 10, iron);
+        for (int k = 0; k < 10; ++k) {
+            const float a = k * 2.0f * PI / 10.0f;
+            const Vector3 rad = {cosf(a), 0, sinf(a)}, tan = {-sinf(a), 0, cosf(a)};
+            const Vector3 up = Vector3Normalize(Vector3Add(Y, Vector3Scale(rad, 0.28f)));
+            B.Box({lb.x + rad.x * 0.92f, gy + 2.6f, lb.z + rad.z * 0.92f}, {0.09f, 1.2f, 0.09f}, tan, up, Vector3CrossProduct(tan, up), iron);
+        }
+        B.Cyl({lb.x, gy + 2.1f, lb.z}, 0.8f, 0.8f, 0.1f, 12, iron, false);
+        B.Cyl({lb.x, gy + 3.1f, lb.z}, 1.1f, 1.1f, 0.12f, 12, iron, false);
+        p.glass = {lb.x, gy + 2.14f, lb.z};  // (the coals: drawn glowing)
+        p.lamp = {lb.x, gy + 3.2f, lb.z};    // (the fire's light, and where its flames go up)
+        // an arched door at the foot, slit windows up the stair
+        const Vector3 door = {lb.x - Z.x * 3.55f, 0, lb.z - Z.z * 3.55f};
+        B.Box({door.x, lb.y + 1.15f, door.z}, {1.2f, 2.3f, 0.3f}, X, Y, Z, woodDk);
+        B.Box({door.x, lb.y + 2.45f, door.z}, {1.5f, 0.35f, 0.4f}, X, Y, Z, stoneDk);
+        for (int w = 0; w < 3; ++w) {
+            const float wy = 4.5f + w * 3.6f, rr = 3.6f - 0.95f * (wy / towerH) + 0.02f;
+            const float a = p.ang + PI * 0.5f + w * 2.1f;
+            const Vector3 rad = {cosf(a), 0, sinf(a)}, tan = {-sinf(a), 0, cosf(a)};
+            B.Box({lb.x + rad.x * rr, lb.y + wy, lb.z + rad.z * rr}, {0.32f, 1.1f, 0.2f}, tan, Y, rad, {28, 26, 24, 255});
+        }
         // flag pole beside the lighthouse
         p.flagPole = at(p.pierTo + 8.0f, 6.0f, 3.0f);
         B.Cyl(p.flagPole, 0.22f, 0.14f, 22.0f, 8, woodDk);
@@ -566,10 +590,18 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
         auto column = [&](const Mesh& m, Vector3 base, float rad, float h, Color col) {
             Part(m, MatrixMultiply(MatrixScale(rad * 2, h, rad * 2), MatrixTranslate(base.x, base.y, base.z)), col);
         };
-        // the lamp room glass glows
-        r.SetLitParams(0.0f, 1.0f);
-        column(cyl, p.glass, 1.75f, 2.85f, {255, 220, 150, 255});
-        r.SetLitParams(0.0f, 0.0f);
+        // the fire: glowing coals in the basket, and flames licking up out of it (the flicker its own for each port)
+        {
+            const float fl = 0.75f + 0.15f * sinf(time * 11.0f + i * 2.3f) + 0.1f * sinf(time * 6.7f + i);
+            r.SetLitParams(0.0f, 1.0f);
+            column(cyl, p.glass, 0.72f, 0.55f, {255, (unsigned char)(150 * fl), (unsigned char)(60 * fl), 255});
+            for (int f = 0; f < 3; ++f) {
+                const float a = time * 1.7f + f * 2.1f + i, h = (1.1f + 0.5f * sinf(time * (8.0f + f * 1.7f) + i * 3.0f + f)) * (f == 0 ? 1.4f : 1.0f);
+                const Vector3 b = {p.glass.x + cosf(a) * (f ? 0.32f : 0.0f), p.glass.y + 0.45f, p.glass.z + sinf(a) * (f ? 0.32f : 0.0f)};
+                column(cone, b, f == 0 ? 0.55f : 0.35f, h, f == 0 ? Color{255, 196, 90, 255} : Color{255, 132, 40, 255});
+            }
+            r.SetLitParams(0.0f, 0.0f);
+        }
         // a big flag in the owner's colours
         Vector3 fp = p.flagPole;
         float wave = sinf(time * 3.0f + i) * 0.15f;

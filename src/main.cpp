@@ -526,7 +526,6 @@ public:
     Texture2D beamTex{};                // lighthouse beam: bright at the lamp, fading out
     void DrawLanternReflections();
     void DrawTracers(const Camera3D& cam);
-    void DrawLighthouseBeams(const Camera3D& cam);
     void DrawCrates(bool menu);
     // aiming: the guns are laid onto the point under the reticle (plus a gentle assist onto enemies)
     float assist = 0.0f;
@@ -933,7 +932,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         const bool camp = campaignStart || modeSel == MODE_CAMPAIGN;  // (the menu's buttons, or --mode campaign)
         if (modeSel == MODE_CAMPAIGN && !campaignStart) server.campaignContinue = getenv("BS_CAMPCONTINUE") != nullptr;
         campaignStart = false;
-        if (!server.Start(opt.port, camp ? 0 : bots, seed, camp ? 0 : todSel, camp ? 0 : weatherSel, camp ? MODE_CAMPAIGN : modeSel, camp ? false : fleetSel != 0,
+        if (!server.Start(opt.port, camp ? 0 : bots, seed, todSel, weatherSel, camp ? MODE_CAMPAIGN : modeSel, camp ? false : fleetSel != 0,
                           camp ? (uint8_t)SC_ALL : (uint8_t)allowSel, camp ? false : viewSel != 0, camp ? true : skillSel != 0, camp ? ARENA_WORLD : arena,
                           handlingSel != 0, camp ? true : ffSel != 0, camp ? voyage::NORMAL : diffSel, bossSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
@@ -4319,11 +4318,15 @@ void Game::RenderWorld(float dt, bool menu) {
     {
         scenery.DrawIslands(renderer, rv);
         scenery.DrawHarbours(renderer, rv, Ocean(), flags, (float)GetTime());
-        for (int i = 0; i < 4; ++i) {  // lighthouse lamps
+        const float ft = (float)GetTime();
+        for (int i = 0; i < scenery.PortCount(); ++i) {  // the lighthouses' coal fires
             Vector3 L = scenery.Lamp(i);
             float d = Vector3Distance(rv.pos, L);
-            fx.Lantern(L, (9.0f + d * 0.008f) * (0.6f + 0.6f * lanternBoost), Fade({255, 196, 120, 255}, 0.45f + 0.5f * lanternBoost));
-            fx.Lantern(L, 2.5f + d * 0.003f, Fade({255, 240, 210, 255}, 0.7f + 0.3f * lanternBoost));
+            if (d > 9000.0f) continue;
+            const float fl = 0.8f + 0.12f * sinf(ft * 9.0f + i * 1.9f) + 0.08f * sinf(ft * 23.0f + i);
+            fx.Lantern(L, (8.0f + d * 0.007f) * (0.6f + 0.6f * lanternBoost) * fl, Fade({255, 150, 70, 255}, (0.45f + 0.5f * lanternBoost) * fl));
+            fx.Lantern(L, (2.2f + d * 0.0025f) * fl, Fade({255, 214, 150, 255}, 0.7f + 0.3f * lanternBoost));
+            if (d < 1200.0f) fx.ShipFire(Vector3Add(L, {0, -0.6f, 0}), 0.22f, dt, {0, 0, 0});  // (close to: real flames, sparks)
         }
     }
     DrawCrates(menu);
@@ -4356,7 +4359,6 @@ void Game::RenderWorld(float dt, bool menu) {
         fx.Draw(cam, L);
     }
     DrawLanternReflections();
-    DrawLighthouseBeams(cam);
     if (!menu) DrawTracers(cam);
     if (!menu) DrawHookLines();
     if (!menu && curMode == MODE_BOSS) {
@@ -4545,46 +4547,6 @@ void Game::DrawLanternReflections() {
             rlTexCoord2f(0.0f, v1); rlVertex3f(row[k + 1][0].x, row[k + 1][0].y, row[k + 1][0].z);
             rlTexCoord2f(1.0f, v1); rlVertex3f(row[k + 1][1].x, row[k + 1][1].y, row[k + 1][1].z);
             rlTexCoord2f(1.0f, v0); rlVertex3f(row[k][1].x, row[k][1].y, row[k][1].z);
-        }
-    }
-    rlEnd();
-    rlSetTexture(0);
-    rlDrawRenderBatchActive();
-    rlEnableBackfaceCulling();
-    EndBlendMode();
-}
-
-// Lighthouses sweep two beams round at night and in fog; camera-facing ribbons from the lamp.
-void Game::DrawLighthouseBeams(const Camera3D& cam) {
-    if (lanternBoost < 0.3f) return;
-    float k = Clamp((lanternBoost - 0.3f) / 0.5f, 0.0f, 1.0f);
-    float fogLift = 1.0f + Clamp(renderer.atm.fogDensity * 250.0f, 0.0f, 1.5f);  // beams show best in haze
-    rlDrawRenderBatchActive();
-    BeginBlendMode(BLEND_ADDITIVE);
-    rlDisableBackfaceCulling();
-    rlSetTexture(beamTex.id);
-    rlBegin(RL_QUADS);
-    const float t = (float)GetTime();
-    for (int i = 0; i < 4; ++i) {
-        Vector3 L = scenery.Lamp(i);
-        for (int b = 0; b < 2; ++b) {
-            float ang = t * 0.45f + i * 1.7f + b * PI;
-            Vector3 dir = Vector3Normalize({cosf(ang), -0.035f, sinf(ang)});
-            const float len = 420.0f, w0 = 3.0f, w1 = 75.0f;
-            Vector3 E = Vector3Add(L, Vector3Scale(dir, len));
-            auto sideAt = [&](Vector3 p) {
-                Vector3 s = Vector3CrossProduct(dir, Vector3Normalize(Vector3Subtract(cam.position, p)));
-                return Vector3Length(s) < 1e-3f ? Vector3{0, 1, 0} : Vector3Normalize(s);
-            };
-            Vector3 s0 = Vector3Scale(sideAt(L), w0 * 0.5f), s1 = Vector3Scale(sideAt(E), w1 * 0.5f);
-            // looking straight down a beam it would cover the screen: fade it as it points at us
-            float facing = fabsf(Vector3DotProduct(dir, Vector3Normalize(Vector3Subtract(cam.position, L))));
-            float a = 0.2f * k * fogLift * (1.0f - 0.85f * facing * facing);
-            rlColor4ub(255, 230, 180, (unsigned char)Clamp(255.0f * a, 0.0f, 255.0f));
-            rlTexCoord2f(0.0f, 0.0f); rlVertex3f(L.x - s0.x, L.y - s0.y, L.z - s0.z);
-            rlTexCoord2f(1.0f, 0.0f); rlVertex3f(E.x - s1.x, E.y - s1.y, E.z - s1.z);
-            rlTexCoord2f(1.0f, 1.0f); rlVertex3f(E.x + s1.x, E.y + s1.y, E.z + s1.z);
-            rlTexCoord2f(0.0f, 1.0f); rlVertex3f(L.x + s0.x, L.y + s0.y, L.z + s0.z);
         }
     }
     rlEnd();
