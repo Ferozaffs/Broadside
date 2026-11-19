@@ -168,7 +168,9 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
     } else if (type == MSG_CAMPAIGN) {  // the campaign: a port's service, fast-sail
         int id = peerShip[peer];
         uint8_t act = r.Get<uint8_t>();
-        if (id >= 0 && r.ok) world.CampaignAct(id, act);
+        const bool ok = r.ok;
+        uint8_t arg = r.Get<uint8_t>();  // (accept: which offer; abandon: which quest)
+        if (id >= 0 && ok) world.CampaignAct(id, act, r.ok ? arg : 0);
     } else if (type == MSG_PICK_PERK) {  // the Odyssey: an upgrade, between rounds
         int id = peerShip[peer];
         uint8_t choice = r.Get<uint8_t>();

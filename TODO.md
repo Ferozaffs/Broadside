@@ -872,7 +872,16 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   the campaign's help keys; islands painted per region in the shader (vertex colour red = biome x 50).
 - [x] Protocol 28: the campaign block, MSG_CAMPAIGN. Tests: BS_CAMPTEST (sea, ports, a bot captain at sea);
   BS_CAMPAT=x,z, BS_CHART, BS_PORTSCREEN, BS_CAMPCONTINUE, --mode campaign.
-- [ ] Phase 2: quests (treasure, bounties, convoys, escorts, cargo, rescues, chains to the bosses), the quest log.
+- [x] Phase 2a: quests (2026-11-19). Seven kinds, three on offer in each tavern each day (seeded by sea, port, day),
+  three under way at most: treasure (heave to off the marked beach 6 s), bounty (a named pirate + mate, found within
+  2.3 km), convoy raid (3 merchantmen + a guard sail their own sea lane between two ports; a share a ship sunk),
+  escort (a merchantman that waits for you, pirate bands a third and two thirds of the way), cargo (deadline, -10%
+  speed, lost if sunk), castaways (smoke column; heave to 5 s, then any port), captive (cripple the captor below 30%:
+  she strikes her colours, nobody fires on her; alongside 4 s, then home). MakeRoute works on the campaign's sea.
+  Tavern on the port screen (accept / give up), the tracker (top left), marks on the sea and at the edge of the view,
+  numbered marks on the chart, feed lines. Saved with the campaign. Test: BS_QUESTTEST (all seven), BS_TAKEQUESTS.
+- [ ] Phase 2b: mystery chains (a bottle, a wreck, a name, a lair) ending in each region's boss (a boss fight on the
+  campaign's sea, or the World switching to MODE_BOSS like the Odyssey and back), reputation, more quest kinds.
 - [ ] Phase 3: fleet and crew, upgrades and ships at the shipwright.
 - [ ] Phase 4: each region's water, sky, fog and weather; palms, ice floes, ash; the Fog Banks' fog.
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

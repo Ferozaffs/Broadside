@@ -331,9 +331,17 @@ static void MakeWorld(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour
 
 // The sea lane from the start harbour to the destination: the cheapest way over a grid that keeps well off the land,
 // pulled straight where the water allows, then rounded off and laid out every raceLineStep m.
-static std::vector<Vector2> MakeRoute(const std::vector<Rock>& rocks, Vector2 from, Vector2 to) {
-    const float C = 25.0f, X0 = -voyage::passageA - 200.0f, Z0 = -voyage::passageB - 300.0f;
-    const int NX = (int)(2.0f * (voyage::passageA + 200.0f) / C), NZ = (int)(2.0f * (voyage::passageB + 300.0f) / C);
+static std::vector<Vector2> MakeRoute(const std::vector<Rock>& rocks, Vector2 from, Vector2 to, bool passage) {
+    const float C = 25.0f;
+    float X0 = -voyage::passageA - 200.0f, Z0 = -voyage::passageB - 300.0f;
+    int NX = (int)(2.0f * (voyage::passageA + 200.0f) / C), NZ = (int)(2.0f * (voyage::passageB + 300.0f) / C);
+    if (!passage) {  // the campaign's sea: a box round the two ends, with room to go round what's between
+        const float m = 2500.0f;
+        X0 = fmaxf(-campaign::half, fminf(from.x, to.x) - m);
+        Z0 = fmaxf(-campaign::half, fminf(from.y, to.y) - m);
+        NX = (int)((fminf(campaign::half, fmaxf(from.x, to.x) + m) - X0) / C);
+        NZ = (int)((fminf(campaign::half, fmaxf(from.y, to.y) + m) - Z0) / C);
+    }
     std::vector<float> clr(NX * NZ, 1e9f);
     for (const Rock& k : rocks) {  // land (or shoal) under a cell
         float lim = k.r * 1.25f + 20.0f;
@@ -345,7 +353,7 @@ static std::vector<Vector2> MakeRoute(const std::vector<Rock>& rocks, Vector2 fr
     }
     for (int j = 0; j < NZ; ++j)  // and outside the coast
         for (int i = 0; i < NX; ++i)
-            if (PassageInside(X0 + (i + 0.5f) * C, Z0 + (j + 0.5f) * C) < 0.0f) clr[j * NX + i] = 0.0f;
+            if (passage && PassageInside(X0 + (i + 0.5f) * C, Z0 + (j + 0.5f) * C) < 0.0f) clr[j * NX + i] = 0.0f;
     const float a = C, b = C * 1.41421f;
     for (int j = 0; j < NZ; ++j)
         for (int i = 0; i < NX; ++i) {
@@ -1505,6 +1513,11 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campWantFast = campFast = false;
     campSunk = 0;
     campSaveDue = false;
+    for (int k = 0; k < campaign::maxQuests; ++k) { campQuests[k] = Quest{}; campPaths[k].clear(); }
+    campOffers.clear();
+    campOffersPort = -1;
+    campOffersDay = -1;
+    campCargo = false;
     voyageClock = 0.0f;
     voyageSpawn = 0.0f;  // (the first band as soon as the grace is up)
     voyageWait = 0.0f;
@@ -1567,7 +1580,7 @@ void World::BuildArena() {
         ocean.SetDamp(MakeShoreDamp(rocks, false, tune::shoreCalmDist, n, ext), n, ext);
         if (harbours.size() > (size_t)voyage::endHarbour) {
             const Harbour &a = harbours[voyage::startHarbour], &b = harbours[voyage::endHarbour];
-            route = MakeRoute(rocks, {a.x, a.z}, {b.x, b.z});
+            route = MakeRoute(rocks, {a.x, a.z}, {b.x, b.z}, true);
         }
         if (harbours.size() > (size_t)voyage::haven) havenS = RouteS(harbours[voyage::haven].x, harbours[voyage::haven].z);
     } else {
@@ -1874,6 +1887,14 @@ void World::Damage(Ship& v, float amount, int attacker) {
     }
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
+    if (mode == MODE_CAMPAIGN && v.questRole == campaign::QR_CAPTOR && !v.struck && v.hp > 0.0f && v.hp < v.maxHp * 0.3f) {  // the captor strikes her colours
+        v.struck = true;
+        GameEvent ev{EventType::Quest};
+        ev.a = (uint16_t)std::max<int>(v.questSlot, 0);
+        ev.flags = 4;
+        ev.pos = v.pos;
+        events.push_back(ev);
+    }
     if (mode == MODE_RACE && v.slowTimer > 0.0f) v.hp = fmaxf(v.hp, 1.0f);  // (crippled already: no piling on)
     if (v.hp <= 0.0f && mode == MODE_RACE) {  // a race: crippled for a few seconds, then patched up and on
         v.hp = v.maxHp;
@@ -1917,7 +1938,10 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
                 campGold -= (int32_t)(campGold * campaign::lossOnSinking);
                 campSaveDue = true;
+                for (int k = 0; k < campaign::maxQuests; ++k)  // (her hold goes down with her)
+                    if (campQuests[k].type == campaign::Q_CARGO && campQuests[k].state == campaign::QS_ACTIVE) EndQuest(k, false);
             }
+            if (v.questSlot >= 0) QuestShipSunk(v);
         }
         // one of us (boss mode, the voyage's convoy): disabled, afloat, until a friend comes alongside
         const bool down = (mode == MODE_BOSS || mode == MODE_VOYAGE) && v.team == 0 && v.leader < 0 && !v.raider;
@@ -2360,6 +2384,7 @@ void World::StepShip(Ship& s, float dt) {
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
         if (campFast && !s.raider && s.team == 0) top *= campaign::fastSail;  // (the campaign: fast-sail, the captain and her fleet)
+        if (campCargo && !s.isBot && s.leader < 0) top *= 0.9f;  // (a full hold)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
         if (s.chainT > 0.0f) top *= 0.65f;  // (Chain Shot: her rigging in tatters)
         if (s.formation >= 0) top *= 1.3f;  // (the Armada's line: getting between us and the Admiral)
@@ -2959,6 +2984,11 @@ void World::UpdateBalls(float dt) {
 void World::BotThink(Ship& s, float dt) {
     PlayerInput& in = s.input;
     if (!s.alive) return;
+    if (s.struck) {  // (the campaign: she's struck her colours)
+        in.sail = 0.0f;
+        in.rudder = 0.0f;
+        return;
+    }
     const uint8_t dashBefore = in.dashSeq;
     s.botTimer -= dt;
     auto wrap = [](float a) {
@@ -2972,6 +3002,7 @@ void World::BotThink(Ship& s, float dt) {
     float best = 1e9f, score = 1e9f;
     for (auto& o : ships) {
         if (!o.active || !o.alive || o.stowed || !Enemies(s, o)) continue;
+        if (o.struck) continue;  // (she's struck her colours: nobody fires on her)
         if (o.boss && !BossSolid()) continue;  // (the Dutchman, ethereal)
         float d = Vector3Distance(o.pos, s.pos);
         float sc = (mode == MODE_PIRATE && o.pirate) ? d * 0.2f : d;
@@ -3322,6 +3353,33 @@ void World::BotThink(Ship& s, float dt) {
         in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
     }
 
+    if (mode == MODE_CAMPAIGN && s.questSlot >= 0 && s.questSlot < campaign::maxQuests) {
+        const Quest& q = campQuests[s.questSlot];
+        const std::vector<Vector2>& path = campPaths[s.questSlot];
+        if (s.merchant && !path.empty()) {  // down her sea lane, keeping on whatever comes
+            while (s.wp + 1 < (int)path.size() && Vector2Distance({s.pos.x, s.pos.z}, path[s.wp]) < 130.0f) s.wp++;
+            const Vector2 g = path[std::min<int>(s.wp, (int)path.size() - 1)];
+            goal = {g.x, 0.0f, g.y};
+            haveGoal = true;
+            fight = false;
+            if (s.questRole == campaign::QR_ESCORTED) {  // the escorted one waits for her escort
+                float dc = 1e9f;
+                for (const Ship& o : ships)
+                    if (o.active && o.alive && (!o.isBot || (campBotCaptain && !o.raider && !o.merchant)) && o.leader < 0)
+                        dc = fminf(dc, Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}));
+                if (dc > 650.0f) in.sail = 0.12f;
+            }
+        } else if (s.questRole == campaign::QR_GUARD && (!target || best > 900.0f)) {  // nothing near: back to the convoy
+            for (int16_t k : q.ships)
+                if (k >= 0 && k < ShipCount() && ships[k].active && ships[k].merchant && ships[k].questSlot == s.questSlot) {
+                    const Vector3 mf = Vector3RotateByQuaternion({0, 0, 1}, ships[k].rot);
+                    goal = Vector3Add(ships[k].pos, Vector3Add(Vector3Scale(mf, -60.0f), {mf.z * 60.0f, 0.0f, -mf.x * 60.0f}));
+                    haveGoal = true;
+                    fight = false;
+                    break;
+                }
+        }
+    }
     float goalDist = 1e9f;
     if (haveGoal) {
         // Bound for a harbour: the stacks either side of its mouth are left standing, so line up on it from the
@@ -4367,10 +4425,10 @@ int World::CampaignRepairCost(const Ship& s) const {
     return (int)ceilf(fmaxf(0.0f, s.maxHp - s.hp) * campaign::repairPerHp);
 }
 
-bool World::CampaignAct(int shipId, int act) {
+bool World::CampaignAct(int shipId, int act, int arg) {
     if (mode != MODE_CAMPAIGN || shipId < 0 || shipId >= ShipCount()) return false;
     Ship& s = ships[shipId];
-    if (!s.active || s.isBot || s.leader >= 0) return false;
+    if (!s.active || (s.isBot && !campBotCaptain) || s.leader >= 0) return false;
     switch (act) {
         case campaign::ACT_REPAIR: {  // the harbourmaster's yard: as much of her hull as the purse will run to
             if (campDocked < 0 || !s.alive) return false;
@@ -4389,6 +4447,33 @@ bool World::CampaignAct(int shipId, int act) {
             campSaveDue = true;
             return true;
         }
+        case campaign::ACT_ACCEPT: {  // the tavern: take on one of today's quests
+            if (campDocked < 0 || campOffersPort != campDocked || arg < 0 || arg >= (int)campOffers.size()) return false;
+            int slot = -1;
+            for (int k = 0; k < campaign::maxQuests && slot < 0; ++k)
+                if (campQuests[k].state == campaign::QS_NONE) slot = k;
+            if (slot < 0) return false;
+            Quest q = campOffers[arg];
+            q.state = campaign::QS_ACTIVE;
+            q.deadline = q.deadline > 0.0f ? campClock + q.deadline : 0.0f;
+            q.flags = 0;
+            q.t = 0.0f;
+            for (int16_t& k : q.ships) k = -1;
+            campQuests[slot] = q;
+            campPaths[slot].clear();
+            campOffers.erase(campOffers.begin() + arg);
+            GameEvent ev{EventType::Quest};
+            ev.a = (uint16_t)slot;
+            ev.flags = 1;
+            events.push_back(ev);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_ABANDON:
+            if (arg < 0 || arg >= campaign::maxQuests || (campQuests[arg].state != campaign::QS_ACTIVE && campQuests[arg].state != campaign::QS_RETURN)) return false;
+            ClearQuest(arg);
+            campSaveDue = true;
+            return true;
         case campaign::ACT_FAST_ON: campWantFast = true; return true;
         case campaign::ACT_FAST_OFF: campWantFast = false; return true;
     }
@@ -4429,7 +4514,7 @@ void World::UpdateCampaign(float dt) {
     int pirates = 0;
     bool gone = false;
     for (Ship& p : ships) {
-        if (!p.active || !p.raider) continue;
+        if (!p.active || !p.raider || p.questSlot >= 0) continue;  // (a quest's pirates come and go with the quest)
         ++pirates;
         if (!p.alive) continue;
         const float nd = cap->alive ? Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}) : 1e9f;
@@ -4441,6 +4526,10 @@ void World::UpdateCampaign(float dt) {
             gone = true;
         }
     }
+    if (campDocked >= 0 && (campOffersPort != campDocked || campOffersDay != (int)(campClock / dayLength))) MakeOffers(campDocked);  // (the tavern's work today)
+    UpdateQuests(dt, *cap);
+    for (const Ship& p : ships)  // (the quests' pirates count as near too)
+        if (p.active && p.alive && p.questSlot >= 0 && p.team == 1 && !p.struck) nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
     campFast = campWantFast && cap->alive && campDocked < 0 && nearFoe > fastClear;
     // a new band, now and then, out of sight round her (not in port, not near one)
     const uint8_t biome = BiomeAt(cap->pos.x, cap->pos.z);
@@ -4471,6 +4560,392 @@ void World::UpdateCampaign(float dt) {
     }
 }
 
+// ---- the campaign's quests ------------------------------------------------------------------
+namespace campaign {
+std::string PirateName(uint16_t seed) {
+    static const char* const k[16] = {"Mad Jack", "Black Anne", "Red Morgan", "One-Eyed Tom", "Calico Mary", "Long Ned", "Silver Kate", "Iron Hob",
+                                      "Bloody Bess", "Gentleman Jim", "Crooked Sal", "Black Hal", "Scarlet Wen", "Dutch Piet", "Grey Nan", "Salt Billy"};
+    return k[seed % 16];
+}
+std::string MerchantName(uint16_t seed) {
+    static const char* const k[16] = {"Fair Wind", "Good Hope", "Margaret", "Prosperous", "Diligence", "Endeavour", "Swallow", "Constant",
+                                      "Pelican", "Two Brothers", "Providence", "Dolphin", "Industry", "Charity", "Unity", "Lark"};
+    return k[(seed / 7) % 16];
+}
+const char* CaptiveName(uint16_t seed) {
+    static const char* const k[8] = {"the governor's daughter", "a navigator", "the harbourmaster's wife", "a cartographer",
+                                     "the surgeon's sister", "a merchant's heiress", "the parson's niece", "a young midshipman"};
+    return k[(seed / 3) % 8];
+}
+const char* GoodsName(uint16_t seed) {
+    static const char* const k[10] = {"rum", "sugar", "spices", "silk", "tobacco", "timber", "powder", "salt fish", "wine", "tea"};
+    return k[(seed / 5) % 10];
+}
+}  // namespace campaign
+
+// A point off a beach: an island (not a stack) in the region, so far from here, the water deep enough just off it
+bool World::ShoreSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const {
+    auto R = [&]() { h = h * 1664525u + 1013904223u; return (h >> 8) / 16777216.0f; };
+    for (int tries = 0; tries < 400 && !rocks.empty(); ++tries) {
+        const Rock& k = rocks[(size_t)(R() * rocks.size()) % rocks.size()];
+        if (k.stack || k.r < 45.0f || (biome >= 0 && k.biome != biome)) continue;
+        const float d = Vector2Distance(from, {k.x, k.z});
+        if (d < dMin || d > dMax) continue;
+        bool nearPort = false;
+        for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, {k.x, k.z}) < 1200.0f;
+        if (nearPort) continue;
+        const float a = R() * 2.0f * PI;
+        for (float r = k.r * 0.7f; r < k.r * 1.8f + 120.0f; r += 6.0f) {
+            const Vector2 p = {k.x + cosf(a) * r, k.z + sinf(a) * r};
+            if (RocksHeight(rocks, p.x, p.y) < -7.0f) {
+                out = {k.x + cosf(a) * (r + 25.0f), k.z + sinf(a) * (r + 25.0f)};
+                if (RocksHeight(rocks, out.x, out.y) < -7.0f && fmaxf(fabsf(out.x), fabsf(out.y)) < campaign::edge - 600.0f) return true;
+                break;
+            }
+        }
+    }
+    return false;
+}
+
+bool World::OpenSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const {
+    auto R = [&]() { h = h * 1664525u + 1013904223u; return (h >> 8) / 16777216.0f; };
+    for (int tries = 0; tries < 400; ++tries) {
+        const float a = R() * 2.0f * PI, d = dMin + (dMax - dMin) * R();
+        const Vector2 p = {from.x + cosf(a) * d, from.y + sinf(a) * d};
+        if (fmaxf(fabsf(p.x), fabsf(p.y)) > campaign::edge - 800.0f || RocksHeight(rocks, p.x, p.y) > -40.0f) continue;
+        if (biome >= 0 && campaign::BiomeAt(p.x, p.y) != biome) continue;
+        bool nearPort = false;
+        for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, p) < campaign::portSafe;
+        if (nearPort) continue;
+        out = p;
+        return true;
+    }
+    return false;
+}
+
+// The tavern's work: three quests, the same all day in the same port (seeded by the sea, the port and the day)
+void World::MakeOffers(int port) {
+    using namespace campaign;
+    campOffers.clear();
+    campOffersPort = (int8_t)port;
+    campOffersDay = (int)(campClock / dayLength);
+    if (port < 0 || port >= (int)harbours.size()) return;
+    uint32_t h = seedUsed * 2654435761u ^ (uint32_t)(port + 1) * 40503u ^ (uint32_t)(campOffersDay + 1) * 2246822519u;
+    auto R = [&]() { h = h * 1664525u + 1013904223u; return (h >> 8) / 16777216.0f; };
+    const Vector2 here = {harbours[port].x, harbours[port].z};
+    const int pb = PortBiome(port);
+    int order[Q_TYPES];
+    for (int i = 0; i < Q_TYPES; ++i) order[i] = i;
+    for (int i = Q_TYPES - 1; i > 0; --i) std::swap(order[i], order[(int)(R() * (i + 1)) % (i + 1)]);
+    auto otherPort = [&](int not1, int not2, float dMin, float dMax) {
+        for (int tries = 0; tries < 60; ++tries) {
+            const int p = (int)(R() * harbours.size()) % (int)harbours.size();
+            if (p == not1 || p == not2) continue;
+            const float d = Vector2Distance(here, {harbours[p].x, harbours[p].z});
+            if (d >= dMin && d <= dMax) return p;
+        }
+        return -1;
+    };
+    for (int n = 0; n < Q_TYPES && (int)campOffers.size() < offersPer; ++n) {
+        Quest q;
+        q.type = (uint8_t)order[n];
+        q.state = QS_OFFER;
+        q.from = (int8_t)port;
+        q.seed = (uint16_t)(R() * 65535.0f);
+        const int tb = R() < 0.7f ? pb : pb == TEMPERATE ? 1 + (int)(R() * 4.0f) % 4 : TEMPERATE;  // (mostly this region; now and then the next)
+        Vector2 p;
+        float d = 0.0f;
+        bool ok = false;
+        switch (q.type) {
+            case Q_TREASURE: case Q_CASTAWAYS:
+                ok = ShoreSpot(h, tb, here, 1500.0f, 7000.0f, p);
+                if (!ok) ok = ShoreSpot(h, -1, here, 1500.0f, 7000.0f, p);
+                d = Vector2Distance(here, p);
+                q.reward = (q.type == Q_TREASURE ? 220 : 260) + (int)(d * 0.05f);
+                break;
+            case Q_BOUNTY: case Q_CAPTIVE:
+                ok = OpenSpot(h, tb, here, 2200.0f, 7000.0f, p);
+                if (!ok) ok = OpenSpot(h, -1, here, 2200.0f, 7000.0f, p);
+                d = Vector2Distance(here, p);
+                q.reward = (q.type == Q_BOUNTY ? 450 : 650) + (int)(d * 0.05f);
+                break;
+            case Q_CARGO: case Q_ESCORT: {
+                const int t = otherPort(port, -1, 2500.0f, 11000.0f);
+                if (t < 0) break;
+                ok = true;
+                q.to = (int8_t)t;
+                p = {harbours[t].x, harbours[t].z};
+                d = Vector2Distance(here, p);
+                q.reward = q.type == Q_CARGO ? 150 + (int)(d * 0.06f) : 300 + (int)(d * 0.07f);
+                if (q.type == Q_CARGO) q.deadline = d / 10.0f * 1.7f + 150.0f;  // (an offer's deadline: how long it gives)
+                break;
+            }
+            case Q_CONVOY: {
+                const int a = otherPort(port, -1, 1500.0f, 9000.0f);
+                if (a < 0) break;
+                int b = -1;
+                for (int tries = 0; tries < 40 && b < 0; ++tries) {
+                    const int c = (int)(R() * harbours.size()) % (int)harbours.size();
+                    const float dd = Vector2Distance({harbours[a].x, harbours[a].z}, {harbours[c].x, harbours[c].z});
+                    if (c != a && c != port && dd > 4000.0f && dd < 11000.0f) b = c;
+                }
+                if (b < 0) break;
+                ok = true;
+                q.from = (int8_t)port;
+                q.to = (int8_t)b;
+                q.count = 3;
+                p = {harbours[a].x, harbours[a].z};
+                q.x = p.x;  // (the convoy's start)
+                q.z = p.y;
+                d = Vector2Distance(here, p) + Vector2Distance(p, {harbours[b].x, harbours[b].z}) * 0.3f;
+                q.reward = 3 * (170 + (int)(d * 0.02f));
+                q.seed = (uint16_t)((q.seed & ~0x3Fu) | (uint16_t)a);  // (the start port rides in the low bits)
+                break;
+            }
+        }
+        if (!ok) continue;
+        if (q.type != Q_CONVOY) { q.x = p.x; q.z = p.y; }
+        q.biome = BiomeAt(q.x, q.z);
+        float danger = Danger(q.biome);
+        if (q.to >= 0) danger = fmaxf(danger, Danger(PortBiome(q.to)));
+        q.reward = (int32_t)(roundf(q.reward * danger / 10.0f) * 10.0f);
+        campOffers.push_back(q);
+    }
+}
+
+int World::SpawnQuestShip(int slot, int role, Vector2 at, float heading, int cls, int team, bool merchant, float hullMul, const std::string& name) {
+    const int before = voyagePirates;
+    SpawnRaider(at, heading, cls, hullMul);
+    voyagePirates = before;
+    int id = -1;
+    for (int i = ShipCount() - 1; i >= 0; --i)  // (the one just spawned: the newest raider at that spot)
+        if (ships[i].active && ships[i].raider && ships[i].questSlot < 0 && Vector2Distance({ships[i].pos.x, ships[i].pos.z}, at) < 1.0f) { id = i; break; }
+    if (id < 0) return -1;
+    Ship& s = ships[id];
+    s.questSlot = (int8_t)slot;
+    s.questRole = (uint8_t)role;
+    s.wp = 0;
+    s.team = (int8_t)team;
+    s.merchant = merchant;
+    s.raider = team == 1 && !merchant;  // (a merchantman of either side isn't a pirate)
+    s.name = name;
+    if (merchant) s.maxHp = s.hp = MaxHpOf(s) * hullMul;
+    if ((merchant || role == campaign::QR_GUARD) && !events.empty() && events.back().type == EventType::Respawn && events.back().a == id)
+        events.back().flags = 0;  // (a convoy putting to sea far off: no alarm; a pirate found close by: the alarm)
+    Quest& q = campQuests[slot];
+    for (int16_t& k : q.ships)
+        if (k < 0 || k >= ShipCount() || !ships[k].active || ships[k].questSlot != slot) { k = (int16_t)id; break; }
+    return id;
+}
+
+void World::ClearQuest(int slot) {
+    for (Ship& s : ships)
+        if (s.active && s.questSlot == slot) {
+            if (s.merchant) RemoveShip(s.id);  // (the merchantmen sail out of the story)
+            else { s.questSlot = -1; s.questRole = 0; }  // (the pirates stay pirates)
+        }
+    campQuests[slot] = Quest{};
+    campPaths[slot].clear();
+}
+
+void World::EndQuest(int slot, bool won) {
+    Quest& q = campQuests[slot];
+    if (q.state != campaign::QS_ACTIVE && q.state != campaign::QS_RETURN) return;
+    q.state = won ? campaign::QS_DONE : campaign::QS_FAILED;
+    q.t = 0.0f;
+    if (won && q.type != campaign::Q_CONVOY) campGold += q.reward;  // (the convoy pays a share a ship, as they go down)
+    for (Ship& s : ships)  // the guards and the pirates fight on as pirates; a captor that's struck stays struck
+        if (s.active && s.questSlot == slot && !s.merchant) { s.questSlot = -1; s.questRole = 0; }
+    GameEvent ev{EventType::Quest};
+    ev.a = (uint16_t)slot;
+    ev.flags = won ? 2 : 3;
+    ev.value = won ? (float)(q.type == campaign::Q_CONVOY ? q.reward / std::max<int>(q.count, 1) * q.sunk : q.reward) : 0.0f;
+    events.push_back(ev);
+    campSaveDue = true;
+}
+
+void World::QuestShipSunk(Ship& v) {
+    using namespace campaign;
+    const int slot = v.questSlot;
+    if (slot < 0 || slot >= maxQuests) return;
+    Quest& q = campQuests[slot];
+    v.questSlot = -1;
+    if (q.state != QS_ACTIVE && q.state != QS_RETURN) return;
+    switch (v.questRole) {
+        case QR_TARGET: EndQuest(slot, true); break;
+        case QR_CAPTOR: if (q.state == QS_ACTIVE) EndQuest(slot, false); break;  // (she went down with the captive aboard)
+        case QR_ESCORTED: EndQuest(slot, false); break;
+        case QR_MERCHANT:
+            q.sunk++;
+            campGold += q.reward / std::max<int>(q.count, 1);
+            if (q.sunk + q.gone >= q.count) EndQuest(slot, q.sunk > 0);
+            break;
+        default: break;
+    }
+}
+
+// The quests under way: their ships put to sea when she comes near, progress when she's where she must be, and
+// the end of each - done, or failed
+void World::UpdateQuests(float dt, Ship& cap) {
+    using namespace campaign;
+    const Vector2 me = {cap.pos.x, cap.pos.z};
+    const float spd = Vector2Length({cap.vel.x, cap.vel.z});
+    campCargo = false;
+    for (int slot = 0; slot < maxQuests; ++slot) {
+        Quest& q = campQuests[slot];
+        if (q.state == QS_DONE || q.state == QS_FAILED) {
+            q.t += dt;
+            if (q.t > 8.0f) ClearQuest(slot);
+            continue;
+        }
+        if (q.state != QS_ACTIVE && q.state != QS_RETURN) continue;
+        auto ship = [&](int role) -> Ship* {
+            for (int16_t k : q.ships)
+                if (k >= 0 && k < ShipCount() && ships[k].active && ships[k].questSlot == slot && ships[k].questRole == role) return &ships[k];
+            return nullptr;
+        };
+        const Vector2 spot = {q.x, q.z};
+        const float d = Vector2Distance(me, spot);
+        uint32_t h = (uint32_t)q.seed * 2654435761u + (uint32_t)(campClock * 10.0f);
+        auto step = [&](float need, bool here) {  // a few seconds lying there
+            q.t = here ? q.t + dt : fmaxf(0.0f, q.t - dt * 2.0f);
+            return q.t >= need;
+        };
+        auto tell = [&](int what) {
+            GameEvent ev{EventType::Quest};
+            ev.a = (uint16_t)slot;
+            ev.flags = (uint8_t)what;
+            events.push_back(ev);
+        };
+        if (q.deadline > 0.0f && campClock > q.deadline && q.state == QS_ACTIVE) {
+            EndQuest(slot, false);
+            continue;
+        }
+        switch (q.type) {
+            case Q_TREASURE:
+                if (!(q.flags & QF_GUARDS) && d < 900.0f && q.seed % 5 < 2) {  // (now and then somebody else has the same map)
+                    q.flags |= QF_GUARDS;
+                    Vector2 at;
+                    if (OpenSpot(h, -1, spot, 900.0f, 1300.0f, at)) SpawnRaider(at, atan2f(spot.x - at.x, spot.y - at.y), q.seed % 3 ? SC_CUTTER : SC_FRIGATE);
+                }
+                if (cap.alive && step(6.0f, d < 75.0f && spd < 4.0f)) EndQuest(slot, true);
+                break;
+            case Q_CASTAWAYS:
+                if (q.state == QS_ACTIVE) {
+                    if (cap.alive && step(5.0f, d < 85.0f && spd < 4.0f)) {
+                        q.state = QS_RETURN;
+                        q.t = 0.0f;
+                        tell(4);
+                        campSaveDue = true;
+                    }
+                } else if (campDocked >= 0) EndQuest(slot, true);
+                break;
+            case Q_CARGO:
+                campCargo = true;
+                if (campDocked == q.to) EndQuest(slot, true);
+                break;
+            case Q_BOUNTY: case Q_CAPTIVE: {
+                const int role = q.type == Q_BOUNTY ? QR_TARGET : QR_CAPTOR;
+                Ship* t = ship(role);
+                if (q.state == QS_ACTIVE && !t && (q.flags & QF_SPAWNED)) q.flags &= (uint8_t)~(QF_SPAWNED | QF_STRUCK);  // (she's gone off: she'll be found again)
+                if (q.state == QS_ACTIVE && !(q.flags & QF_SPAWNED) && d < 2300.0f) {  // found: she comes out to fight
+                    Vector2 at = spot;
+                    if (d < 1000.0f || RocksHeight(rocks, at.x, at.y) > -25.0f) {
+                        Vector2 dir = Vector2Normalize(Vector2Subtract(spot, me));
+                        at = Vector2Add(me, Vector2Scale(dir, 1100.0f));
+                        if (RocksHeight(rocks, at.x, at.y) > -25.0f && !OpenSpot(h, -1, me, 1000.0f, 1300.0f, at)) break;
+                    }
+                    const float hull = (q.type == Q_BOUNTY ? 1.5f : 1.15f) * Danger(q.biome);
+                    const int cls = q.type == Q_CAPTIVE ? SC_FRIGATE : q.seed % 3 == 0 ? SC_LINE : SC_FRIGATE;
+                    SpawnQuestShip(slot, role, at, atan2f(me.x - at.x, me.y - at.y), cls, 1, false, hull, PirateName(q.seed));
+                    if (q.type == Q_BOUNTY) {
+                        const Vector2 g = {at.x + 70.0f, at.y - 60.0f};
+                        if (RocksHeight(rocks, g.x, g.y) < -20.0f) SpawnQuestShip(slot, QR_GUARD, g, atan2f(me.x - g.x, me.y - g.y), SC_CUTTER, 1, false, 1.0f, "Cpt. " + PirateName(q.seed + 7) + "'s mate");
+                    }
+                    q.flags |= QF_SPAWNED;
+                }
+                if (q.type == Q_CAPTIVE && q.state == QS_ACTIVE && t && t->struck) {  // come alongside her to take the captive off
+                    q.flags |= QF_STRUCK;
+                    const float dd = Vector2Distance(me, {t->pos.x, t->pos.z});
+                    if (cap.alive && step(4.0f, dd < 55.0f)) {
+                        q.state = QS_RETURN;
+                        q.t = 0.0f;
+                        t->questSlot = -1;  // (she drifts, struck, and in time is gone)
+                        t->questRole = 0;
+                        tell(4);
+                        campSaveDue = true;
+                    }
+                }
+                if (q.type == Q_CAPTIVE && q.state == QS_RETURN && campDocked == q.from) EndQuest(slot, true);
+                break;
+            }
+            case Q_ESCORT: {
+                const Harbour& a = harbours[q.from];
+                const Harbour& b = harbours[q.to];
+                if (!(q.flags & QF_SPAWNED) && Vector2Distance(me, {a.x, a.z}) < 1500.0f) {
+                    Vector2 in = {-cosf(a.ang), -sinf(a.ang)};
+                    Vector2 at = {a.x + in.x * 140.0f + in.y * 60.0f, a.z + in.y * 140.0f - in.x * 60.0f};
+                    if (RocksHeight(rocks, at.x, at.y) > -15.0f) at = {a.x + in.x * 200.0f, a.z + in.y * 200.0f};
+                    const int id = SpawnQuestShip(slot, QR_ESCORTED, at, atan2f(in.x, in.y), SC_FRIGATE, 0, true, 1.4f, "the " + MerchantName(q.seed));
+                    if (id >= 0) {
+                        campPaths[slot] = MakeRoute(rocks, at, {b.x, b.z}, false);
+                        q.flags |= QF_SPAWNED;
+                    }
+                }
+                Ship* m = ship(QR_ESCORTED);
+                if (!m) {
+                    if (q.flags & QF_SPAWNED) EndQuest(slot, false);  // (lost)
+                    break;
+                }
+                if (Vector2Distance({m->pos.x, m->pos.z}, {b.x, b.z}) < 260.0f) { EndQuest(slot, true); break; }
+                // the pirates know she's coming: a band a third of the way, another two thirds
+                const float frac = campPaths[slot].empty() ? 0.0f : (float)m->wp / campPaths[slot].size();
+                for (int k = 0; k < 2; ++k) {
+                    const uint8_t bit = k ? QF_BAND2 : QF_BAND1;
+                    if ((q.flags & bit) || frac < (k ? 0.62f : 0.3f)) continue;
+                    q.flags |= bit;
+                    for (int j = 0; j < 2; ++j) {
+                        Vector2 at;
+                        if (OpenSpot(h, -1, {m->pos.x, m->pos.z}, 1000.0f, 1300.0f, at)) SpawnRaider(at, atan2f(m->pos.x - at.x, m->pos.z - at.y), j ? SC_FRIGATE : SC_CUTTER);
+                    }
+                }
+                break;
+            }
+            case Q_CONVOY: {
+                const int a = q.seed & 0x3F;
+                if (!(q.flags & QF_SPAWNED) && a < (int)harbours.size()) {  // the convoy puts to sea
+                    const Harbour& hb = harbours[a];
+                    const Harbour& b = harbours[q.to];
+                    Vector2 in = {-cosf(hb.ang), -sinf(hb.ang)}, side = {-in.y, in.x};
+                    const int left = q.count - q.sunk - q.gone;
+                    Vector2 first{};
+                    for (int k = 0; k < left; ++k) {
+                        Vector2 at = {hb.x + in.x * (200.0f + 90.0f * k) + side.x * (k % 2 ? 40.0f : -40.0f), hb.z + in.y * (200.0f + 90.0f * k) + side.y * (k % 2 ? 40.0f : -40.0f)};
+                        if (k == 0) first = at;
+                        SpawnQuestShip(slot, QR_MERCHANT, at, atan2f(in.x, in.y), k == 1 ? SC_LINE : SC_FRIGATE, 1, true, 1.2f, "the " + MerchantName(q.seed + k * 7));
+                    }
+                    const Vector2 g = {hb.x + in.x * 140.0f, hb.z + in.y * 140.0f};
+                    SpawnQuestShip(slot, QR_GUARD, g, atan2f(in.x, in.y), SC_FRIGATE, 1, false, 1.2f, "Cpt. " + PirateName(q.seed) + ", the convoy's guard");
+                    campPaths[slot] = MakeRoute(rocks, first, {b.x, b.z}, false);
+                    q.flags |= QF_SPAWNED;
+                }
+                const Harbour& b = harbours[q.to];
+                for (int16_t k : q.ships) {  // made port: that one got away
+                    if (k < 0 || k >= ShipCount()) continue;
+                    Ship& s = ships[k];
+                    if (!s.active || s.questSlot != slot || s.questRole != QR_MERCHANT || !s.alive) continue;
+                    if (Vector2Distance({s.pos.x, s.pos.z}, {b.x, b.z}) < 300.0f) {
+                        q.gone++;
+                        RemoveShip(s.id);
+                        if (q.sunk + q.gone >= q.count) EndQuest(slot, q.sunk > 0);
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
 // The save: a few lines of text beside the game
 bool World::SaveCampaign() const {
     if (campSavePath.empty() || mode != MODE_CAMPAIGN) return false;
@@ -4481,6 +4956,10 @@ bool World::SaveCampaign() const {
     if (!f) return false;
     fprintf(f, "broadside_campaign 1\nseed %u\ngold %d\nport %d\nseen %u\nclock %.1f\nsunk %d\n", seedUsed, (int)campGold, (int)campLastPort,
             (unsigned)campSeen, campClock, campSunk);
+    for (const Quest& q : campQuests)
+        if (q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN)
+            fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
+                    q.biome, q.count, q.sunk, q.gone);
     if (cap) fprintf(f, "class %d\nhull %.2f\n", (int)cap->cls, cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f);
     else if (campLoadCls >= 0) fprintf(f, "class %d\nhull %.2f\n", campLoadCls, campLoadHull);  // (she's left the sea already: as she was last)
     fclose(f);
@@ -4513,6 +4992,19 @@ bool World::LoadCampaign() {
         else if (!strcmp(key, "sunk")) { int v; if (fscanf(f, "%d", &v) == 1) campSunk = v; }
         else if (!strcmp(key, "class")) { int v; if (fscanf(f, "%d", &v) == 1) campLoadCls = v; }
         else if (!strcmp(key, "hull")) { float v; if (fscanf(f, "%f", &v) == 1) campLoadHull = v; }
+        else if (!strcmp(key, "quest")) {
+            int ty, st, fr, to, rw, bi, co, su, go;
+            unsigned sd;
+            float x, z, dl;
+            if (fscanf(f, "%d %d %d %d %f %f %d %f %u %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go) == 13 && ty >= 0 && ty < campaign::Q_TYPES)
+                for (Quest& q : campQuests)
+                    if (q.state == campaign::QS_NONE) {
+                        q = Quest{};
+                        q.type = (uint8_t)ty; q.state = (uint8_t)st; q.from = (int8_t)fr; q.to = (int8_t)to; q.x = x; q.z = z; q.reward = rw;
+                        q.deadline = dl; q.seed = (uint16_t)sd; q.biome = (uint8_t)bi; q.count = (uint8_t)co; q.sunk = (uint8_t)su; q.gone = (uint8_t)go;
+                        break;
+                    }
+        }
     }
     fclose(f);
     return true;
@@ -7441,7 +7933,7 @@ float World::VoyageGoalS() const { return legRoute ? RouteLength() : voyageTo ==
 // The Odyssey's leg: the sea lane from this leg's harbour to the next (the convoy's bots follow it into harbour)
 void World::SetLegRoute(int from, int to) {
     if (arena != ARENA_PASSAGE || from < 0 || to < 0 || from >= (int)harbours.size() || to >= (int)harbours.size()) return;
-    route = MakeRoute(rocks, {harbours[from].x, harbours[from].z}, {harbours[to].x, harbours[to].z});
+    route = MakeRoute(rocks, {harbours[from].x, harbours[from].z}, {harbours[to].x, harbours[to].z}, true);
     havenS = 0.0f;
     legRoute = true;
 }

@@ -490,10 +490,35 @@ constexpr float fastClear = 1400.0f;  // m: no enemy nearer than this for fast-s
 constexpr int startGold = 300;
 constexpr float repairPerHp = 1.5f;   // gold
 constexpr float lossOnSinking = 0.2f; // of the purse, to the salvors
-enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2 };
+enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCEPT = 3, ACT_ABANDON = 4 };  // (accept: arg = the offer; abandon: arg = the slot)
+// Quests: taken in a port's tavern, three at once at most
+enum QuestType : uint8_t { Q_TREASURE = 0, Q_BOUNTY, Q_CONVOY, Q_ESCORT, Q_CARGO, Q_CASTAWAYS, Q_CAPTIVE, Q_TYPES };
+enum QuestState : uint8_t { QS_NONE = 0, QS_OFFER, QS_ACTIVE, QS_RETURN, QS_DONE, QS_FAILED };  // (return: the castaways / the captive aboard, for port)
+enum QuestRole : uint8_t { QR_NONE = 0, QR_TARGET, QR_MERCHANT, QR_GUARD, QR_CAPTOR, QR_ESCORTED };  // (a quest's ships)
+enum QuestFlag : uint8_t { QF_SPAWNED = 1, QF_GUARDS = 2, QF_BAND1 = 4, QF_BAND2 = 8, QF_STRUCK = 16 };
+constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
+std::string PirateName(uint16_t seed);    // the quest's pirate captain
+std::string MerchantName(uint16_t seed);  // the convoy's / the escorted merchantman's name
+const char* CaptiveName(uint16_t seed);   // whom the captor holds
+const char* GoodsName(uint16_t seed);     // the cargo
 int Bounty(int cls);                  // gold for a pirate of this class sunk
 float Danger(uint8_t biome);          // how thick the pirates are (x)
 }  // namespace campaign
+
+// A campaign quest (offered in a tavern, or under way: World::campQuests)
+struct Quest {
+    uint8_t type = 0, state = 0;   // campaign::QuestType, QuestState
+    int8_t from = -1, to = -1;     // the port it was taken in; where it ends (cargo, escort; the convoy: from -> to is its run)
+    float x = 0.0f, z = 0.0f;      // the beach (treasure, castaways), where the pirate was last seen, ...
+    int32_t reward = 0;            // gold (the convoy: for all of it, a share a ship)
+    float deadline = 0.0f;         // campClock it must be done by (0: none; an offer: how long it will give)
+    uint16_t seed = 0;             // its names
+    uint8_t biome = 0;             // the region it's in
+    uint8_t flags = 0;             // campaign::QuestFlag
+    uint8_t count = 0, sunk = 0, gone = 0;  // the convoy: its ships, how many sunk, how many made port
+    float t = 0.0f;                // progress (searching the shore, alongside), or s since it was done / failed
+    int16_t ships[campaign::questShips] = {-1, -1, -1, -1};
+};
 
 namespace strait {
 constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind it)
@@ -755,6 +780,10 @@ struct Ship {
     float raceSide = 0.0f;  // which side of the next gate we were on last tick (along its way through)
     float slowTimer = 0.0f; // crippled: s left at reduced speed
     bool raider = false;  // voyage: one of the pirates hunting the convoy (comes and goes, never respawns)
+    int8_t questSlot = -1;  // the campaign: the quest she belongs to (campQuests), and her part in it (campaign::QuestRole)
+    uint8_t questRole = 0;
+    int16_t wp = 0;         // ...a merchantman: the next point of her sea lane
+    bool struck = false;    // ...a captor: crippled, she's struck her colours (heaves to, holds her fire)
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
     uint8_t perks[PK_COUNT] = {};  // the Odyssey: upgrades picked so far this run
@@ -875,6 +904,7 @@ enum class EventType : uint8_t {
     Revive = 34,     // boss mode: a = the ship back in the fight, b = who brought her round (NO_SHIP: several), flags 1: her own crew (a rally)
     Perked = 36,     // the Odyssey: a = ship, b = the upgrade she took
     Wave = 37,       // the Odyssey's sea battle: b = this wave, flags = how many waves, value = pirates in it
+    Quest = 39,      // the campaign: a = the quest's slot, flags 1 taken / 2 done / 3 failed / 4 a step (aboard, freed, struck), value = gold
     PerkFx = 38,     // an upgrade at work: a = whose, b = on whom (or the combo), flags = PerkFxKind, pos
     Repaired = 35,   // a = ship, the harbour's done with her (b = 1: she sailed before they'd finished); the cooldown starts
 };
@@ -980,7 +1010,14 @@ public:
     int campSunk = 0;              // pirates sunk, all told
     bool campSaveDue = false;      // something worth saving happened (the server writes the save)
     std::string campSavePath;      // the server's: where the save lives ("": no saving, the client's world)
-    bool CampaignAct(int shipId, int act);       // a port's service (campaign::Act)
+    bool CampaignAct(int shipId, int act, int arg = 0);  // a port's service (campaign::Act)
+    void ClearQuest(int slot);  // (its merchantmen gone, its pirates just pirates)
+    Quest campQuests[campaign::maxQuests];   // under way (QS_NONE: a free slot)
+    std::vector<Quest> campOffers;           // the tavern's, in the port she lies in
+    std::vector<Vector2> campPaths[campaign::maxQuests];  // the sea lanes of the quests' merchantmen
+    int8_t campOffersPort = -1;              // (which port, which day they're for)
+    int campOffersDay = -1;
+    bool campCargo = false;                  // a hold full (a cargo quest under way): she's a little slower
     int CampaignRepairCost(const Ship& s) const;  // gold to make good her hull
     bool SaveCampaign() const;
     bool LoadCampaign();                          // after Init (the seed comes from CampaignSeed first)
@@ -1057,6 +1094,7 @@ public:
     void UsePerk(int p) { if (p >= 0 && p < PK_COUNT) perkUse[p]++; }
     void UseCombo(int c) { if (c >= 0 && c < CB_COUNT) comboUse[c]++; }
     void TestKnockOut(Ship& s) { Damage(s, 1e6f, -1); }  // (tests)
+    void TestDamage(Ship& s, float hp, int by) { Damage(s, hp, by); }  // (tests: a broadside from `by`)
     void TestRoundPowers(Ship& s) { GiveRoundPowers(s); }
     void PerkFxAt(int kind, int a, int b, Vector3 pos, float value = 0.0f);
     void GiveRoundPowers(Ship& s);  // Quartermaster (and Arsenal): a power-up or two to start the round with
@@ -1147,6 +1185,13 @@ private:
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
     void UpdateCampaign(float dt);
+    void UpdateQuests(float dt, Ship& cap);
+    void MakeOffers(int port);
+    bool ShoreSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const;  // off an island's beach
+    bool OpenSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const;   // open water
+    int SpawnQuestShip(int slot, int role, Vector2 at, float heading, int cls, int team, bool merchant, float hullMul, const std::string& name);
+    void QuestShipSunk(Ship& v);
+    void EndQuest(int slot, bool won);
     void SpawnRaider(Vector2 at, float heading, int cls, float hullMul = 1.0f);
     void UpdateRaid(float dt);
     void UpdateBoss(float dt);

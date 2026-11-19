@@ -202,6 +202,7 @@ static const char* Ordinal(int n) {
 enum class Mode { Menu, Connecting, Playing, Shipyard };
 
 
+static std::string QuestTitle(const Quest& q);  // (the campaign's quests, as the captain reads them: below)
 struct FeedLine {  // "<a><mid><b>" with a/b in their own colours (usually team colours)
     std::string a, mid, b;
     Color ca, cb;
@@ -388,7 +389,11 @@ public:
     Texture2D chartTex{};
     uint32_t chartKey = 0;
     std::string CampaignSavePath() const { return std::string(GetApplicationDirectory()) + "campaign.sav"; }
-    void CampaignAct(int act);
+    void CampaignAct(int act, int arg = 0);
+    Quest campQuests[campaign::maxQuests];  // (the snapshot's)
+    std::vector<Quest> campOffers;
+    bool QuestGoal(int slot, std::string& what, Vector3& at) const;
+    void DrawQuests(float W, float H);
     void DrawCampaignHud(float W, float H);
     void DrawChart(float W, float H);
     void DrawPort(float W, float H);
@@ -1252,6 +1257,8 @@ void Game::Interpolate() {
             campFast = sn.campFast;
             campWantFast = sn.campWantFast;
             campSunk = sn.campSunk;
+            for (int k = 0; k < campaign::maxQuests; ++k) campQuests[k] = sn.campQuests[k];
+            campOffers = sn.campOffers;
         }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
@@ -1388,6 +1395,11 @@ void Game::UpdateInput(float dt) {
     static bool autoChart = getenv("BS_CHART") != nullptr, autoPort = getenv("BS_PORTSCREEN") != nullptr;  // (screenshots: the campaign's chart, a port)
     if (campaign && autoChart && GetTime() - sessionStart > 6.0) { autoChart = false; chartOpen = true; }
     if (campaign && autoPort && campDocked >= 0 && GetTime() - sessionStart > 6.0) { autoPort = false; portOpen = true; EnableCursor(); }
+    static bool autoTake = getenv("BS_TAKEQUESTS") != nullptr;  // (screenshots: take every quest on offer)
+    if (campaign && autoTake && campDocked >= 0 && !campOffers.empty() && GetTime() - sessionStart > 7.0) {
+        autoTake = false;
+        for (int k = (int)campOffers.size() - 1; k >= 0; --k) CampaignAct(campaign::ACT_ACCEPT, k);
+    }
     if (autoPause && GetTime() - sessionStart > 4.0) { autoPause = false; paused = true; EnableCursor(); }
     if (IsKeyPressed(KEY_ESCAPE)) {
         if (portOpen) { portOpen = false; DisableCursor(); }
@@ -3146,7 +3158,35 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "BACK IN THE FIGHT", ui::kGreen, 2.6f});
             if (e.b == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("BROUGHT %s ROUND", TextToUpper(NameOf(e.a).c_str())), ui::kGreen, 2.6f});
             break;
+        case EventType::Quest: {
+            if (e.a >= campaign::maxQuests) break;
+            const Quest& q = campQuests[e.a];
+            const std::string t = QuestTitle(q);
+            if (e.flags == 1) { Feed3("QUEST", "  " + t, "", ui::kGold, ui::kText); sfx::PlayFlat(sfx::Confirm, 0.7f, 1.1f); }
+            else if (e.flags == 2) {
+                Feed3("QUEST DONE", "  " + t, e.value > 0 ? TextFormat("  +%d gold", (int)e.value) : "", ui::kGreen, ui::kGold);
+                sfx::PlayFlat(sfx::Treasure, 0.9f, 1.0f);
+            } else if (e.flags == 3) { Feed3("QUEST FAILED", "  " + t, "", ui::kRed, ui::kText); sfx::PlayFlat(sfx::Chime, 0.6f, 0.55f); }
+            else if (e.flags == 4) {
+                if (q.type == campaign::Q_CASTAWAYS) Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
+                else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
+                    Feed3(campaign::PirateName(q.seed), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
+                    floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
+                } else if (q.type == campaign::Q_CAPTIVE) {
+                    std::string c = campaign::CaptiveName(q.seed);
+                    c[0] = (char)toupper(c[0]);
+                    Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
+                }
+                sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
+            }
+            break;
+        }
         case EventType::Repaired:
+            if (e.a == myId && curMode == MODE_CAMPAIGN) {  // (the campaign: a repair paid for, or a bell for coming into port)
+                if (e.b == 2) sfx::PlayFlat(sfx::Chime, 0.6f, 0.8f);
+                else floats.push_back({Vector3Add(e.pos, {0, 14, 0}), "REPAIRED", ui::kGreen, 2.4f});
+                break;
+            }
             if (e.a == myId) {
                 floats.push_back({Vector3Add(e.pos, {0, 14, 0}), e.b == 1 ? "PATCHED UP (PART-DONE)" : "REPAIRED", ui::kGreen, 2.4f});
                 Feed3("The shipwrights", TextFormat("  are done with you: no more repairs for %d minutes", (int)(tune::harbourCooldown / 60.0f)), "", ui::kDim, ui::kText);
@@ -4328,6 +4368,12 @@ void Game::RenderWorld(float dt, bool menu) {
             fx.Lantern(L, (2.2f + d * 0.0025f) * fl, Fade({255, 214, 150, 255}, 0.7f + 0.3f * lanternBoost));
             if (d < 1200.0f) fx.ShipFire(Vector3Add(L, {0, -0.6f, 0}), 0.22f, dt, {0, 0, 0});  // (close to: real flames, sparks)
         }
+        if (!menu && campaign)
+            for (const Quest& q : campQuests)  // the castaways' signal fire: a column of smoke off the beach
+                if (q.type == campaign::Q_CASTAWAYS && q.state == campaign::QS_ACTIVE && Vector2Distance({q.x, q.z}, {rv.pos.x, rv.pos.z}) < 6000.0f) {
+                    const float h = RocksHeight(pred.rocks, q.x, q.z);
+                    fx.DamageSmoke({q.x, fmaxf(h, 0.0f) + 3.0f, q.z}, 0.9f, dt, {0, 0, 0});
+                }
     }
     DrawCrates(menu);
     if (!menu) DrawMines();
@@ -4983,7 +5029,10 @@ void Game::DrawHUD() {
     }
     // ---- round clock ----
     if (curMode == MODE_BOSS && matchState == 0) DrawBossBar(W);
-    if (curMode == MODE_CAMPAIGN) DrawCampaignHud(W, H);
+    if (curMode == MODE_CAMPAIGN) {
+        DrawCampaignHud(W, H);
+        DrawQuests(W, H);
+    }
     else if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
         int secs = (int)ceilf(matchClock);
         int lim = tune::scoreLimit[curMode < 3 ? curMode : 0];
@@ -7771,11 +7820,206 @@ static std::string Thousands(int v) {  // 12,450
     return v < 0 ? "-" + o : o;
 }
 
-void Game::CampaignAct(int act) {
+void Game::CampaignAct(int act, int arg) {
     ByteWriter w;
     w.Put(MSG_CAMPAIGN);
     w.Put((uint8_t)act);
+    w.Put((uint8_t)arg);
     Send(w.buf, true);
+}
+
+// ---- the campaign's quests, as the captain reads them ----------------------------------------------------
+static const char* Compass(Vector2 from, Vector2 to) {  // (on the chart: +z north, -x east)
+    const float a = atan2f(-(to.x - from.x), to.y - from.y);
+    static const char* const k[8] = {"north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"};
+    int i = (int)floorf(a / (2.0f * PI) * 8.0f + 0.5f);
+    return k[((i % 8) + 8) % 8];
+}
+static std::string Km(float d) { return d >= 1000.0f ? TextFormat("%.1f km", d / 1000.0f) : TextFormat("%d m", (int)d); }
+
+static std::string QuestTitle(const Quest& q) {
+    using namespace campaign;
+    switch (q.type) {
+        case Q_TREASURE: return "Buried treasure";
+        case Q_BOUNTY: return "A bounty on " + PirateName(q.seed);
+        case Q_CONVOY: return "Raid the " + MerchantName(q.seed) + " convoy";
+        case Q_ESCORT: return "Escort the " + MerchantName(q.seed);
+        case Q_CARGO: return std::string("A hold of ") + GoodsName(q.seed) + " for " + PortName(q.to);
+        case Q_CASTAWAYS: return "Smoke on the shore";
+        case Q_CAPTIVE: { std::string c = CaptiveName(q.seed); c[0] = (char)toupper(c[0]); return c + ", taken"; }
+    }
+    return "A quest";
+}
+
+// The tavern's telling of it (an offer: from the port it's offered in)
+static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) {
+    using namespace campaign;
+    if (q.from < 0 || q.from >= (int)hs.size()) return "";
+    const Vector2 here = {hs[q.from].x, hs[q.from].z}, spot = {q.x, q.z};
+    const std::string where = TextFormat("%s %s", Km(Vector2Distance(here, spot)).c_str(), Compass(here, spot));
+    const char* region = kBiomeNames[q.biome < BIOMES ? q.biome : 0];
+    switch (q.type) {
+        case Q_TREASURE: return TextFormat("An old chart marks a beach in %s, %s of here. Heave to off it and search the shore.", region, where.c_str());
+        case Q_BOUNTY: return TextFormat("%s has been raiding in %s, last seen %s of here. Find the ship and sink it.", PirateName(q.seed).c_str(), region, where.c_str());
+        case Q_CONVOY: {
+            const int a = q.seed & 0x3F;
+            return TextFormat("Three laden merchantmen and a guard sail from %s for %s. Sink them before they make port: %d gold a ship.", PortName(a), PortName(q.to),
+                              (int)q.reward / std::max<int>(q.count, 1));
+        }
+        case Q_ESCORT: return TextFormat("The merchantman %s sails from here for %s, %s off, and wants a warship beside her. Pirates will come.",
+                                         MerchantName(q.seed).c_str(), PortName(q.to), Km(Vector2Distance(here, spot)).c_str());
+        case Q_CARGO: return TextFormat("Carry a hold of %s to %s, %s %s, within %d minutes. A full hold slows her a little.", GoodsName(q.seed), PortName(q.to),
+                                        Km(Vector2Distance(here, spot)).c_str(), Compass(here, spot), (int)ceilf(q.deadline / 60.0f));
+        case Q_CASTAWAYS: return TextFormat("Smoke has been seen on an island in %s, %s of here. Heave to off the beach to take the castaways aboard, then bring them to any port.",
+                                            region, where.c_str());
+        case Q_CAPTIVE: return TextFormat("%s is held aboard %s's ship, last seen %s of here. Cripple it without sinking it, come alongside to free them, and bring them back here.",
+                                          CaptiveName(q.seed), PirateName(q.seed).c_str(), where.c_str());
+    }
+    return "";
+}
+
+// A line of words wrapped to a width
+static std::vector<std::string> Wrap(const std::string& s, float size, float width) {
+    std::vector<std::string> out;
+    std::string line, word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        const std::string tryLine = line.empty() ? word : line + " " + word;
+        if (!line.empty() && ui::Measure(tryLine.c_str(), size).x > width) { out.push_back(line); line = word; }
+        else line = tryLine;
+        word.clear();
+    };
+    for (char ch : s) {
+        if (ch == ' ') flush();
+        else word += ch;
+    }
+    flush();
+    if (!line.empty()) out.push_back(line);
+    return out;
+}
+
+// What the captain must do next, and where (false: nowhere to point at)
+bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
+    using namespace campaign;
+    const Quest& q = campQuests[slot];
+    const std::vector<Harbour>& hs = pred.harbours;
+    auto shipOf = [&](int role) -> int {
+        for (int16_t k : q.ships)
+            if (k >= 0 && k < NumShips() && view[k].present && (view[k].s.flags & SF_ALIVE)) {
+                if (role == 0) return k;
+                if (q.type == Q_BOUNTY && role == QR_TARGET && view[k].s.cls != SC_CUTTER) return k;
+                if (q.type == Q_CAPTIVE || q.type == Q_ESCORT) return k;
+            }
+        return -1;
+    };
+    auto port = [&](int p) { return p >= 0 && p < (int)hs.size() ? Vector3{hs[p].x, 10.0f, hs[p].z} : Vector3{q.x, 10.0f, q.z}; };
+    at = {q.x, 6.0f, q.z};
+    if (q.state == QS_DONE) { what = q.type == Q_CONVOY ? TextFormat("Done: %d of %d sunk", q.sunk, q.count) : "Done"; return false; }
+    if (q.state == QS_FAILED) { what = "Failed"; return false; }
+    switch (q.type) {
+        case Q_TREASURE: what = q.t > 0.05f ? TextFormat("Searching the shore... %d s", (int)ceilf(fmaxf(0.0f, 6.0f - q.t))) : "Heave to off the marked beach"; return true;
+        case Q_CASTAWAYS:
+            if (q.state == QS_RETURN) {
+                float best = 1e9f;
+                for (int p = 0; p < (int)hs.size(); ++p) {
+                    const float d = Vector2Distance({hs[p].x, hs[p].z}, {rv.pos.x, rv.pos.z});
+                    if (d < best) { best = d; at = port(p); }
+                }
+                what = "Bring the castaways to any port";
+                return true;
+            }
+            what = q.t > 0.05f ? TextFormat("Taking them off... %d s", (int)ceilf(fmaxf(0.0f, 5.0f - q.t))) : "Heave to off the beach where the smoke is";
+            return true;
+        case Q_CARGO: {
+            const float left = q.deadline - campClock;
+            what = TextFormat("Deliver the %s to %s   %s   %d:%02d left", GoodsName(q.seed), PortName(q.to), "\xC2\xB7", (int)fmaxf(0.0f, left) / 60, (int)fmaxf(0.0f, left) % 60);
+            at = port(q.to);
+            return true;
+        }
+        case Q_BOUNTY: {
+            const int k = shipOf(QR_TARGET);
+            if (k >= 0) { at = Vector3Add(view[k].s.pos, {0, 30, 0}); what = "Sink " + PirateName(q.seed); }
+            else what = "Find " + PirateName(q.seed) + " (last seen here)";
+            return true;
+        }
+        case Q_CAPTIVE: {
+            if (q.state == QS_RETURN) { what = TextFormat("Bring them home to %s", PortName(q.from)); at = port(q.from); return true; }
+            const int k = shipOf(QR_CAPTOR);
+            if (k >= 0) {
+                at = Vector3Add(view[k].s.pos, {0, 30, 0});
+                what = (q.flags & QF_STRUCK) ? (q.t > 0.05f ? TextFormat("Alongside... %d s", (int)ceilf(fmaxf(0.0f, 4.0f - q.t))) : "She's struck: come alongside")
+                                             : "Cripple " + PirateName(q.seed) + "'s ship (don't sink it)";
+            } else what = "Find " + PirateName(q.seed) + " (last seen here)";
+            return true;
+        }
+        case Q_ESCORT: {
+            const int k = shipOf(QR_ESCORTED);
+            if (k < 0) { what = TextFormat("Meet the %s at %s", MerchantName(q.seed).c_str(), PortName(q.from)); at = port(q.from); return true; }
+            at = Vector3Add(view[k].s.pos, {0, 30, 0});
+            const float d = Vector3Distance(view[k].s.pos, rv.pos);
+            what = d > 650.0f ? TextFormat("The %s waits for you", MerchantName(q.seed).c_str()) : TextFormat("See the %s into %s", MerchantName(q.seed).c_str(), PortName(q.to));
+            return true;
+        }
+        case Q_CONVOY: {
+            int nearest = -1;
+            float best = 1e9f;
+            for (int16_t k : q.ships)
+                if (k >= 0 && k < NumShips() && view[k].present && (view[k].s.flags & SF_ALIVE) && Vector3Distance(view[k].s.pos, rv.pos) < best) {
+                    best = Vector3Distance(view[k].s.pos, rv.pos);
+                    nearest = k;
+                }
+            const int left = q.count - q.sunk - q.gone;
+            what = TextFormat("Sink the convoy: %d left, bound for %s", left, PortName(q.to));
+            if (nearest >= 0) at = Vector3Add(view[nearest].s.pos, {0, 30, 0});
+            else at = port(q.seed & 0x3F);
+            return true;
+        }
+    }
+    return false;
+}
+
+void Game::DrawQuests(float W, float H) {
+    using namespace ui;
+    using namespace campaign;
+    // the list, top left: each quest, what to do, how far and which way
+    float y = 58.0f;
+    const Vector2 me = {rv.pos.x, rv.pos.z};
+    for (int k = 0; k < maxQuests; ++k) {
+        const Quest& q = campQuests[k];
+        if (q.state == QS_NONE) continue;
+        std::string what;
+        Vector3 at;
+        const bool where = QuestGoal(k, what, at);
+        std::string dist = where ? TextFormat("   %s   %s %s", "\xC2\xB7", Km(Vector2Distance(me, {at.x, at.z})).c_str(), Compass(me, {at.x, at.z})) : "";
+        const std::string title = TextFormat("%d   %s", k + 1, QuestTitle(q).c_str());
+        const float w = fmaxf(Measure(title.c_str(), 15, true).x, Measure((what + dist).c_str(), 13).x) + 28.0f;
+        Panel({18, y, w, 46}, A(kPanel, 0.82f), 8);
+        const Color tc = q.state == QS_DONE ? kGreen : q.state == QS_FAILED ? kRed : kGold;
+        Text(title.c_str(), 30, y + 5, 15, tc, true);
+        Text((what + dist).c_str(), 30, y + 25, 13, q.state == QS_FAILED ? kRed : kText, false);
+        y += 52.0f;
+        // and the mark on the sea (or at the edge of the view, pointing the way)
+        if (!where || chartOpen || portOpen) continue;
+        Vector2 sp;
+        const float d = Vector3Distance(at, rv.pos);
+        const Vector3 camF = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+        const bool ahead = Vector3DotProduct(Vector3Subtract(at, rv.pos), camF) > 0.0f;
+        const bool on = ahead && rv.Project(at, sp) && sp.x > 30 && sp.y > 30 && sp.x < W - 30 && sp.y < H - 30;
+        if (!on) {
+            const Vector3 camR = Vector3Normalize(Vector3CrossProduct(camF, rv.up)), camU = Vector3CrossProduct(camR, camF);
+            const Vector3 to = Vector3Subtract(at, rv.pos);
+            const float ang = atan2f(-Vector3DotProduct(to, camU), Vector3DotProduct(to, camR));
+            const float rx = W * 0.5f - 46.0f, ry = H * 0.5f - 46.0f;
+            sp = {W * 0.5f + cosf(ang) * rx, H * 0.5f + sinf(ang) * ry};
+            const Vector2 tip = {sp.x + cosf(ang) * 14.0f, sp.y + sinf(ang) * 14.0f};
+            DrawTriangle(tip, {sp.x + cosf(ang + 2.4f) * 9.0f, sp.y + sinf(ang + 2.4f) * 9.0f}, {sp.x + cosf(ang - 2.4f) * 9.0f, sp.y + sinf(ang - 2.4f) * 9.0f}, A(kGold, 0.9f));
+            DrawTriangle(tip, {sp.x + cosf(ang - 2.4f) * 9.0f, sp.y + sinf(ang - 2.4f) * 9.0f}, {sp.x + cosf(ang + 2.4f) * 9.0f, sp.y + sinf(ang + 2.4f) * 9.0f}, A(kGold, 0.9f));
+        }
+        DrawPoly(sp, 4, 11.0f, 45.0f, {0, 0, 0, 170});
+        DrawPoly(sp, 4, 8.5f, 45.0f, kGold);
+        Text(TextFormat("%d", k + 1), sp.x, sp.y - 7, 13, {24, 22, 18, 255}, true, Center);
+        if (on) Text(Km(d).c_str(), sp.x, sp.y + 13, 12, kGold, false, Center);
+    }
 }
 
 void Game::DrawCampaignHud(float W, float H) {
@@ -7877,6 +8121,20 @@ void Game::DrawChart(float W, float H) {
         if (h == campLastPort) DrawCircleV(p, 2.5f, c);
         Text(PortName(h), p.x, p.y + 8, 15, c, true, Center);
     }
+    // the quests: where each one points (numbered), and its ships
+    for (int k = 0; k < campaign::maxQuests; ++k) {
+        if (campQuests[k].state != campaign::QS_ACTIVE && campQuests[k].state != campaign::QS_RETURN) continue;
+        std::string what;
+        Vector3 at;
+        if (!QuestGoal(k, what, at)) continue;
+        const Vector2 p = toScreen(at.x, at.z);
+        DrawPoly(p, 4, 10.0f, 45.0f, {0, 0, 0, 190});
+        DrawPoly(p, 4, 7.5f, 45.0f, kGold);
+        Text(TextFormat("%d", k + 1), p.x, p.y - 7, 12, {24, 22, 18, 255}, true, Center);
+        for (int16_t s : campQuests[k].ships)
+            if (s >= 0 && s < NumShips() && view[s].present && (view[s].s.flags & SF_ALIVE))
+                DrawCircleV(toScreen(view[s].s.pos.x, view[s].s.pos.z), 3.5f, view[s].s.team == 0 ? kGreen : kRed);
+    }
     // pirates in sight, and us
     for (int id = 0; id < NumShips(); ++id)
         if (view[id].present && (view[id].s.flags & SF_ALIVE) && IsEnemy(id)) DrawCircleV(toScreen(view[id].s.pos.x, view[id].s.pos.z), 3.0f, kRed);
@@ -7901,7 +8159,7 @@ void Game::DrawPort(float W, float H) {
     if (campDocked < 0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
     DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
-    const float pw = 560, ph = 400;
+    const float pw = 720, ph = fminf(H - 60.0f, 640.0f);
     Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
     Panel(r, A(kPanel, 0.97f), 14);
     const int b = campaign::PortBiome(campDocked);
@@ -7922,10 +8180,36 @@ void Game::DrawPort(float W, float H) {
         sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
     }
     y += 130;
-    // the tavern: the quests come here
-    Label("THE TAVERN", r.x + 30, y, 12, kDim);
-    Text("Sailors' talk of pirates thick in the Ember Reach and the Fog Banks, and", r.x + 30, y + 22, 16, kText, false);
-    Text("bounties paid on every one sunk. (Quests and recruits are on the way.)", r.x + 30, y + 42, 16, kText, false);
+    // the tavern: today's work, and what's under way
+    Label("THE TAVERN   \xC2\xB7   TODAY'S WORK", r.x + 30, y, 12, kDim);
+    y += 20;
+    int active = 0;
+    for (const Quest& q : campQuests) active += q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN;
+    if (campOffers.empty()) { Text("Nothing more today. Come back tomorrow.", r.x + 30, y + 4, 16, kDim, false); y += 30; }
+    for (size_t k = 0; k < campOffers.size(); ++k) {
+        const Quest& q = campOffers[k];
+        Text(QuestTitle(q).c_str(), r.x + 30, y, 18, kText, true);
+        Text(TextFormat("%s gold", Thousands(q.reward).c_str()), r.x + pw - 170, y + 1, 16, kGold, true, Right);
+        const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 14, pw - 220);
+        for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), r.x + 30, y + 24 + l * 17.0f, 14, kDim, false);
+        if (Button({r.x + pw - 150, y - 2, 120, 40}, active >= campaign::maxQuests ? "Full" : "Accept", true, active < campaign::maxQuests)) {
+            CampaignAct(campaign::ACT_ACCEPT, (int)k);
+            sfx::PlayFlat(sfx::Confirm, 0.8f, 1.0f);
+        }
+        y += 30 + 17.0f * std::min<size_t>(lines.size(), 3) + 10;
+    }
+    if (active) {
+        y += 4;
+        Label("UNDER WAY", r.x + 30, y, 12, kDim);
+        y += 20;
+        for (int k = 0; k < campaign::maxQuests; ++k) {
+            const Quest& q = campQuests[k];
+            if (q.state != campaign::QS_ACTIVE && q.state != campaign::QS_RETURN) continue;
+            Text(TextFormat("%d   %s", k + 1, QuestTitle(q).c_str()), r.x + 30, y + 6, 16, kGold, true);
+            if (Button({r.x + pw - 150, y, 120, 32}, "Give up")) CampaignAct(campaign::ACT_ABANDON, k);
+            y += 38;
+        }
+    }
     if (Button({r.x + 30, r.y + ph - 72, pw - 60, 48}, "Set sail  (E)", true)) {
         portOpen = false;
         DisableCursor();

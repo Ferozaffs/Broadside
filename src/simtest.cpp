@@ -990,7 +990,162 @@ static int CampaignTest() {
     return problems ? 1 : 0;
 }
 
+// The campaign's quests, one of each, the captain (a bot standing in) put where each needs her: the treasure's beach,
+// the castaways', the bounty and the captor found and fought, the cargo carried, the escort brought in, a convoy let
+// go to see it sail its lane to port
+static int QuestTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    static const char* const kType[Q_TYPES] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive"};
+    int problems = 0;
+    auto put = [&](Vector2 p, float heading = 0.0f) {
+        Ship& c = g.ships[me];
+        c.pos = {p.x, g.ocean.Height(p.x, p.y) + 1.0f, p.y};
+        c.vel = {0, 0, 0};
+        c.angVel = {0, 0, 0};
+        c.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
+    };
+    auto dock = [&](int port) {
+        const Harbour& h = g.harbours[port];
+        put({h.x - cosf(h.ang) * 30.0f, h.z - sinf(h.ang) * 30.0f}, atan2f(-cosf(h.ang), -sinf(h.ang)));
+        for (int i = 0; i < 60 * 3; ++i) {
+            g.ships[me].input.sail = 0.0f;
+            g.ships[me].vel = Vector3Scale(g.ships[me].vel, 0.8f);
+            g.Step();
+            g.events.clear();
+        }
+    };
+    auto hold = [&](float secs) {  // hove to where she is
+        for (int i = 0; i < (int)(secs * 60); ++i) {
+            g.ships[me].vel = Vector3Scale(g.ships[me].vel, 0.85f);
+            g.ships[me].hp = g.ships[me].maxHp;
+            g.Step();
+            g.events.clear();
+        }
+    };
+    // the tavern at each port until every kind has been offered and taken (one at a time)
+    for (int type = 0; type < Q_TYPES; ++type) {
+        int port = -1, idx = -1;
+        for (int day = 0; day < 40 && idx < 0; ++day) {
+            for (int p = 0; p < (int)g.harbours.size() && idx < 0; ++p) {
+                g.campClock = day * dayLength + 1.0f;
+                dock(p);
+                for (size_t k = 0; k < g.campOffers.size(); ++k)
+                    if (g.campOffers[k].type == type) { port = p; idx = (int)k; break; }
+            }
+        }
+        if (idx < 0) { printf("   %-9s never offered   <-- PROBLEM\n", kType[type]); ++problems; continue; }
+        const Quest offer = g.campOffers[idx];
+        const bool took = g.CampaignAct(me, ACT_ACCEPT, idx);
+        int slot = -1;
+        for (int k = 0; k < maxQuests; ++k)
+            if (g.campQuests[k].state == QS_ACTIVE) slot = k;
+        if (!took || slot < 0) { printf("   %-9s couldn't be taken   <-- PROBLEM\n", kType[type]); ++problems; continue; }
+        Quest& q = g.campQuests[slot];
+        const int gold0 = g.campGold;
+        const double t0 = g.time;
+        bool struck = false;
+        const Vector2 spot = {q.x, q.z};
+        switch (type) {
+            case Q_TREASURE: put(spot); hold(9.0f); break;
+            case Q_CASTAWAYS:
+                put(spot); hold(7.0f);
+                if (q.state == QS_RETURN) dock(q.from);
+                break;
+            case Q_CARGO: dock(q.to); break;
+            case Q_BOUNTY: case Q_CAPTIVE: {
+                Vector2 dir = Vector2Normalize(Vector2Subtract(spot, {g.harbours[port].x, g.harbours[port].z}));
+                put(Vector2Subtract(spot, Vector2Scale(dir, 1600.0f)), atan2f(dir.x, dir.y));
+                float closest = 1e9f, lowest = 2.0f;
+                int seen = -1;
+                for (int i = 0; i < 60 * 300 && (q.state == QS_ACTIVE); ++i) {
+                    for (int16_t k : q.ships)
+                        if (k >= 0 && g.ships[k].active && (g.ships[k].questRole == QR_TARGET || g.ships[k].questRole == QR_CAPTOR)) {
+                            seen = k;
+                            closest = fminf(closest, Vector3Distance(g.ships[k].pos, g.ships[me].pos));
+                            lowest = fminf(lowest, g.ships[k].hp / g.ships[k].maxHp);
+                        }
+                    if (seen >= 0 && i % 360 == 0 && Vector3Distance(g.ships[seen].pos, g.ships[me].pos) < 600.0f && !g.ships[seen].struck)
+                        g.TestDamage(g.ships[seen], g.ships[seen].maxHp * 0.12f, me);  // (the player's broadsides)
+                    if (i % (60 * 60) == 0 && seen >= 0)
+                        printf("      t %3d s: her %s %.0f m off, hull %.0f%%, flags %d\n", i / 60, g.ships[seen].name.c_str(), Vector3Distance(g.ships[seen].pos, g.ships[me].pos),
+                               g.ships[seen].hp / g.ships[seen].maxHp * 100.0f, q.flags);
+                    g.ships[me].hp = fmaxf(g.ships[me].hp, g.ships[me].maxHp * 0.5f);  // (she must win this one: the test is the quest)
+                    g.Step();
+                    for (const GameEvent& e : g.events) struck |= e.type == EventType::Quest && e.flags == 4;
+                    g.events.clear();
+                    if (type == Q_CAPTIVE && struck) {  // come alongside the captor
+                        int captor = -1;
+                        for (int16_t k : q.ships)
+                            if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_CAPTOR) captor = k;
+                        for (int j = 0; j < 60 * 7 && captor >= 0 && q.state == QS_ACTIVE; ++j) {  // (lying alongside her)
+                            const Ship& t = g.ships[captor];
+                            put({t.pos.x + 40.0f, t.pos.z}, 0.0f);
+                            g.ships[me].hp = g.ships[me].maxHp;
+                            g.Step();
+                            g.events.clear();
+                        }
+                        break;
+                    }
+                }
+                printf("      (the quest ship: %s; closest %.0f m, her hull down to %.0f%%)\n", seen >= 0 ? "out" : "NEVER SPAWNED", closest, lowest * 100.0f);
+                if (type == Q_CAPTIVE && q.state == QS_RETURN) dock(q.from);
+                break;
+            }
+            case Q_ESCORT: {
+                // stay with her: a little astern of the merchantman all the way
+                for (int i = 0; i < 60 * 1500 && q.state == QS_ACTIVE; ++i) {
+                    int m = -1;
+                    for (int16_t k : q.ships)
+                        if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_ESCORTED) m = k;
+                    if (m >= 0 && i % 60 == 0) {
+                        const Ship& s = g.ships[m];
+                        const Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot);
+                        put({s.pos.x - f.x * 220.0f + f.z * 80.0f, s.pos.z - f.z * 220.0f - f.x * 80.0f}, atan2f(f.x, f.z));
+                        g.ships[me].vel = s.vel;
+                    }
+                    g.ships[me].hp = g.ships[me].maxHp;
+                    if (m >= 0) g.ships[m].hp = fmaxf(g.ships[m].hp, g.ships[m].maxHp * 0.4f);  // (the lane is what's under test)
+                    if (m >= 0 && i % (60 * 120) == 0) {
+                        const Ship& s = g.ships[m];
+                        const Harbour& b = g.harbours[q.to];
+                        printf("      t %4d s: the %s at (%.0f, %.0f), %.1f m/s, lane point %d of %zu, %.0f m from %s, sail %.2f\n", i / 60, s.name.c_str(), s.pos.x, s.pos.z,
+                               Vector2Length({s.vel.x, s.vel.z}), s.wp, g.campPaths[slot].size(), Vector2Distance({s.pos.x, s.pos.z}, {b.x, b.z}), PortName(q.to), s.input.sail);
+                    }
+                    g.Step();
+                    g.events.clear();
+                }
+                break;
+            }
+            case Q_CONVOY: {
+                put({-campaign::half + 1500.0f, campaign::half - 1500.0f});  // (far away: let it sail)
+                for (int i = 0; i < 60 * 1800 && q.state == QS_ACTIVE; ++i) {
+                    g.ships[me].hp = g.ships[me].maxHp;
+                    g.Step();
+                    g.events.clear();
+                }
+                break;
+            }
+        }
+        const bool won = q.state == QS_DONE, lost = q.state == QS_FAILED;
+        const bool expect = type == Q_CONVOY ? lost : won;  // (the convoy was let go: it should make port)
+        if (!expect) ++problems;
+        printf("   %-9s from %-13s reward %4d: %s after %.0f s%s, gold %d -> %d%s%s\n", kType[type], PortName(port), (int)offer.reward,
+               won ? "DONE" : lost ? "FAILED" : q.state == QS_RETURN ? "still to bring home" : "still under way", g.time - t0,
+               type == Q_CONVOY ? TextFormat(" (%d of %d made port)", q.gone, q.count) : "", gold0, g.campGold, struck ? ", she struck her colours" : "",
+               expect ? "" : "   <-- PROBLEM");
+        for (int k = 0; k < maxQuests; ++k) g.ClearQuest(k);
+    }
+    printf("quests: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_QUESTTEST")) return QuestTest();
     if (getenv("BS_CAMPTEST")) return CampaignTest();
     if (getenv("BS_BOSSTEST")) return BossTest();
     if (getenv("BS_ODYSSEYTEST")) return OdysseyTest();
