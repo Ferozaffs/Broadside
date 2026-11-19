@@ -225,33 +225,16 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
         for (int q = 0; q < 3; ++q) N[I[t + q]] = Vector3Add(N[I[t + q]], fn);
     }
     for (auto& n : N) n = Vector3Normalize(n);
-    // colour: seabed, wet rock at the waterline, rock faces, sand, grass, bird-limed stack tops
-    C.resize(P.size());
-    for (size_t i = 0; i < P.size(); ++i) {
-        const Vector3& p = P[i];
-        float ny = N[i].y;
-        float v = Fbm(p.x * 0.08f, p.y * 0.08f + so, p.z * 0.08f);
-        float strata = 0.5f + 0.5f * sinf(p.y * 0.9f + v * 5.0f);
-        Color rock = Mix(Mix(Color{96, 88, 80, 255}, Color{158, 144, 122, 255}, v), Color{78, 72, 66, 255}, strata * 0.5f);
-        Color c = rock;
-        float wl = vortex ? maelstrom::Height(sqrtf(p.x * p.x + p.z * p.z)) : 0.0f;  // the local waterline
-        if (p.y < wl - 1.2f) c = Mix(Color{58, 66, 52, 255}, Color{82, 84, 66, 255}, v);           // weedy seabed rock
-        else if (p.y < wl + 1.4f) c = Mix(Color{46, 44, 40, 255}, Color{60, 62, 46, 255}, v);       // wet, algae
-        else {
-            float v2 = Fbm(p.x * 0.03f + 11.0f, p.y * 0.05f, p.z * 0.03f + so);
-            float flat = Clamp((ny - 0.74f) / 0.14f, 0.0f, 1.0f) * Clamp((v2 - 0.32f) / 0.2f, 0.0f, 1.0f);  // grass on the flats, bare outcrops between
-            if (!k.stack && p.y < 3.5f && ny > 0.8f) c = Mix(Color{190, 174, 132, 255}, Color{208, 194, 150, 255}, v);  // beach
-            else if (!k.stack) c = Mix(rock, Mix(Color{66, 90, 44, 255}, Color{96, 112, 58, 255}, v), flat * Clamp((p.y - 3.0f) / 3.0f, 0.0f, 1.0f));
-            else c = Mix(rock, Color{190, 186, 172, 255}, Clamp((p.y - k.h * 0.85f) / (k.h * 0.12f), 0.0f, 1.0f) * (0.2f + 0.3f * v));
-        }
-        C[i] = c;
-    }
+    // colour: the land is painted in the shader (IslandSurface); its vertex colour carries the region it's in (red: the
+    // campaign::Biome x 50), alpha 255 (terrain, not a tree)
+    C.assign(P.size(), Color{(unsigned char)(std::min<int>(k.biome, campaign::BIOMES - 1) * 50), 0, 0, 255});
     std::vector<unsigned char> A(P.size(), 255);  // vertex alpha: 255 terrain, 128 bark, 0 needles
     // conifers: a bark trunk under three tiers of needles, grown in forest patches on the gentle tops
     if (!k.stack) {
         uint32_t s = k.seed | 1;
         auto rnd = [&](float a, float b) { s = s * 1664525u + 1013904223u; return a + (b - a) * ((s >> 8) & 0xFFFFFF) / 16777216.0f; };
-        int want = (int)(k.r * 1.1f) / (coarse ? 3 : 1);
+        const float treeK = k.biome == campaign::EMBER ? 0.0f : k.biome == campaign::FROZEN ? 0.35f : k.biome == campaign::TROPICS ? 1.4f : 1.0f;
+        int want = (int)(k.r * 1.1f * treeK) / (coarse ? 3 : 1);
         const int SL = 7;
         for (int t = 0; t < want * 6 && want > 0 && P.size() + 40 < 65000; ++t) {
             float a = rnd(0, 2 * PI), u = sqrtf(rnd(0.0f, 0.7f));
@@ -266,6 +249,9 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
             Vector3 lean = {rnd(-0.6f, 0.6f), 0, rnd(-0.6f, 0.6f)};
             float tone = rnd(0.75f, 1.15f);
             Color dark = Shade({30, 52, 30, 255}, tone), mid = Shade({44, 72, 40, 255}, tone), tip = Shade({70, 98, 52, 255}, tone);
+            if (k.biome == campaign::FROZEN) { mid = Shade({70, 86, 76, 255}, tone); tip = Shade({236, 240, 244, 255}, tone); }  // (snow on the tops)
+            else if (k.biome == campaign::TROPICS) { mid = Shade({52, 98, 40, 255}, tone); tip = Shade({88, 136, 56, 255}, tone); }
+            else if (k.biome == campaign::FOG) { dark = Shade({24, 34, 28, 255}, tone); mid = Shade({34, 46, 38, 255}, tone); tip = Shade({48, 60, 48, 255}, tone); }
             // trunk: a square post
             int tb = (int)P.size();
             for (int q = 0; q < 4; ++q) {

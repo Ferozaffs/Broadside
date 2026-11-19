@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 27;  // 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 28;  // 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -27,6 +27,7 @@ enum MsgType : uint8_t {
     MSG_ROLE = 14,        // S->C  our new crewman id (255: captain), our ship
     MSG_ORDER = 15,       // C->S  the captain's order to the crew (Order)
     MSG_PICK_PERK = 16,   // C->S  the Odyssey: which of the three upgrades on offer (0..2)
+    MSG_CAMPAIGN = 17,    // C->S  the campaign: a port's service, fast-sail (campaign::Act)
 };
 enum Role : uint8_t { ROLE_CAPTAIN = 0, ROLE_CREW = 1 };
 
@@ -245,6 +246,13 @@ struct Snapshot {
     uint8_t matchState = 0, round = 1, cove = 0;
     uint8_t raidTotal = 0, raidNeed = 0;  // raid: the convoy's ships, and how many must go down
     uint8_t rallies = 0;                  // a small crew's rallies left (boss, voyage)
+    bool campaign = false;                // the campaign: the captain's purse and where she's been
+    int32_t campGold = 0;
+    int8_t campDocked = -1, campLastPort = 0;
+    uint16_t campSeen = 0;
+    float campClock = 0.0f;
+    bool campFast = false, campWantFast = false;
+    uint16_t campSunk = 0;
     bool odyssey = false;                 // the Odyssey: the run
     uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
@@ -445,6 +453,16 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
             w.Put(p.target);
         }
     }
+    w.Put((uint8_t)(world.Campaign() ? 1 : 0));
+    if (world.Campaign()) {
+        w.Put(world.campGold);
+        w.Put(world.campDocked);
+        w.Put(world.campLastPort);
+        w.Put(world.campSeen);
+        w.Put(world.campClock);
+        w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0)));
+        w.Put((uint16_t)world.campSunk);
+    }
     w.Put((uint8_t)(world.odyssey ? 1 : 0));
     if (world.odyssey) {
         w.Put((uint16_t)world.odRound);
@@ -635,6 +653,18 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
             p.t = r.Get<uint16_t>() / 100.0f;
             p.target = r.Get<int16_t>();
         }
+    }
+    s.campaign = r.Get<uint8_t>() != 0;
+    if (s.campaign && r.ok) {
+        s.campGold = r.Get<int32_t>();
+        s.campDocked = r.Get<int8_t>();
+        s.campLastPort = r.Get<int8_t>();
+        s.campSeen = r.Get<uint16_t>();
+        s.campClock = r.Get<float>();
+        const uint8_t f = r.Get<uint8_t>();
+        s.campFast = f & 1;
+        s.campWantFast = (f & 2) != 0;
+        s.campSunk = r.Get<uint16_t>();
     }
     s.odyssey = r.Get<uint8_t>() != 0;
     if (s.odyssey && r.ok) {

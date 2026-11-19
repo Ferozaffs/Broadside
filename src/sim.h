@@ -91,7 +91,7 @@ constexpr float gunTraverse = 0.6f;        // rad the carriages swing either sid
 // rounds
 constexpr float matchLength = 480.0f;      // s per round
 constexpr float intermission = 18.0f;     // s of results before the next round
-constexpr int scoreLimit[7] = {12, 20, 5, 0, 0, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage, raid: none)
+constexpr int scoreLimit[8] = {12, 20, 5, 0, 0, 0, 0, 0};  // free-for-all sinkings / team sinkings / treasure banked / (race, voyage, raid, boss, campaign: none)
 // race: a sprint from one harbour to the far one through gates; sunk = crippled (slowed a while), not out
 constexpr float raceLength = 180.0f;       // s before a race is called off
 constexpr float raceCountdown = 4.0f;      // s held on the start line (3, 2, 1, go)
@@ -202,12 +202,14 @@ const Vector3 boxMax = {4.9f, 7.0f, 17.5f};
 }  // namespace hull
 
 // ---- game modes and harbours -----------------------------------------------------
-enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_BOSS = 6, MODE_COUNT = 7 };
+enum GameMode : uint8_t { MODE_FFA = 0, MODE_TEAMS = 1, MODE_PIRATE = 2, MODE_RACE = 3, MODE_VOYAGE = 4, MODE_RAID = 5, MODE_BOSS = 6,
+                          MODE_CAMPAIGN = 7,  // solo: the whole sea (ARENA_WORLD), its ports and quests (docs/campaign.md)
+                          MODE_COUNT = 8 };
 // The Odyssey (roguelike co-op): what the host picks, not a mode the world is ever in. A run of rounds, each played as
 // one of the modes above - a sea battle in the bay (MODE_BOSS against BOSS_PIRATES, waves of them), a leg of the
 // Passage (MODE_VOYAGE, harbour to harbour), and every fifth a boss (MODE_BOSS) - harder every round, and an upgrade to
 // pick after each one won. Lose a round and the run is over.
-constexpr uint8_t MODE_ODYSSEY = 7;
+constexpr uint8_t MODE_ODYSSEY = 8;
 enum OdysseyKind : uint8_t { OD_BATTLE = 0, OD_LEG = 1, OD_BOSS = 2 };
 enum PerkFxKind : uint8_t {
     PFX_ABLAZE = 1, PFX_CHAINED, PFX_CHARM, PFX_KEG, PFX_COMBO, PFX_ECHO, PFX_PRIZE,
@@ -457,7 +459,8 @@ enum Arena : uint8_t {
     ARENA_ISLES = 0, ARENA_MAELSTROM = 1,
     ARENA_STRAIT = 2, ARENA_SERPENT = 3, ARENA_HAIRPIN = 4, ARENA_ZIGZAG = 5,
     ARENA_PASSAGE = 6,  // the voyage (co-op): a long sea between two harbours, an archipelago in between
-    ARENA_COUNT = 7
+    ARENA_WORLD = 7,    // the campaign: the whole sea, 24 km across, its biomes and ports
+    ARENA_COUNT = 8
 };
 constexpr uint8_t ARENA_RACE_ANY = 255;  // host option for a race: a different course every round
 constexpr int RACE_COURSES = ARENA_ZIGZAG - ARENA_STRAIT + 1;
@@ -467,6 +470,31 @@ inline const char* RaceCourseName(int a) {
     return RaceArena(a) ? n[a - ARENA_STRAIT] : "the course";
 }
 // Distances along a course (s) are measured down the middle of the channel, from one end to the other
+// The campaign's sea (ARENA_WORLD): a square 2 x half across, open sea with archipelagos, in five regions
+namespace campaign {
+constexpr float half = 12000.0f;   // m from the middle to the edge of the chart
+constexpr float edge = 11300.0f;   // past this the sea turns a ship back (the fog at the end of the world)
+enum Biome : uint8_t { TEMPERATE = 0, TROPICS, FROZEN, EMBER, FOG, BIOMES };
+inline const char* const kBiomeNames[BIOMES] = {"The Temperate Isles", "The Tropics", "The Frozen North", "The Ember Reach", "The Fog Banks"};
+uint8_t BiomeAt(float x, float z);  // the region a point is in (the same everywhere: noise-warped borders)
+constexpr int kPortsPer[BIOMES] = {3, 3, 2, 2, 2};
+constexpr int kPorts = 12;          // (their sum)
+constexpr int homePort = 0;         // where a new campaign starts (the Temperate Isles)
+const char* PortName(int i);
+uint8_t PortBiome(int i);
+constexpr float dockRadius = 90.0f;   // m from the anchorage a ship counts as in port (going slowly)
+constexpr float portSafe = 1500.0f;   // m round a port no pirate is found (its forts), nor comes
+constexpr float dayLength = 600.0f;   // s
+constexpr float fastSail = 2.6f;      // x top speed under fast-sail
+constexpr float fastClear = 1400.0f;  // m: no enemy nearer than this for fast-sail
+constexpr int startGold = 300;
+constexpr float repairPerHp = 1.5f;   // gold
+constexpr float lossOnSinking = 0.2f; // of the purse, to the salvors
+enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2 };
+int Bounty(int cls);                  // gold for a pirate of this class sunk
+float Danger(uint8_t biome);          // how thick the pirates are (x)
+}  // namespace campaign
+
 namespace strait {
 constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind it)
 constexpr float finishZ = 1000.0f;  // the finish line, right across the channel
@@ -583,6 +611,7 @@ struct Rock {
     float ph[3];     // phases of the coastline wobble
     uint32_t seed;
     bool stack;      // tall narrow sea stack
+    uint8_t biome = 0;  // the campaign: the region it's in (campaign::Biome: how its land looks)
 };
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena = ARENA_ISLES);
 Rock FortressRock();  // boss mode: the Sea Fortress's island in the middle of the bay (the same on the server and the clients)
@@ -929,7 +958,8 @@ public:
     float RouteS(float x, float z) const;
     Vector2 RouteAt(float s) const;
     float RouteLength() const { return route.size() > 1 ? (route.size() - 1) * raceLineStep : 0.0f; }
-    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE || mode == MODE_RAID || mode == MODE_BOSS; }
+    bool TeamMode() const { return mode == MODE_TEAMS || mode == MODE_VOYAGE || mode == MODE_RAID || mode == MODE_BOSS || mode == MODE_CAMPAIGN; }
+    bool BigSea() const { return arena == ARENA_PASSAGE || arena == ARENA_WORLD; }  // (no ring of islands to keep inside)
     int bossId = -1;                 // boss mode: the Leviathan's ship (-1: not yet)
     int bossPhase = 0, bossPat = 0;  // its phase (1..3) and the pattern it's firing (0: none)
     float bossTimer = 0.0f, bossPatT = 0.0f, bossRot = 0.0f, bossStep = 0.0f, bossWait = 0.0f;
@@ -937,6 +967,27 @@ public:
     uint8_t bossChoice = BOSS_LEVIATHAN;  // host: which boss (or BOSS_RANDOM: a new one every round)
     uint8_t bossKind = BOSS_LEVIATHAN;    // the one we're fighting
     float stormDmg[3] = {};               // (tests: what the Storm Caller's weather has done to us: bolts, spouts, waves)
+    // the campaign (MODE_CAMPAIGN): one captain's career on the whole sea (docs/campaign.md)
+    bool Campaign() const { return mode == MODE_CAMPAIGN; }
+    int32_t campGold = 0;
+    int8_t campDocked = -1;        // the port the captain lies in (-1: at sea)
+    int8_t campLastPort = 0;       // where she puts back to after a sinking
+    uint16_t campSeen = 0;         // the ports put into (bits)
+    float campClock = 0.0f;        // s of the campaign, all told (campaign::dayLength a day)
+    float campSpawn = 0.0f;        // s to the next band of pirates
+    bool campWantFast = false;     // the captain asks for fast-sail...
+    bool campFast = false;         // ...and has it (no enemy near, not in port)
+    int campSunk = 0;              // pirates sunk, all told
+    bool campSaveDue = false;      // something worth saving happened (the server writes the save)
+    std::string campSavePath;      // the server's: where the save lives ("": no saving, the client's world)
+    bool CampaignAct(int shipId, int act);       // a port's service (campaign::Act)
+    int CampaignRepairCost(const Ship& s) const;  // gold to make good her hull
+    bool SaveCampaign() const;
+    bool LoadCampaign();                          // after Init (the seed comes from CampaignSeed first)
+    static bool CampaignSeed(const std::string& path, uint32_t& seed);
+    bool campBotCaptain = false;   // (tests: the first bot captain stands in for the player)
+    int campLoadCls = -1;          // (the save's ship and how much of her hull, for the captain when she joins)
+    float campLoadHull = 1.0f;
     // the Odyssey (MODE_ODYSSEY at Init): the run
     bool odyssey = false;
     int odRound = 1;              // how far into the run (1 ..)
@@ -1095,6 +1146,7 @@ private:
     void UpdateHarbours(float dt);
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
+    void UpdateCampaign(float dt);
     void SpawnRaider(Vector2 at, float heading, int cls, float hullMul = 1.0f);
     void UpdateRaid(float dt);
     void UpdateBoss(float dt);

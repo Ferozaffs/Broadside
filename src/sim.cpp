@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <queue>
 
 // ============================================================================
@@ -201,6 +202,133 @@ static void MakePassage(uint32_t seed, std::vector<Rock>& out, std::vector<Harbo
     }
 }
 
+// ---- the campaign's sea ------------------------------------------------------------------------
+namespace campaign {
+uint8_t BiomeAt(float x, float z) {
+    // the borders wander: the point is pushed about by a few long, slow waves before it's placed
+    const float wx = x + 900.0f * sinf(z * 0.00031f + 1.3f) + 500.0f * sinf((x + z) * 0.00067f + 4.1f);
+    const float wz = z + 900.0f * sinf(x * 0.00029f + 2.7f) + 500.0f * sinf((x - z) * 0.00071f + 0.6f);
+    if (wx * wx + wz * wz < 4300.0f * 4300.0f) return TEMPERATE;  // the middle
+    if (fabsf(wz) >= fabsf(wx)) return wz > 0.0f ? FROZEN : TROPICS;  // north and south
+    return wx > 0.0f ? FOG : EMBER;  // west and east (+x is on the left of the chart, as it is to an eye looking north)
+}
+static const char* const kPortNames[kPorts] = {
+    "Port Haverly", "Saltmarsh", "Greywater",       // the Temperate Isles
+    "Coral Bay", "Isla Dorada", "Palmhaven",        // the Tropics
+    "Frostholm", "Iceward",                         // the Frozen North
+    "Cinderport", "Ashfall",                        // the Ember Reach
+    "Mournwick", "Lantern Rock",                    // the Fog Banks
+};
+const char* PortName(int i) { return i >= 0 && i < kPorts ? kPortNames[i] : "a harbour"; }
+uint8_t PortBiome(int i) {
+    for (int b = 0, n = 0; b < BIOMES; ++b) {
+        n += kPortsPer[b];
+        if (i < n) return (uint8_t)b;
+    }
+    return TEMPERATE;
+}
+}  // namespace campaign
+
+// The campaign's sea: a port island for each harbour (the pier reaches its shore), archipelagos with open sea
+// between them, shaped by the region they're in, and stacks out on their own
+static void MakeWorld(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour>& ports) {
+    using namespace campaign;
+    out.clear();
+    ports.clear();
+    Lcg g{seed * 3266489917u + 668265263u};
+    g.F();
+    auto add = [&](float x, float z, float r, float h, bool stack, uint8_t b) {
+        Rock k;
+        k.x = x; k.z = z; k.r = r; k.h = h; k.stack = stack;
+        k.biome = b;
+        if (stack) { k.p = g.R(5.0f, 8.0f); k.q = g.R(0.2f, 0.35f); }
+        else if (b == EMBER) { k.p = g.R(1.6f, 2.4f); k.q = g.R(0.9f, 1.3f); }   // cones
+        else if (b == TROPICS) { k.p = g.R(2.2f, 3.2f); k.q = g.R(0.8f, 1.2f); } // low, with long beaches
+        else if (b == FROZEN) { k.p = g.R(4.0f, 6.5f); k.q = g.R(0.35f, 0.6f); } // sheer
+        else { k.p = g.R(2.8f, 5.0f); k.q = g.R(0.45f, 0.8f); }
+        for (float& a : k.ph) a = g.R(0.0f, 2.0f * PI);
+        k.seed = (uint32_t)(g.F() * 4.0e9f);
+        out.push_back(k);
+    };
+    auto heightFor = [&](uint8_t b, float r) {
+        switch (b) {
+            case TROPICS: return g.R(0.15f, 0.32f) * r;
+            case FROZEN: return fminf(g.R(0.45f, 0.9f) * r, 190.0f);
+            case EMBER: return fminf(g.R(0.55f, 1.0f) * r, 240.0f);
+            case FOG: return fminf(g.R(0.4f, 0.8f) * r, 170.0f);
+            default: return fminf(g.R(0.35f, 0.75f) * r, 160.0f);
+        }
+    };
+    const float lim = edge - 700.0f;
+    // the ports first: so far apart, each in its own region, the home port near the middle
+    std::vector<Vector3> isles;  // x, z, r: every island placed so far (to keep channels open between them)
+    for (int i = 0; i < kPorts; ++i) {
+        const uint8_t b = PortBiome(i);
+        float px = 0.0f, pz = 0.0f, pr = 0.0f;
+        for (int tries = 0; tries < 4000; ++tries) {
+            float x, z;
+            if (i == homePort) { x = g.R(-1500.0f, 1500.0f); z = g.R(-1500.0f, 1500.0f); }
+            else { x = g.R(-lim, lim); z = g.R(-lim, lim); }
+            if (BiomeAt(x, z) != b) continue;
+            bool ok = true;
+            for (const Harbour& h : ports) ok &= Vector2Distance({h.x, h.z}, {x, z}) > 3600.0f;
+            if (!ok) continue;
+            px = x; pz = z; pr = g.R(170.0f, 260.0f);
+            break;
+        }
+        const float a = g.R(0.0f, 2.0f * PI);  // the way from the anchorage in to the island
+        const float cx = px + cosf(a) * (pr + 70.0f), cz = pz + sinf(a) * (pr + 70.0f);
+        add(cx, cz, pr, fminf(heightFor(b, pr), 150.0f), false, b);
+        isles.push_back({cx, cz, pr});
+        ports.push_back({px, pz, a});
+    }
+    auto clearOfPorts = [&](float x, float z, float r) {
+        for (const Harbour& hb : ports)
+            if (Vector2Distance({hb.x, hb.z}, {x, z}) < r) return false;
+        return true;
+    };
+    auto clearOfIsles = [&](float x, float z, float r, float gap) {
+        for (const Vector3& o : isles)
+            if (Vector2Distance({o.x, o.y}, {x, z}) < o.z * 1.3f + r * 1.3f + gap) return false;
+        return true;
+    };
+    // archipelagos: a centre, a spread, islands round it with channels a ship can work through
+    for (int c = 0, made = 0; c < 400 && made < 64; ++c) {
+        const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
+        if (!clearOfPorts(x0, z0, 1300.0f)) continue;
+        const uint8_t b = BiomeAt(x0, z0);
+        const float spread = g.R(450.0f, 1250.0f);
+        const int want = (int)g.R(3.0f, b == TROPICS ? 11.0f : 9.0f);
+        int got = 0;
+        for (int tries = 0; tries < 80 && got < want; ++tries) {
+            const float u = g.F();
+            const float r = (b == TROPICS ? 40.0f : 50.0f) + (b == TROPICS ? 130.0f : 170.0f) * u * u;
+            const float a = g.R(0.0f, 2.0f * PI), d = spread * sqrtf(g.F());
+            const float x = x0 + cosf(a) * d, z = z0 + sinf(a) * d;
+            if (fabsf(x) > lim || fabsf(z) > lim || !clearOfPorts(x, z, 650.0f + r) || !clearOfIsles(x, z, r, 170.0f)) continue;
+            isles.push_back({x, z, r});
+            add(x, z, r, heightFor(b, r), false, b);
+            ++got;
+            if (g.F() < 0.45f) {  // an islet off its shore
+                const float aa = g.R(0.0f, 2.0f * PI), rr = g.R(16.0f, 34.0f), dd = r * 1.25f + rr + g.R(10.0f, 40.0f);
+                add(x + cosf(aa) * dd, z + sinf(aa) * dd, rr, heightFor(b, rr), false, b);
+            }
+        }
+        if (got) ++made;
+    }
+    // stacks out on their own (the north: more of them, ice-white crags; the fog: black teeth)
+    for (int tries = 0, n = 0; tries < 2000 && n < 170; ++tries) {
+        const float x = g.R(-lim, lim), z = g.R(-lim, lim);
+        const uint8_t b = BiomeAt(x, z);
+        if ((b == TROPICS || b == TEMPERATE) && g.F() < 0.5f) continue;
+        if (!clearOfPorts(x, z, 600.0f) || !clearOfIsles(x, z, 12.0f, 80.0f)) continue;
+        ++n;
+        add(x, z, g.R(8.0f, 17.0f), g.R(22.0f, b == FROZEN || b == FOG ? 62.0f : 48.0f), true, b);
+        const int kids = (int)g.R(0.0f, 3.0f);
+        for (int j = 0; j < kids; ++j) add(x + g.R(-30.0f, 30.0f), z + g.R(-30.0f, 30.0f), g.R(3.0f, 6.0f), g.R(5.0f, 14.0f), true, b);
+    }
+}
+
 // The sea lane from the start harbour to the destination: the cheapest way over a grid that keeps well off the land,
 // pulled straight where the water allows, then rounded off and laid out every raceLineStep m.
 static std::vector<Vector2> MakeRoute(const std::vector<Rock>& rocks, Vector2 from, Vector2 to) {
@@ -351,6 +479,11 @@ Vector2 World::RouteAt(float s) const {
 }
 
 float World::OutOfBounds(float x, float z, Vector2* home) const {
+    if (arena == ARENA_WORLD) {  // the edge of the chart: back toward the middle
+        const float o = fmaxf(fabsf(x), fabsf(z)) - campaign::edge;
+        if (home) *home = Vector2Normalize({-x, -z});
+        return fmaxf(0.0f, o);
+    }
     if (arena == ARENA_PASSAGE) {
         Vector2 in;
         float d = PassageInside(x, z, &in);
@@ -363,6 +496,12 @@ float World::OutOfBounds(float x, float z, Vector2* home) const {
 }
 
 std::vector<Harbour> MakeHarbours(uint32_t seed, uint8_t arena) {
+    if (arena == ARENA_WORLD) {
+        std::vector<Rock> r;
+        std::vector<Harbour> h;
+        MakeWorld(seed, r, h);
+        return h;
+    }
     if (arena == ARENA_PASSAGE) {
         std::vector<Rock> r;
         std::vector<Harbour> h;
@@ -878,6 +1017,12 @@ std::vector<unsigned char> MakeShoreDamp(const std::vector<Rock>& rocks, bool vo
 
 std::vector<Rock> MakeRocks(uint32_t seed, uint8_t arena) {
     if (RaceArena(arena)) return MakeStraitRocks(seed, arena);
+    if (arena == ARENA_WORLD) {
+        std::vector<Rock> r;
+        std::vector<Harbour> h;
+        MakeWorld(seed, r, h);
+        return r;
+    }
     if (arena == ARENA_PASSAGE) {
         std::vector<Rock> r;
         std::vector<Harbour> h;
@@ -977,8 +1122,71 @@ float RockHeight(const Rock& k, float x, float z) {
     return fmaxf(-50.0f, -(d - c) * (k.stack ? 3.0f : 1.0f));  // seabed slope
 }
 
+// A big sea has hundreds of islands: a grid of which rocks reach each cell, built the first time it's asked
+// (per thread: the server's world and the client's are different lists)
+namespace {
+struct RockGrid {
+    const Rock* data = nullptr;
+    size_t n = 0;
+    uint32_t s0 = 0, s1 = 0;
+    float x0 = 0, z0 = 0, cell = 400.0f;
+    int nx = 0, nz = 0;
+    std::vector<uint32_t> start;  // nx * nz + 1
+    std::vector<uint32_t> idx;
+};
+thread_local RockGrid tGrid[4];
+thread_local int tGridNext = 0;
+const RockGrid* GridFor(const std::vector<Rock>& rocks) {
+    if (rocks.size() < 300) return nullptr;
+    for (const RockGrid& g : tGrid)
+        if (g.data == rocks.data() && g.n == rocks.size() && g.s0 == rocks.front().seed && g.s1 == rocks.back().seed) return &g;
+    RockGrid& g = tGrid[tGridNext++ % 4];
+    g.data = rocks.data();
+    g.n = rocks.size();
+    g.s0 = rocks.front().seed;
+    g.s1 = rocks.back().seed;
+    float x0 = 1e9f, z0 = 1e9f, x1 = -1e9f, z1 = -1e9f;
+    for (const Rock& k : rocks) {
+        const float l = k.r * 1.25f + 50.0f;
+        x0 = fminf(x0, k.x - l); z0 = fminf(z0, k.z - l); x1 = fmaxf(x1, k.x + l); z1 = fmaxf(z1, k.z + l);
+    }
+    g.x0 = x0; g.z0 = z0;
+    g.nx = std::max(1, (int)ceilf((x1 - x0) / g.cell));
+    g.nz = std::max(1, (int)ceilf((z1 - z0) / g.cell));
+    std::vector<std::vector<uint32_t>> cells((size_t)g.nx * g.nz);
+    for (uint32_t i = 0; i < rocks.size(); ++i) {
+        const Rock& k = rocks[i];
+        const float l = k.r * 1.25f + 50.0f;
+        const int i0 = std::max(0, (int)((k.x - l - x0) / g.cell)), i1 = std::min(g.nx - 1, (int)((k.x + l - x0) / g.cell));
+        const int j0 = std::max(0, (int)((k.z - l - z0) / g.cell)), j1 = std::min(g.nz - 1, (int)((k.z + l - z0) / g.cell));
+        for (int j = j0; j <= j1; ++j)
+            for (int ii = i0; ii <= i1; ++ii) cells[(size_t)j * g.nx + ii].push_back(i);
+    }
+    g.start.assign(cells.size() + 1, 0);
+    g.idx.clear();
+    for (size_t c = 0; c < cells.size(); ++c) {
+        g.start[c] = (uint32_t)g.idx.size();
+        g.idx.insert(g.idx.end(), cells[c].begin(), cells[c].end());
+    }
+    g.start[cells.size()] = (uint32_t)g.idx.size();
+    return &g;
+}
+}  // namespace
+
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z) {
     float best = -1e9f;
+    if (const RockGrid* g = GridFor(rocks)) {
+        const int i = (int)floorf((x - g->x0) / g->cell), j = (int)floorf((z - g->z0) / g->cell);
+        if (i < 0 || j < 0 || i >= g->nx || j >= g->nz) return best;
+        const size_t c = (size_t)j * g->nx + i;
+        for (uint32_t u = g->start[c]; u < g->start[c + 1]; ++u) {
+            const Rock& k = rocks[g->idx[u]];
+            float dx = x - k.x, dz = z - k.z, lim = k.r * 1.25f + 50.0f;
+            if (dx * dx + dz * dz > lim * lim) continue;
+            best = fmaxf(best, RockHeight(k, x, z));
+        }
+        return best;
+    }
     for (const Rock& k : rocks) {
         float dx = x - k.x, dz = z - k.z, lim = k.r * 1.25f + 50.0f;
         if (dx * dx + dz * dz > lim * lim) continue;
@@ -1252,7 +1460,10 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
         arena = ARENA_PASSAGE;  // (the voyage has its own sea)
     } else if (mode_ == MODE_BOSS) {
         arena = ARENA_ISLES;  // (the Leviathan circles the bay)
-    } else if (arena >= ARENA_COUNT || RaceArena(arena) || arena == ARENA_PASSAGE) {
+    } else if (mode_ == MODE_CAMPAIGN) {
+        arena = ARENA_WORLD;  // (the whole sea)
+        rounds = false;       // (a career, not a match)
+    } else if (arena >= ARENA_COUNT || RaceArena(arena) || arena == ARENA_PASSAGE || arena == ARENA_WORLD) {
         arena = ARENA_ISLES;  // ...and nothing else is
     }
     timeOfDay = timeOfDay_;
@@ -1285,6 +1496,15 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     } else if (roundLength == tune::raceLength || roundLength == tune::voyageLength || roundLength == tune::bossLength) {
         roundLength = matchClock = tune::matchLength;  // (a world reused after a race)
     }
+    campGold = campaign::startGold;
+    campDocked = -1;
+    campLastPort = (int8_t)campaign::homePort;
+    campSeen = (uint16_t)(1u << campaign::homePort);
+    campClock = 0.0f;
+    campSpawn = 75.0f;
+    campWantFast = campFast = false;
+    campSunk = 0;
+    campSaveDue = false;
     voyageClock = 0.0f;
     voyageSpawn = 0.0f;  // (the first band as soon as the grace is up)
     voyageWait = 0.0f;
@@ -1337,7 +1557,11 @@ void World::BuildArena() {
     }
     route.clear();
     havenS = 0.0f;
-    if (arena == ARENA_PASSAGE) {  // the voyage: a far bigger sea, so a bigger grid; and the sea lane through it
+    if (arena == ARENA_WORLD) {  // the campaign: the whole sea
+        const int n = 2048;
+        const float ext = campaign::half + 600.0f;
+        ocean.SetDamp(MakeShoreDamp(rocks, false, tune::shoreCalmDist, n, ext), n, ext);
+    } else if (arena == ARENA_PASSAGE) {  // the voyage: a far bigger sea, so a bigger grid; and the sea lane through it
         const int n = 1024;
         const float ext = voyage::passageB + 500.0f;
         ocean.SetDamp(MakeShoreDamp(rocks, false, tune::shoreCalmDist, n, ext), n, ext);
@@ -1398,8 +1622,8 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
             ships[i].team = 0;  // (the convoy; the pirates come later, see UpdateVoyage)
         }
         if (mode == MODE_RAID) ships[i].team = 1;  // (everyone sails with the pirates; the convoy is the server's, SpawnConvoy)
-        if (mode == MODE_BOSS) {
-            ships[i].team = 0;  // (all of us against the Leviathan)
+        if (mode == MODE_BOSS || mode == MODE_CAMPAIGN) {
+            ships[i].team = 0;  // (all of us against the Leviathan; the campaign: the captain and his fleet against the pirates)
         }
         if (odyssey && getenv("BS_ODPERKS")) {  // (tests, screenshots: this many of the upgrades that change how you fight)
             const int n = atoi(getenv("BS_ODPERKS"));
@@ -1419,8 +1643,20 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
                 PerkOffers(odSeed, k, i, ships[i].perks, offer);
                 if (offer[0] != 255) ships[i].perks[offer[0]]++;
             }
+        if (mode == MODE_CAMPAIGN && !bot && campLoadCls >= 0 && campLoadCls < SC_PLAYABLE) ships[i].nextCls = (uint8_t)campLoadCls;  // (the save's ship)
         ships[i].maxHp = MaxHpOf(ships[i]);
         Respawn(ships[i]);
+        if (mode == MODE_CAMPAIGN && !bot) {
+            ships[i].hp = ships[i].maxHp * Clamp(campLoadHull, 0.15f, 1.0f);  // (as she was left)
+            campLoadHull = 1.0f;
+            if (const char* at = getenv("BS_CAMPAT")) {  // (tests, screenshots: start out at sea here, "x,z")
+                float x = 0.0f, z = 0.0f;
+                if (sscanf(at, "%f,%f", &x, &z) == 2) {
+                    ships[i].pos = {x, ocean.Height(x, z) + 1.0f, z};
+                    ships[i].rot = QuaternionFromAxisAngle({0, 1, 0}, getenv("BS_CAMPHEAD") ? (float)atof(getenv("BS_CAMPHEAD")) : 0.0f);
+                }
+            }
+        }
         if (fleets) SpawnFleet(ships[i]);
         return i;
     }
@@ -1464,6 +1700,11 @@ void World::Respawn(Ship& s) {
     if (mode == MODE_RAID && !s.merchant && !route.empty()) {  // a pirate: lying in wait, or back within reach of the convoy
         s.team = 1;
         PlaceNearConvoy(s);
+        voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
+    }
+    if (mode == MODE_CAMPAIGN && !s.raider) {  // the campaign: back in the last port put into
+        s.team = 0;
+        PlaceInHarbour(s, campLastPort, 0);
         voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
     }
     float ang = RandF() * 2 * PI;
@@ -1668,6 +1909,16 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (mode == MODE_TEAMS && ships[killer].team >= 0) teamScore[ships[killer].team]++;
         }
         if (mode == MODE_RAID && v.merchant) teamScore[1]++;  // a prize sunk
+        if (mode == MODE_CAMPAIGN) {
+            if (v.raider && (byEnemy || (killer >= 0 && !ships[killer].raider))) {  // a pirate sunk: the bounty on her
+                campGold += campaign::Bounty(v.cls);
+                campSunk++;
+            }
+            if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
+                campGold -= (int32_t)(campGold * campaign::lossOnSinking);
+                campSaveDue = true;
+            }
+        }
         // one of us (boss mode, the voyage's convoy): disabled, afloat, until a friend comes alongside
         const bool down = (mode == MODE_BOSS || mode == MODE_VOYAGE) && v.team == 0 && v.leader < 0 && !v.raider;
         if (down) {
@@ -2108,6 +2359,7 @@ void World::StepShip(Ship& s, float dt) {
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
+        if (campFast && !s.raider && s.team == 0) top *= campaign::fastSail;  // (the campaign: fast-sail, the captain and her fleet)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
         if (s.chainT > 0.0f) top *= 0.65f;  // (Chain Shot: her rigging in tatters)
         if (s.formation >= 0) top *= 1.3f;  // (the Armada's line: getting between us and the Admiral)
@@ -2803,7 +3055,7 @@ void World::BotThink(Ship& s, float dt) {
         float gr = sqrtf(goal.x * goal.x + goal.z * goal.z);
         // escorts may go a little further out than their captain, but an outer slot among the rocks is pulled inside
         wallLimit = Clamp(sqrtf(cap->pos.x * cap->pos.x + cap->pos.z * cap->pos.z) + 20.0f, 600.0f, 650.0f);
-        if (gr > wallLimit && arena != ARENA_PASSAGE) goal = Vector3Scale(goal, wallLimit / gr);
+        if (gr > wallLimit && !BigSea()) goal = Vector3Scale(goal, wallLimit / gr);
         // the captain going into a harbour: follow him in line astern down the middle of the mouth
         // (abreast, the outer slots are among the stacks either side of it). Measured as if the harbour sat 730 m
         // out from the middle of the Isles, whichever sea it's on.
@@ -3109,6 +3361,8 @@ void World::BotThink(Ship& s, float dt) {
     } else if (!cap && arena == ARENA_PASSAGE && !route.empty()) {  // nothing to chase: back to the sea lane, northward
         Vector2 p = RouteAt(RouteS(s.pos.x, s.pos.z) + 250.0f);
         desired = atan2f(p.x - s.pos.x, p.y - s.pos.z);
+    } else if (!cap && arena == ARENA_WORLD) {  // the campaign: nothing to chase, hold the course
+        desired = heading;
     } else if (!cap) {
         float wide = arena == ARENA_MAELSTROM && s.pos.x * s.pos.x + s.pos.z * s.pos.z < 300.0f * 300.0f ? 1.9f : 1.2f;  // (out of the deep part)
         desired = atan2f(-s.pos.x, -s.pos.z) + wide;  // circle the arena
@@ -3235,8 +3489,18 @@ void World::BotThink(Ship& s, float dt) {
     float home = atan2f(-s.pos.x, -s.pos.z);
     // (escorts always have a goal, their slot, but only a captain heading for a harbour may go near the wall)
     bool harbourRun = haveGoal && !cap;
-    const bool inStrait = RaceArena(arena) || arena == ARENA_PASSAGE;  // (no ring to keep inside, just the rocks ahead)
+    const bool inStrait = RaceArena(arena) || BigSea();  // (no ring to keep inside, just the rocks ahead)
     float k = inStrait ? 0.0f : Clamp((dc - (harbourRun ? 760.0f : wallLimit)) / 100.0f, 0.0f, 1.0f);
+    if (arena == ARENA_WORLD && s.raider) {  // the campaign's pirates keep clear of the ports' forts (in port, a ship is safe)
+        for (const Harbour& hb : harbours) {
+            const float dh = Vector2Distance({hb.x, hb.z}, {s.pos.x, s.pos.z});
+            const float kh = Clamp((campaign::portSafe * 0.55f + 150.0f - dh) / 200.0f, 0.0f, 1.0f);
+            if (kh > k) {
+                k = kh;
+                home = atan2f(s.pos.x - hb.x, s.pos.z - hb.z);
+            }
+        }
+    }
     if (arena == ARENA_PASSAGE) {  // the voyage's sea: keep off the coast (unless bound for a harbour in it)
         Vector2 in;
         float pd = PassageInside(s.pos.x, s.pos.z, &in);
@@ -3257,7 +3521,7 @@ void World::BotThink(Ship& s, float dt) {
     Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
     Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
     bool rockAhead = RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f;
-    if (arena == ARENA_PASSAGE && !rockAhead && !(harbourRun && goalDist < 200.0f)) {
+    if (BigSea() && !rockAhead && !(harbourRun && goalDist < 200.0f)) {
         // the voyage's islands come up fast at full speed: look further ahead the faster we go (and along the way we're
         // actually moving, which a broadside turn swings away from the bow)
         const float spd = Vector2Length({s.vel.x, s.vel.z}), L = Clamp(spd * 4.5f, 90.0f, 170.0f);
@@ -3831,6 +4095,7 @@ void World::DropTreasure(Ship& v) {
 }
 
 void World::UpdateHarbours(float dt) {
+    if (mode == MODE_CAMPAIGN) return;  // (the campaign's ports: their own services, CampaignAct)
     for (Ship& s : ships) {
         s.harbourCd = fmaxf(0.0f, s.harbourCd - dt);
         if (!s.active || !s.alive || s.stowed) { s.bankTimer = 0; s.harbourWork = false; continue; }
@@ -4080,12 +4345,177 @@ void World::Step() {
     if (mode == MODE_PIRATE && matchState == 0) UpdateChests(dt);
     if (mode == MODE_RACE && matchState == 0) UpdateRace(dt);
     if (mode == MODE_VOYAGE && matchState == 0) UpdateVoyage(dt);
+    if (mode == MODE_CAMPAIGN) UpdateCampaign(dt);
     if (mode == MODE_RAID && matchState == 0) UpdateRaid(dt);
     if (mode == MODE_BOSS && matchState == 0) UpdateBoss(dt);
     if ((mode == MODE_BOSS || mode == MODE_VOYAGE) && matchState == 0) UpdateRevives(dt);
     if (odyssey && matchState == 0) UpdatePerks(dt);
     if (Voyaging() && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
+}
+
+// ---- the campaign ----------------------------------------------------------------------------------
+namespace campaign {
+int Bounty(int cls) { return cls == SC_LINE ? 220 : cls == SC_FRIGATE ? 130 : 80; }
+float Danger(uint8_t b) {
+    static const float k[BIOMES] = {0.6f, 1.0f, 1.0f, 1.35f, 1.2f};
+    return b < BIOMES ? k[b] : 1.0f;
+}
+}  // namespace campaign
+
+int World::CampaignRepairCost(const Ship& s) const {
+    return (int)ceilf(fmaxf(0.0f, s.maxHp - s.hp) * campaign::repairPerHp);
+}
+
+bool World::CampaignAct(int shipId, int act) {
+    if (mode != MODE_CAMPAIGN || shipId < 0 || shipId >= ShipCount()) return false;
+    Ship& s = ships[shipId];
+    if (!s.active || s.isBot || s.leader >= 0) return false;
+    switch (act) {
+        case campaign::ACT_REPAIR: {  // the harbourmaster's yard: as much of her hull as the purse will run to
+            if (campDocked < 0 || !s.alive) return false;
+            const float missing = s.maxHp - s.hp;
+            if (missing <= 0.5f) return false;
+            const float afford = campGold / campaign::repairPerHp;
+            const float fix = fminf(missing, afford);
+            if (fix <= 0.5f) return false;
+            campGold -= (int32_t)ceilf(fix * campaign::repairPerHp);
+            campGold = std::max(campGold, 0);
+            s.hp = fminf(s.maxHp, s.hp + fix);
+            GameEvent ev{EventType::Repaired};
+            ev.a = s.id;
+            ev.pos = s.pos;
+            events.push_back(ev);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_FAST_ON: campWantFast = true; return true;
+        case campaign::ACT_FAST_OFF: campWantFast = false; return true;
+    }
+    return false;
+}
+
+// The campaign: the captain putting into port and leaving it, fast-sail, and the pirates - found in bands out of sight
+// round her, thicker in the wilder regions, never near a port, chasing her down, and giving up when she's left them far
+// behind
+void World::UpdateCampaign(float dt) {
+    using namespace campaign;
+    campClock += dt;
+    Ship* cap = nullptr;
+    for (Ship& s : ships)
+        if (s.active && (!s.isBot || (campBotCaptain && !s.raider)) && s.leader < 0) { cap = &s; break; }
+    if (!cap) return;
+    if (cap->cls < SC_PLAYABLE) campLoadCls = cap->cls;  // (her ship and hull as they are, for the save: she may be gone when it's written)
+    campLoadHull = cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f;
+    // in port: lying slowly within reach of a harbour's anchorage
+    const float spd = Vector2Length({cap->vel.x, cap->vel.z});
+    int near = -1;
+    for (int h = 0; h < (int)harbours.size(); ++h)
+        if (Vector2Distance({harbours[h].x, harbours[h].z}, {cap->pos.x, cap->pos.z}) < (campDocked == h ? dockRadius * 1.6f : dockRadius)) near = h;
+    if (campDocked >= 0 && (near != campDocked || !cap->alive)) campDocked = -1;  // (sailed out)
+    if (campDocked < 0 && near >= 0 && cap->alive && spd < 5.0f) {
+        campDocked = (int8_t)near;
+        campLastPort = (int8_t)near;
+        campSeen |= (uint16_t)(1u << near);
+        campSaveDue = true;
+        GameEvent ev{EventType::Repaired};  // (the clients hear her come in: a bell)
+        ev.a = cap->id;
+        ev.b = 2;
+        ev.pos = cap->pos;
+        events.push_back(ev);
+    }
+    // the pirates: driven on while far from her, and gone if they've lost her for good
+    float nearFoe = 1e9f;
+    int pirates = 0;
+    bool gone = false;
+    for (Ship& p : ships) {
+        if (!p.active || !p.raider) continue;
+        ++pirates;
+        if (!p.alive) continue;
+        const float nd = cap->alive ? Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}) : 1e9f;
+        nearFoe = fminf(nearFoe, nd);
+        p.catchUp = 0.05f + Clamp((nd - 120.0f) / 400.0f, 0.0f, 1.0f) * 0.45f;
+        p.raiderIdle = (nd > 3200.0f || campDocked >= 0) ? p.raiderIdle + dt : 0.0f;
+        if (p.raiderIdle > 20.0f) {
+            RemoveShip(p.id);
+            gone = true;
+        }
+    }
+    campFast = campWantFast && cap->alive && campDocked < 0 && nearFoe > fastClear;
+    // a new band, now and then, out of sight round her (not in port, not near one)
+    const uint8_t biome = BiomeAt(cap->pos.x, cap->pos.z);
+    campSpawn -= dt * Danger(biome) * (campFast ? 1.6f : 1.0f);  // (making way fast, she meets more of them)
+    if (gone) campSpawn = fmaxf(campSpawn, 1.0f);
+    if (campSpawn > 0.0f || !cap->alive || campDocked >= 0 || pirates >= 4) return;
+    campSpawn = 70.0f + RandF() * 80.0f;
+    float portD = 1e9f;
+    for (const Harbour& hb : harbours) portD = fminf(portD, Vector2Distance({hb.x, hb.z}, {cap->pos.x, cap->pos.z}));
+    if (portD < portSafe) return;  // (her port's forts: try again later)
+    const float danger = Danger(biome);
+    const int band = 1 + (RandF() < 0.35f * danger ? 1 : 0) + (RandF() < 0.12f * danger ? 1 : 0);
+    const float base = RandF() * 2.0f * PI;
+    for (int k = 0; k < band && pirates < 4; ++k) {
+        for (int tries = 0; tries < 16; ++tries) {
+            const float a = base + (k - 0.5f * (band - 1)) * 0.35f + (RandF() - 0.5f) * 0.3f, d = 1150.0f + RandF() * 350.0f;
+            const Vector2 at = {cap->pos.x + sinf(a) * d, cap->pos.z + cosf(a) * d};
+            if (fabsf(at.x) > edge - 300.0f || fabsf(at.y) > edge - 300.0f || RocksHeight(rocks, at.x, at.y) > -25.0f) continue;
+            bool nearPort = false;
+            for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, at) < portSafe;
+            if (nearPort) continue;
+            const float u = RandF() + (danger - 1.0f) * 0.6f;
+            const int cls = u < 0.45f ? SC_CUTTER : u < 0.9f ? SC_FRIGATE : SC_LINE;
+            SpawnRaider(at, atan2f(cap->pos.x - at.x, cap->pos.z - at.y), cls);
+            ++pirates;
+            break;
+        }
+    }
+}
+
+// The save: a few lines of text beside the game
+bool World::SaveCampaign() const {
+    if (campSavePath.empty() || mode != MODE_CAMPAIGN) return false;
+    const Ship* cap = nullptr;
+    for (const Ship& s : ships)
+        if (s.active && !s.isBot && s.leader < 0) { cap = &s; break; }
+    FILE* f = fopen(campSavePath.c_str(), "wb");
+    if (!f) return false;
+    fprintf(f, "broadside_campaign 1\nseed %u\ngold %d\nport %d\nseen %u\nclock %.1f\nsunk %d\n", seedUsed, (int)campGold, (int)campLastPort,
+            (unsigned)campSeen, campClock, campSunk);
+    if (cap) fprintf(f, "class %d\nhull %.2f\n", (int)cap->cls, cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f);
+    else if (campLoadCls >= 0) fprintf(f, "class %d\nhull %.2f\n", campLoadCls, campLoadHull);  // (she's left the sea already: as she was last)
+    fclose(f);
+    return true;
+}
+
+bool World::CampaignSeed(const std::string& path, uint32_t& seed) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char key[64];
+    unsigned v = 0;
+    bool ok = false;
+    while (fscanf(f, "%63s", key) == 1) {
+        if (!strcmp(key, "seed") && fscanf(f, "%u", &v) == 1) { seed = v; ok = true; break; }
+    }
+    fclose(f);
+    return ok;
+}
+
+bool World::LoadCampaign() {
+    if (campSavePath.empty()) return false;
+    FILE* f = fopen(campSavePath.c_str(), "rb");
+    if (!f) return false;
+    char key[64];
+    while (fscanf(f, "%63s", key) == 1) {
+        if (!strcmp(key, "gold")) { int v; if (fscanf(f, "%d", &v) == 1) campGold = v; }
+        else if (!strcmp(key, "port")) { int v; if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < campaign::kPorts) campLastPort = (int8_t)v; }
+        else if (!strcmp(key, "seen")) { unsigned v; if (fscanf(f, "%u", &v) == 1) campSeen = (uint16_t)v; }
+        else if (!strcmp(key, "clock")) { float v; if (fscanf(f, "%f", &v) == 1) campClock = v; }
+        else if (!strcmp(key, "sunk")) { int v; if (fscanf(f, "%d", &v) == 1) campSunk = v; }
+        else if (!strcmp(key, "class")) { int v; if (fscanf(f, "%d", &v) == 1) campLoadCls = v; }
+        else if (!strcmp(key, "hull")) { float v; if (fscanf(f, "%f", &v) == 1) campLoadHull = v; }
+    }
+    fclose(f);
+    return true;
 }
 
 // ---- race -------------------------------------------------------------------------

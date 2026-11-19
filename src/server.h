@@ -15,6 +15,9 @@ public:
                bool friendlyFire = true, int difficulty = voyage::NORMAL, int boss = BOSS_RANDOM);
     void Stop();
     bool Running() const { return running; }
+    // the campaign: where its save lives, and whether to carry on from it (else a new one, overwriting it)
+    std::string campaignSave;
+    bool campaignContinue = false;
     ~GameServer() { Stop(); }
 
 private:

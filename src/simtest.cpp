@@ -908,7 +908,90 @@ static int BossTest() {
     return 0;
 }
 
+// The campaign: the sea it makes (how long, how many islands, the ports and their approaches, the regions), how long a
+// tick takes on it, and a captain (a bot standing in) out among the pirates: in port, the bands found, the fights, the
+// bounties
+static int CampaignTest() {
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    double t0 = GetTimeNow();
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    const double gen = GetTimeNow() - t0;
+    int perBiome[campaign::BIOMES] = {}, stacks = 0;
+    for (const Rock& k : g.rocks) {
+        perBiome[k.biome < campaign::BIOMES ? k.biome : 0]++;
+        stacks += k.stack;
+    }
+    printf("campaign sea (seed %u): %.2f s to make, %zu rocks (%d stacks), %zu ports\n", seed, gen, g.rocks.size(), stacks, g.harbours.size());
+    for (int b = 0; b < campaign::BIOMES; ++b) printf("   %-20s %d rocks\n", campaign::kBiomeNames[b], perBiome[b]);
+    int problems = 0;
+    for (int h = 0; h < (int)g.harbours.size(); ++h) {
+        const Harbour& hb = g.harbours[h];
+        const float here = RocksHeight(g.rocks, hb.x, hb.z);
+        float coast = -1.0f;  // the pier: from the anchorage in along its bearing until we're on the island
+        for (float r = 10.0f; r < 190.0f; r += 2.0f)
+            if (RocksHeight(g.rocks, hb.x + cosf(hb.ang) * r, hb.z + sinf(hb.ang) * r) > 1.5f) { coast = r; break; }
+        int blocked = 0;  // the approach: open water out from the anchorage, away from the island
+        for (int a = -2; a <= 2; ++a)
+            for (float r = 60.0f; r <= 500.0f; r += 40.0f) {
+                const float ang = hb.ang + PI + a * 0.35f;
+                if (RocksHeight(g.rocks, hb.x + cosf(ang) * r, hb.z + sinf(ang) * r) > -8.0f) { ++blocked; break; }
+            }
+        const bool bad = here > -15.0f || coast < 0.0f || blocked > 1 || campaign::BiomeAt(hb.x, hb.z) != campaign::PortBiome(h);
+        problems += bad;
+        printf("   %-13s %-20s at (%6.0f, %6.0f): depth %.0f m, pier %.0f m, %d of 5 approaches blocked%s\n", campaign::PortName(h),
+               campaign::kBiomeNames[campaign::PortBiome(h)], hb.x, hb.z, here, coast, blocked, bad ? "   <-- PROBLEM" : "");
+    }
+    // a captain: first in the home port, then out in the Ember Reach
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    Ship& c = g.ships[me];
+    printf("captain starts %.0f m from %s\n", Vector2Distance({c.pos.x, c.pos.z}, {g.harbours[0].x, g.harbours[0].z}), campaign::PortName(0));
+    for (int i = 0; i < 60 * 8; ++i) {
+        c.input.sail = 0.0f;
+        c.vel = Vector3Scale(c.vel, 0.9f);
+        g.Step();
+    }
+    printf("   in port: %s (docked %d)\n", g.campDocked == 0 ? "yes" : "NO", g.campDocked);
+    problems += g.campDocked != 0;
+    // out to sea: the open water furthest out in the east
+    Vector2 out = {-7000.0f, 0.0f};
+    for (int tries = 0; tries < 200; ++tries) {
+        Vector2 p = {-6000.0f - tries * 15.0f, (tries % 20 - 10) * 120.0f};
+        if (RocksHeight(g.rocks, p.x, p.y) < -40.0f && campaign::BiomeAt(p.x, p.y) == campaign::EMBER) { out = p; break; }
+    }
+    c.pos = {out.x, g.ocean.Height(out.x, out.y) + 1.0f, out.y};
+    c.vel = {0, 0, 0};
+    const int gold0 = g.campGold;
+    int spawned = 0, hitsOnUs = 0, maxP = 0, sinkings = 0;
+    double sum = 0.0;
+    int ticks = 0;
+    const float secs = getenv("BS_CAMPSECS") ? (float)atof(getenv("BS_CAMPSECS")) : 600.0f;
+    for (int i = 0; i < (int)(secs * 60); ++i) {
+        const double a = GetTimeNow();
+        g.Step();
+        sum += GetTimeNow() - a;
+        ++ticks;
+        int p = 0;
+        for (const Ship& s : g.ships) p += s.active && s.raider;
+        maxP = std::max(maxP, p);
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::Respawn && e.flags == 1) ++spawned;
+            if (e.type == EventType::Hit && e.b == me) ++hitsOnUs;
+            if (e.type == EventType::Kill && e.b == me) ++sinkings;
+        }
+        g.events.clear();
+    }
+    printf("   %.0f s at sea in %s: %d pirates found her (at most %d at once), %d hits on her, sunk %d times; %d pirates sunk, gold %d -> %d\n", secs,
+           campaign::kBiomeNames[campaign::BiomeAt(out.x, out.y)], spawned, maxP, hitsOnUs, sinkings, g.campSunk, gold0, g.campGold);
+    printf("   tick avg %.2f ms\n", sum / ticks * 1000.0);
+    problems += spawned == 0;
+    printf("campaign: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_CAMPTEST")) return CampaignTest();
     if (getenv("BS_BOSSTEST")) return BossTest();
     if (getenv("BS_ODYSSEYTEST")) return OdysseyTest();
     if (getenv("BS_PERKTEST")) return PerkTest();
@@ -1711,7 +1794,7 @@ duels:
     const char* modeName[] = {"free-for-all", "teams", "pirate", "race"};
     // race: bots sprint down every course (dash and hooks on); everyone should finish, nobody should stall.
     // BS_RACECOURSE=2..5 just that course, BS_RACESEEDS=n seeds of each, BS_RACEMAP=dir writes a map of each (.ppm)
-    for (int course = ARENA_STRAIT; course < ARENA_COUNT; ++course) {
+    for (int course = ARENA_STRAIT; course <= ARENA_ZIGZAG; ++course) {
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != MODE_RACE) break;
         if (getenv("BS_RACECOURSE") && atoi(getenv("BS_RACECOURSE")) != course) continue;
         const uint32_t seeds = getenv("BS_RACESEEDS") ? (uint32_t)atoi(getenv("BS_RACESEEDS")) : 2u;
@@ -1817,7 +1900,7 @@ duels:
         }
     }
     for (int m = 0; m < MODE_COUNT; ++m) {
-        if (m == MODE_RACE || m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS) continue;  // (their own tests)
+        if (m == MODE_RACE || m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS || m == MODE_CAMPAIGN) continue;  // (their own tests)
         if (getenv("BS_ONLYMODE") && atoi(getenv("BS_ONLYMODE")) != m) continue;
         World g;
         g.rounds = false;

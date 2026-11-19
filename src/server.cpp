@@ -22,7 +22,13 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     for (int& p : peerCrew) p = -1;
     for (auto& l : peerLivery) l.clear();
     if (const char* e = getenv("BS_ROUNDLEN")) world.roundLength = (float)atof(e);  // testing: short rounds
+    if (mode == MODE_CAMPAIGN && campaignContinue) World::CampaignSeed(campaignSave, seed);  // (the same sea as before)
+    world.campSavePath = mode == MODE_CAMPAIGN ? campaignSave : std::string();
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets, (uint8_t)arena);
+    if (mode == MODE_CAMPAIGN) {
+        if (campaignContinue) world.LoadCampaign();
+        else world.SaveCampaign();  // (a new campaign: the old save goes)
+    }
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
     world.deckOnly = deckOnly;
     world.skills = skills || mode == MODE_RACE;  // (dash and hook are what a race is about)
@@ -48,6 +54,7 @@ void GameServer::Stop() {
     if (!running) return;
     running = false;
     if (thread.joinable()) thread.join();
+    if (world.Campaign()) world.SaveCampaign();  // (leaving the game: where she is now)
     net.Stop();
 }
 
@@ -158,6 +165,10 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         int id = peerShip[peer];
         uint8_t cls = r.Get<uint8_t>();
         if (id >= 0 && r.ok && cls < SC_PLAYABLE) world.ships[id].nextCls = (uint8_t)world.AllowedClass(cls);  // takes effect at the next respawn
+    } else if (type == MSG_CAMPAIGN) {  // the campaign: a port's service, fast-sail
+        int id = peerShip[peer];
+        uint8_t act = r.Get<uint8_t>();
+        if (id >= 0 && r.ok) world.CampaignAct(id, act);
     } else if (type == MSG_PICK_PERK) {  // the Odyssey: an upgrade, between rounds
         int id = peerShip[peer];
         uint8_t choice = r.Get<uint8_t>();
@@ -280,6 +291,10 @@ void GameServer::Run() {
         while (acc >= SIM_DT) {
             acc -= SIM_DT;
             world.Step();
+            if (world.campSaveDue) {  // (the campaign: into port, a sinking, a repair)
+                world.campSaveDue = false;
+                world.SaveCampaign();
+            }
             AnnounceShips();
             for (const GameEvent& ge : world.events) {
                 ByteWriter w;

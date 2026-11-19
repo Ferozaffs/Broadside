@@ -99,7 +99,7 @@ static void ParseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--mode") {
             std::string t = next("ffa");
-            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : t == "raid" ? MODE_RAID : t == "boss" ? MODE_BOSS : t == "odyssey" ? MODE_ODYSSEY : MODE_FFA;
+            o.mode = t == "teams" ? MODE_TEAMS : t == "pirate" ? MODE_PIRATE : t == "race" ? MODE_RACE : t == "voyage" ? MODE_VOYAGE : t == "raid" ? MODE_RAID : t == "boss" ? MODE_BOSS : t == "odyssey" ? MODE_ODYSSEY : t == "campaign" ? MODE_CAMPAIGN : MODE_FFA;
         } else if (a == "--fleets") o.fleets = true;
         else if (a == "--name") o.name = next("Captain");
         else if (a == "--demo") o.demo = true;
@@ -176,8 +176,8 @@ static const Color kPalette[8] = {{220, 50, 40, 255},  {40, 110, 230, 255}, {40,
 static const Color kSide[2] = {{215, 56, 44, 255}, {44, 112, 232, 255}};  // teams: red, blue
 static const Color kNavy = {44, 112, 232, 255}, kPirate = {34, 32, 36, 255}, kPirateText = {255, 196, 80, 255};
 static const char* const kOrderText[ORDER_COUNT] = {"MAN THE PORT GUNS!", "MAN THE STARBOARD GUNS!", "PATCH THE HOLES!"};
-static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss"};
-static const char* const kModeShort[MODE_COUNT] = {"FFA", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss"};
+static const char* const kModeNames[MODE_COUNT] = {"Free-for-all", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss", "Campaign"};
+static const char* const kModeShort[MODE_COUNT] = {"FFA", "Teams", "Pirate", "Race", "Voyage", "Raid", "Boss", "Campaign"};
 static bool CoopMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID || m == MODE_BOSS || m == MODE_ODYSSEY; }  // (the host picks a difficulty)  // (the menu's row of them)
 static bool PassageMode(int m) { return m == MODE_VOYAGE || m == MODE_RAID; }
 // a game mode on the host page: its name and a line about it (the chosen one gold)
@@ -371,6 +371,27 @@ public:
     int rallies = 0;                  // a small crew's rallies left
     bool odyssey = false;             // the Odyssey (from the snapshot): the run
     int odRound = 1, odLast = 0, odBest = 0, odReached = 0, odKind = 0, odWave = 0, odWaves = 0, voyageFrom = 0, voyageTo = 1;
+    // the campaign (from the snapshot), and what the client keeps about it
+    bool campaign = false;
+    int campGold = 0, campDocked = -1, campLastPort = 0, campSunk = 0;
+    uint16_t campSeen = 0;
+    float campClock = 0.0f;
+    bool campFast = false, campWantFast = false;
+    bool campGoldInit = false;
+    int campGoldDelta = 0;            // (a moment's "+130" by the purse)
+    double campGoldAt = -10.0;
+    int campBiome = -1;               // the region we're in, and when we came into it (its banner)
+    double campBiomeAt = -10.0;
+    bool chartOpen = false, portOpen = false;
+    bool campaignStart = false, campaignContinue = false;  // (the menu: StartSession hosts a campaign)
+    double campNewArmed = -10.0;      // (the menu: "new campaign" pressed once over a save; again to start over)
+    Texture2D chartTex{};
+    uint32_t chartKey = 0;
+    std::string CampaignSavePath() const { return std::string(GetApplicationDirectory()) + "campaign.sav"; }
+    void CampaignAct(int act);
+    void DrawCampaignHud(float W, float H);
+    void DrawChart(float W, float H);
+    void DrawPort(float W, float H);
     int legKey = -1;                 // the Odyssey leg whose sea lane the prediction world has
     bool odWon = false;
     uint32_t odSeed = 1;
@@ -628,7 +649,7 @@ private:
         const NetShip& s = view[id].s;
         if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
-        if (PassageMode(curMode)) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
+        if (PassageMode(curMode) || curMode == MODE_CAMPAIGN) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
         if (curMode == MODE_BOSS && s.cls == SC_IRON) return {50, 50, 56, 255};  // (the Ironclad: iron grey, its canvas furled)
         if (curMode == MODE_BOSS && bossView.hasBoss && bossView.bossKind == BOSS_STORM && id == bossView.bossShip) return {120, 60, 170, 255};  // (the Storm Caller)
@@ -645,7 +666,7 @@ private:
     Color TeamOf(int id) const {
         if (id >= 0 && id < NumShips() && curMode == MODE_PIRATE && IsCarrier(view[id].s.leader >= 0 ? view[id].s.leader : id)) return kPirateText;
         if (id >= 0 && id < NumShips() && PassageMode(curMode) && view[id].s.team == 1) return curMode == MODE_RAID ? kPirateText : kSide[0];  // (raid: they're us)
-        if (id >= 0 && id < NumShips() && curMode == MODE_BOSS && view[id].s.team == 1) return kSide[0];
+        if (id >= 0 && id < NumShips() && (curMode == MODE_BOSS || curMode == MODE_CAMPAIGN) && view[id].s.team == 1) return kSide[0];
         return ColorOf(id);
     }
     bool IsCarrier(int id) const { return id >= 0 && id < NumShips() && view[id].present && (view[id].s.flags & SF_PIRATE); }
@@ -657,7 +678,7 @@ private:
     bool IsEnemy(int id) const {
         if (myId < 0 || id == myId || id < 0 || id >= NumShips()) return false;
         const NetShip &a = view[myId].s, &b = view[id].s;
-        if (curMode != MODE_TEAMS && !PassageMode(curMode) && curMode != MODE_BOSS) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
+        if (curMode != MODE_TEAMS && !PassageMode(curMode) && curMode != MODE_BOSS && curMode != MODE_CAMPAIGN) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
     bool GhostHidden(int id) const {  // (the Dutchman, ethereal: no tag, no marker, nothing to aim at)
@@ -907,8 +928,14 @@ void Game::StartSession(bool host, int bots, bool open) {
         uint32_t seed = (uint32_t)time(nullptr) % 100000 + 1;
         if (const char* e = getenv("BS_HOSTSEED")) seed = (uint32_t)atoi(e);  // (testing: the same sea every time)
         int arena = PassageMode(modeSel) ? ARENA_PASSAGE : modeSel == MODE_BOSS || modeSel == MODE_ODYSSEY ? ARENA_ISLES : modeSel != MODE_RACE ? arenaSel : courseSel == 0 ? ARENA_RACE_ANY : ARENA_STRAIT + courseSel - 1;
-        if (!server.Start(opt.port, bots, seed, todSel, weatherSel, modeSel, fleetSel != 0, (uint8_t)allowSel, viewSel != 0, skillSel != 0,
-                          arena, handlingSel != 0, ffSel != 0, diffSel, bossSel)) {
+        server.campaignSave = CampaignSavePath();
+        server.campaignContinue = campaignContinue;
+        const bool camp = campaignStart || modeSel == MODE_CAMPAIGN;  // (the menu's buttons, or --mode campaign)
+        if (modeSel == MODE_CAMPAIGN && !campaignStart) server.campaignContinue = getenv("BS_CAMPCONTINUE") != nullptr;
+        campaignStart = false;
+        if (!server.Start(opt.port, camp ? 0 : bots, seed, camp ? 0 : todSel, camp ? 0 : weatherSel, camp ? MODE_CAMPAIGN : modeSel, camp ? false : fleetSel != 0,
+                          camp ? (uint8_t)SC_ALL : (uint8_t)allowSel, camp ? false : viewSel != 0, camp ? true : skillSel != 0, camp ? ARENA_WORLD : arena,
+                          handlingSel != 0, camp ? true : ffSel != 0, camp ? voyage::NORMAL : diffSel, bossSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
             mode = Mode::Menu;
             return;
@@ -935,6 +962,10 @@ void Game::StartSession(bool host, int bots, bool open) {
     fx.Clear();
     for (auto& h : hullHits) h.clear();
     feed.clear();
+    campaign = false;
+    campGoldInit = false;
+    campBiome = -1;
+    chartOpen = portOpen = false;
     floats.clear();
     for (auto& i : info) i = Info{};
     for (auto& v : view) { v.present = false; v.s = NetShip{}; }
@@ -1115,7 +1146,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
                 info[id] = {name, bot, true, leader};
                 view[id].s.leader = leader;
                 hullHits[id].clear();
-                if (!wasPresent && id != myId && leader < 0 && mode == Mode::Playing && !((PassageMode(curMode) || curMode == MODE_BOSS) && bot))  // (voyage: pirates are called out below; raid: the convoy; boss: it)
+                if (!wasPresent && id != myId && leader < 0 && mode == Mode::Playing && !((PassageMode(curMode) || curMode == MODE_BOSS || curMode == MODE_CAMPAIGN) && bot))  // (voyage: pirates are called out below; raid: the convoy; boss: it)
                     if (!bot) Feed3(name, "  sets sail", "", TeamOf(id), ui::kDim);  // (players only: the bots just appear)
             }
             break;
@@ -1123,7 +1154,7 @@ void Game::HandleMessage(const std::vector<uint8_t>& data) {
         case MSG_PLAYER_LEFT: {
             uint16_t id = r.Get<uint16_t>();
             if (id < NumShips()) {
-                if (info[id].leader < 0 && !((PassageMode(curMode) || curMode == MODE_BOSS) && info[id].bot)) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
+                if (info[id].leader < 0 && !((PassageMode(curMode) || curMode == MODE_BOSS || curMode == MODE_CAMPAIGN) && info[id].bot)) Feed3(NameOf(id), "  abandoned ship", "", TeamOf(id), ui::kDim);
                 info[id].present = false;
                 shipLivery[id].Clear();
             }
@@ -1207,6 +1238,22 @@ void Game::Interpolate() {
         odLast = sn.odLast;
         odBest = sn.odBest;
         odReached = sn.odReached;
+        campaign = sn.campaign;
+        if (campaign) {
+            if (campGoldInit && sn.campGold != campGold) {  // (a bounty, a repair: shown by the purse a moment)
+                campGoldDelta = (GetTime() - campGoldAt < 2.5 ? campGoldDelta : 0) + (sn.campGold - campGold);
+                campGoldAt = GetTime();
+            }
+            campGoldInit = true;
+            campGold = sn.campGold;
+            campDocked = sn.campDocked;
+            campLastPort = sn.campLastPort;
+            campSeen = sn.campSeen;
+            campClock = sn.campClock;
+            campFast = sn.campFast;
+            campWantFast = sn.campWantFast;
+            campSunk = sn.campSunk;
+        }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
         odWon = sn.odWon != 0;
@@ -1339,12 +1386,33 @@ void Game::Interpolate() {
 // ----------------------------------------------------------------------------
 void Game::UpdateInput(float dt) {
     static bool autoPause = getenv("BS_PAUSED") != nullptr;  // (screenshots: the pause menu)
+    static bool autoChart = getenv("BS_CHART") != nullptr, autoPort = getenv("BS_PORTSCREEN") != nullptr;  // (screenshots: the campaign's chart, a port)
+    if (campaign && autoChart && GetTime() - sessionStart > 6.0) { autoChart = false; chartOpen = true; }
+    if (campaign && autoPort && campDocked >= 0 && GetTime() - sessionStart > 6.0) { autoPort = false; portOpen = true; EnableCursor(); }
     if (autoPause && GetTime() - sessionStart > 4.0) { autoPause = false; paused = true; EnableCursor(); }
     if (IsKeyPressed(KEY_ESCAPE)) {
-        paused = !paused;
-        if (paused) EnableCursor();
-        else DisableCursor();
+        if (portOpen) { portOpen = false; DisableCursor(); }
+        else if (chartOpen) chartOpen = false;
+        else {
+            paused = !paused;
+            if (paused) EnableCursor();
+            else DisableCursor();
+        }
     }
+    if (campaign && !IsCrew() && !paused) {  // the campaign: the chart (Tab), fast-sail (F), ashore in port (E)
+        if (IsKeyPressed(KEY_TAB) && !portOpen) chartOpen = !chartOpen;
+        if (IsKeyPressed(KEY_F) && !portOpen) {
+            CampaignAct(campWantFast ? campaign::ACT_FAST_OFF : campaign::ACT_FAST_ON);
+            Feed(campWantFast ? "Fast-sail off  (F)" : "Fast-sail: when no enemy is near  (F)", ui::kDim);
+        }
+        if (IsKeyPressed(KEY_E) && campDocked >= 0) {
+            portOpen = !portOpen;
+            chartOpen = false;
+            if (portOpen) EnableCursor();
+            else DisableCursor();
+        }
+    }
+    if (portOpen && (campDocked < 0 || !campaign)) { portOpen = false; DisableCursor(); }  // (sailed out, or sunk)
     if (IsKeyPressed(KEY_F1)) {
         showHelp = !showHelp;
         helpPinned = true;
@@ -1368,7 +1436,7 @@ void Game::UpdateInput(float dt) {
     if (IsKeyPressed(KEY_F3)) showDebug = !showDebug;
 
     PlayerInput in;
-    bool active = !paused;
+    bool active = !paused && !portOpen;
     if (active && !opt.autopilot) {
         Vector2 md = GetMouseDelta();
         camYaw -= md.x * 0.0035f;
@@ -1395,7 +1463,7 @@ void Game::UpdateInput(float dt) {
                 w.Put((uint8_t)o);
                 Send(w.buf, true);
             }
-        if (curSkills && IsKeyPressed(KEY_E) && myId >= 0 && view[myId].present) {
+        if (curSkills && IsKeyPressed(KEY_E) && !(campaign && campDocked >= 0) && myId >= 0 && view[myId].present) {
             if (view[myId].s.hooked >= 0) { hookAim = NO_SHIP; hookSeq++; }  // cut the line
             else {
                 Vector3 dir = Vector3Normalize(Vector3Subtract(rv.target, rv.pos)), at;
@@ -3627,7 +3695,7 @@ void Game::PlayEvent(const GameEvent& e) {
             sfx::PlayFlat(sfx::Chime, 0.6f, 0.5f);
             break;
         case EventType::Respawn:
-            if (curMode == MODE_VOYAGE && (e.flags & 1) && GetTime() - lastSighting > 4.0) {  // pirates turning up (one call per band)
+            if ((curMode == MODE_VOYAGE || curMode == MODE_CAMPAIGN) && (e.flags & 1) && GetTime() - lastSighting > 4.0) {  // pirates turning up (one call per band)
                 lastSighting = GetTime();
                 // where, from our own deck: ahead, astern, off the port or starboard bow / quarter, abeam
                 Feed3("PIRATES SIGHTED", "  " + BearingFrom(e.pos), "", ui::kRed, ui::kText);
@@ -3847,7 +3915,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     // the captain's paint; in teams (and for the pirate) the sails still show whose side she's on
     const LiveryGpu* liv = id == -2 ? &yard.gpu : id == -3 ? (myLiveryGpu.on ? &myLiveryGpu : nullptr) : LiveryFor(id);  // (-3: ours, in the menu)
     bool teamSails = id >= 0 && (curMode == MODE_TEAMS || (curMode == MODE_PIRATE && ns && IsCarrier(ns->leader >= 0 ? ns->leader : id)) ||
-                                 ((PassageMode(curMode) || curMode == MODE_BOSS) && ns && ns->team == 1));  // (the voyage's pirates: black sails, whatever they're painted)
+                                 ((PassageMode(curMode) || curMode == MODE_BOSS || curMode == MODE_CAMPAIGN) && ns && ns->team == 1));  // (the voyage's pirates: black sails, whatever they're painted)
     if (shadowPass) {
         model.Draw(renderer, m, sail, team, 0.0f, hpFrac, alive, Vector3Distance(rv.pos, pos) / scale, phase, liv, teamSails);
         renderer.SetDamage(0.0f, nullptr, 0);
@@ -4214,15 +4282,15 @@ void Game::RenderWorld(float dt, bool menu) {
         scenery.BuildHarbours(menu ? menuWorld.harbours : pred.harbours, rocks);
         sceneryKey = key;
     }
-    Color flags[4];
-    for (int i = 0; i < 4; ++i) flags[i] = menu ? Color{232, 228, 216, 255} : HarbourColor(i);
+    Color flags[16];
+    for (int i = 0; i < 16; ++i) flags[i] = menu || i >= 4 ? Color{232, 228, 216, 255} : HarbourColor(i);
 
     // sun shadows: the arena (islands, harbours) once per match and time of day, ships round the focus every frame
     {
         renderer.atm = renderer.atm;  // (set by UpdateAtmosphere)
         Vector3 sd = renderer.atm.sunDir;
         Vector3 ac = {0, 0, 0};
-        if (!menu && curArena == ARENA_PASSAGE) ac = {roundf(rv.target.x / 1000.0f) * 1000.0f, 0.0f, roundf(rv.target.z / 1000.0f) * 1000.0f};
+        if (!menu && (curArena == ARENA_PASSAGE || curArena == ARENA_WORLD)) ac = {roundf(rv.target.x / 1000.0f) * 1000.0f, 0.0f, roundf(rv.target.z / 1000.0f) * 1000.0f};
         uint32_t sk = key * 2654435761u ^ (uint32_t)(int)(sd.x * 1000.0f) * 97u ^ (uint32_t)(int)(sd.y * 1000.0f) * 7919u ^
                       (uint32_t)(int)(sd.z * 1000.0f) ^ (uint32_t)(int)(ac.x * 0.001f + 64.0f) * 131u ^ (uint32_t)(int)(ac.z * 0.001f + 64.0f) * 524287u;
         if (sk != arenaShadowKey || !renderer.shadowsReady[1]) {
@@ -4685,12 +4753,13 @@ void Game::DrawHUD() {
     }
 
     // ---- harbours ----
-    for (int i = 0; i < 4 && myId >= 0; ++i) {
+    for (int i = 0; i < (curMode == MODE_CAMPAIGN ? 16 : 4) && myId >= 0; ++i) {
         const std::vector<Harbour>& hs = pred.harbours;
         if (i >= (int)hs.size()) break;
         Vector3 p = {hs[i].x, 12.0f, hs[i].z};
         float d = Vector3Distance(rv.pos, p);
         Vector2 sp;
+        if (curMode == MODE_CAMPAIGN && d > 4000.0f) continue;  // (the campaign: the ports in sight; the rest are on the chart)
         if (d < 120.0f || !rv.Project(p, sp) || sp.x < -20 || sp.y < -20 || sp.x > W + 20 || sp.y > H + 20) continue;
         int owner = HarbourOwner(curMode, i);
         int mySide = me ? me->team : -1;
@@ -4710,8 +4779,12 @@ void Game::DrawHUD() {
             c = i == voyage::endHarbour ? kRed : i == voyage::haven ? kGreen : kDim;
             what = i == voyage::endHarbour ? "THE CONVOY'S PORT" : i == voyage::haven ? "PIRATE COVE   \xC2\xB7   REPAIRS" : "THE CONVOY SAILS FROM";
         }
+        if (curMode == MODE_CAMPAIGN) {
+            c = (campSeen >> i) & 1 ? kGold : kText;
+            what = TextFormat("%s%s", TextToUpper(campaign::PortName(i)), i == campDocked ? "   \xC2\xB7   E: GO ASHORE" : "");
+        }
         std::string whatS = what;
-        if (friendly && me && !(curMode == MODE_PIRATE && i == cove)) {
+        if (friendly && me && curMode != MODE_CAMPAIGN && !(curMode == MODE_PIRATE && i == cove)) {
             if (curMode == MODE_BOSS) whatS = "HARBOUR   \xC2\xB7   NO REPAIRS";
             else if (me->harbourCd > 0.0f) whatS += TextFormat("   \xC2\xB7   REPAIRS IN %d:%02d", (int)me->harbourCd / 60, (int)me->harbourCd % 60);
         }
@@ -4719,7 +4792,7 @@ void Game::DrawHUD() {
         float a = Clamp(1.4f - d / 1400.0f, 0.45f, 1.0f);
         const bool goal = (PassageMode(curMode) && (i == voyageTo || i == voyage::endHarbour)) || (curMode == MODE_PIRATE && i == cove);
         if (goal) a = 1.0f;  // (the goal: always clear)
-        const bool words = goal || (d < 900.0f && curMode != MODE_BOSS);  // (far off, or with nothing to offer, just the anchor)
+        const bool words = goal || (d < (curMode == MODE_CAMPAIGN ? 2600.0f : 900.0f) && curMode != MODE_BOSS);  // (far off, or with nothing to offer, just the anchor)
         if (!words) a *= 0.7f;
         DrawCircleV(sp, 9.0f, A({0, 0, 0, 150}, a));
         DrawCircleLines((int)sp.x, (int)sp.y, 8.0f, A(c, a));
@@ -4948,7 +5021,8 @@ void Game::DrawHUD() {
     }
     // ---- round clock ----
     if (curMode == MODE_BOSS && matchState == 0) DrawBossBar(W);
-    if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
+    if (curMode == MODE_CAMPAIGN) DrawCampaignHud(W, H);
+    else if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
         int secs = (int)ceilf(matchClock);
         int lim = tune::scoreLimit[curMode < 3 ? curMode : 0];
         const char* goal = curMode == MODE_PIRATE ? TextFormat("FIRST TO %d TREASURE", lim)
@@ -5314,7 +5388,20 @@ void Game::DrawHUD() {
                               {"LMB", nullptr, "Fire your gun"}, {"RMB", nullptr, "Zoom"}, {"F", nullptr, "Patch a hole (hold)"},
                               {"M", nullptr, "Sound on / off"}, {"TAB", nullptr, "Scores"}, {"F1", nullptr, "Hide"}};
         const K* list = IsCrew() ? crewKeys : keys;
-        const int n = IsCrew() ? (int)(sizeof(crewKeys) / sizeof(crewKeys[0])) : (int)(sizeof(keys) / sizeof(keys[0]));
+        int nKeys = IsCrew() ? (int)(sizeof(crewKeys) / sizeof(crewKeys[0])) : (int)(sizeof(keys) / sizeof(keys[0]));
+        std::vector<K> campKeys;  // (the campaign's captain: the chart, fast-sail, going ashore; no crew or ship-choice keys)
+        if (campaign && !IsCrew()) {
+            for (const K& k : keys) {
+                if (!strcmp(k.what, "Scores")) campKeys.push_back({"TAB", nullptr, "The chart"});
+                else if (!strcmp(k.what, "Hook (skills)")) campKeys.push_back({"E", nullptr, "Go ashore / hook"});
+                else if (!strncmp(k.what, "Crew:", 5) || !strcmp(k.what, "Next ship")) continue;
+                else campKeys.push_back(k);
+            }
+            campKeys.insert(campKeys.begin() + 3, K{"F", nullptr, "Fast-sail"});
+            list = campKeys.data();
+            nKeys = (int)campKeys.size();
+        }
+        const int n = nKeys;
         float rowH = 26, pw = 230, ph = n * rowH + 20;
         Rectangle r = {W - 24 - pw, H - 24 - ph, pw, ph};
         Panel(r, A(kPanel, 0.8f));
@@ -5331,7 +5418,7 @@ void Game::DrawHUD() {
     }
 
     // ---- scoreboard ----
-    if (IsKeyDown(KEY_TAB) || opt.showScores) {
+    if ((IsKeyDown(KEY_TAB) || opt.showScores) && curMode != MODE_CAMPAIGN) {
         std::vector<int> order;
         const int side0 = curMode == MODE_TEAMS || curMode == MODE_VOYAGE || curMode == MODE_BOSS ? 0 : curMode == MODE_RAID ? 1 : -1, side1 = curMode == MODE_TEAMS ? 1 : side0;  // (voyage: the convoy; raid: the pirates)
         for (int side = side0; side <= side1; ++side)
@@ -5388,6 +5475,8 @@ void Game::DrawHUD() {
         }
     }
 
+    if (campaign && chartOpen) DrawChart(W, H);  // (over everything else on the HUD)
+    if (campaign && portOpen) DrawPort(W, H);
     if (matchState == 1) DrawResults(W, H);
     if (odyssey && matchState == 1) DrawPerkPicker(W, H);
     else if (me && crewId < 0 && ((!(me->flags & SF_ALIVE) && !me->downed) || matchState == 1)) {  // (disabled: she comes back as she is)
@@ -5484,7 +5573,27 @@ void Game::DrawMenu() {
         TextField({x, y + 24, fw, 50}, nameBuf, 0, focus, "CAPTAIN NAME");
         y += compact ? 90.0f : 104.0f;
         if (Button({x, y, fw, bh}, "Host a game", true)) menuPage = 1;
-        y += bh + gap + 6;
+        y += bh + gap;
+        {  // the campaign: carry on, or a new one (over a save: press twice)
+            const bool saved = FileExists(CampaignSavePath().c_str());
+            const float hw = (fw - gap) * 0.5f;
+            const bool armed = GetTime() - campNewArmed < 3.0;
+            if (Button({x, y, saved ? hw : fw, bh}, armed ? "Start over?" : saved ? "New campaign" : "Campaign  \xC2\xB7  a new career")) {
+                if (saved && !armed) campNewArmed = GetTime();
+                else {
+                    campNewArmed = -10.0;
+                    campaignStart = true;
+                    campaignContinue = false;
+                    StartSession(true, 0);
+                }
+            }
+            if (saved && Button({x + hw + gap, y, hw, bh}, "Continue campaign", true)) {
+                campaignStart = true;
+                campaignContinue = true;
+                StartSession(true, 0);
+            }
+            y += bh + gap + 6;
+        }
         const float jw = 128.0f;
         TextField({x, y + 24, fw - jw - 8, 50}, addrBuf, 1, focus, TextFormat("JOIN A GAME   \xC2\xB7   SERVER ADDRESS   \xC2\xB7   UDP %u", opt.port), 64);
         if (Button({x + fw - jw, y + 24, jw, 50}, "Join")) StartSession(false, 0);
@@ -7678,6 +7787,186 @@ void Game::DrawPerkPicker(float W, float H) {
                   r.x + 16, r.y + ch - 20, 10, have ? kDim : kGreen);
         }
         if (hot && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) PickPerkUi(k);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The campaign: the purse and the region at the top, the chart (Tab), a port's services (E)
+// ----------------------------------------------------------------------------
+static const char* const kBiomeLine[campaign::BIOMES] = {
+    "green islands and safe harbours",
+    "white sand, warm water, and pirates in every cove",
+    "grey water, ice-white crags, a cold light",
+    "black rock and ash; the mountains burn",
+    "the fog never lifts; ships sail here that shouldn't",
+};
+static std::string Thousands(int v) {  // 12,450
+    std::string s = std::to_string(v < 0 ? -v : v), o;
+    for (int i = 0; i < (int)s.size(); ++i) {
+        if (i && (s.size() - i) % 3 == 0) o += ',';
+        o += s[i];
+    }
+    return v < 0 ? "-" + o : o;
+}
+
+void Game::CampaignAct(int act) {
+    ByteWriter w;
+    w.Put(MSG_CAMPAIGN);
+    w.Put((uint8_t)act);
+    Send(w.buf, true);
+}
+
+void Game::DrawCampaignHud(float W, float H) {
+    using namespace ui;
+    const NetShip* me = myId >= 0 && myId < NumShips() && view[myId].present ? &view[myId].s : nullptr;
+    const Vector3 at = me ? me->pos : rv.pos;
+    const int b = campaign::BiomeAt(at.x, at.z);
+    if (b != campBiome) {  // into a new region: its name across the top a while
+        campBiome = b;
+        campBiomeAt = GetTime();
+    }
+    // the purse, the region, the day
+    const int day = (int)(campClock / campaign::dayLength) + 1;
+    const std::string line = TextFormat("%s GOLD   \xC2\xB7   %s   \xC2\xB7   DAY %d", Thousands(campGold).c_str(), TextToUpper(campaign::kBiomeNames[b]), day);
+    const Vector2 m = Measure(line.c_str(), 16, true);
+    Rectangle r = {W * 0.5f - m.x * 0.5f - 18, 6, m.x + 36, 28};
+    Panel(r, A(kPanel, 0.9f), 8);
+    Text(line.c_str(), W * 0.5f, r.y + 5, 16, kGold, true, Center);
+    if (GetTime() - campGoldAt < 2.5 && campGoldDelta != 0) {  // a bounty paid, a bill
+        const float k = (float)(GetTime() - campGoldAt) / 2.5f;
+        Text(TextFormat("%s%s", campGoldDelta > 0 ? "+" : "", Thousands(campGoldDelta).c_str()), r.x - 12, r.y + 3 - k * 8.0f, 20,
+             A(campGoldDelta > 0 ? kGold : kRed, 1.0f - k * k), true, Right);
+    }
+    // fast-sail, and what the captain can do here
+    std::string sub;
+    Color sc = kDim;
+    if (campDocked >= 0) { sub = TextFormat("IN PORT AT %s   \xC2\xB7   E: GO ASHORE", TextToUpper(campaign::PortName(campDocked))); sc = kGold; }
+    else if (campFast) { sub = "FAST-SAIL   \xC2\xB7   F: OFF"; sc = kGreen; }
+    else if (campWantFast) { sub = "FAST-SAIL: ENEMY NEAR"; sc = kRed; }
+    else sub = "TAB: THE CHART   \xC2\xB7   F: FAST-SAIL";
+    const Vector2 ms = Measure(sub.c_str(), 13, true);
+    Panel({W * 0.5f - ms.x * 0.5f - 12, r.y + r.height + 4, ms.x + 24, 20}, A(kPanel, 0.75f), 6);
+    Text(sub.c_str(), W * 0.5f, r.y + r.height + 6, 13, sc, true, Center);
+    // the region's name, coming into it
+    const float bt = (float)(GetTime() - campBiomeAt);
+    if (bt < 6.0f && !chartOpen && !portOpen) {
+        const float a = Clamp(bt / 0.8f, 0.0f, 1.0f) * Clamp((6.0f - bt) / 1.5f, 0.0f, 1.0f);
+        Text(TextToUpper(campaign::kBiomeNames[b]), W * 0.5f, H * 0.17f, 44, A(kText, a), true, Center);
+        Text(kBiomeLine[b], W * 0.5f, H * 0.17f + 52, 18, A(kText, a * 0.8f), false, Center);
+    }
+}
+
+void Game::DrawChart(float W, float H) {
+    using namespace ui;
+    using namespace campaign;
+    if (pred.arena != ARENA_WORLD || pred.rocks.empty()) return;
+    const uint32_t key = (uint32_t)pred.rocks.size() * 2654435761u ^ pred.rocks.front().seed;
+    const int N = 512;
+    if (!chartTex.id || key != chartKey) {  // the chart itself: the regions' waters and the land in them, once a sea
+        static const Color kSea[BIOMES] = {{26, 62, 82, 255}, {22, 88, 102, 255}, {52, 66, 80, 255}, {48, 40, 42, 255}, {36, 48, 52, 255}};
+        static const Color kLand[BIOMES] = {{104, 128, 74, 255}, {222, 204, 150, 255}, {226, 230, 236, 255}, {58, 48, 46, 255}, {82, 94, 74, 255}};
+        Image img = GenImageColor(N, N, BLACK);
+        Color* px = (Color*)img.data;
+        for (int j = 0; j < N; ++j)
+            for (int i = 0; i < N; ++i) {
+                const float x = half * (1.0f - 2.0f * (i + 0.5f) / N), z = half * (1.0f - 2.0f * (j + 0.5f) / N);
+                const int bb = BiomeAt(x, z);
+                const float h = RocksHeight(pred.rocks, x, z);
+                Color c = kSea[bb];
+                if (h > 0.0f) {
+                    const float k = Clamp(h / 120.0f, 0.0f, 1.0f);
+                    c = ColorLerp(kLand[bb], ColorBrightness(kLand[bb], 0.25f), k);
+                } else if (h > -12.0f) c = ColorLerp(c, {150, 170, 170, 255}, 0.35f);  // (the shallows)
+                if (fmaxf(fabsf(x), fabsf(z)) > edge) c = ColorLerp(c, {150, 156, 160, 255}, Clamp((fmaxf(fabsf(x), fabsf(z)) - edge) / 500.0f, 0.0f, 0.8f));  // (the fog at the edge)
+                px[j * N + i] = c;
+            }
+        if (chartTex.id) UnloadTexture(chartTex);
+        chartTex = LoadTextureFromImage(img);
+        SetTextureFilter(chartTex, TEXTURE_FILTER_BILINEAR);
+        UnloadImage(img);
+        chartKey = key;
+    }
+    DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 170});
+    const float S = fminf(W * 0.9f, H - 140.0f), x0 = W * 0.5f - S * 0.5f, y0 = 70.0f;
+    auto toScreen = [&](float x, float z) { return Vector2{x0 + S * 0.5f * (1.0f - x / half), y0 + S * 0.5f * (1.0f - z / half)}; };
+    Panel({x0 - 10, y0 - 10, S + 20, S + 20}, A(kPanel, 0.95f), 10);
+    DrawTexturePro(chartTex, {0, 0, (float)N, (float)N}, {x0, y0, S, S}, {0, 0}, 0.0f, WHITE);
+    for (int g = -2; g <= 2; ++g) {  // a grid, every 5 km
+        const Vector2 a = toScreen(g * 5000.0f, half), b2 = toScreen(g * 5000.0f, -half), c = toScreen(half, g * 5000.0f), d = toScreen(-half, g * 5000.0f);
+        DrawLineEx(a, b2, 1.0f, {255, 255, 255, 18});
+        DrawLineEx(c, d, 1.0f, {255, 255, 255, 18});
+    }
+    Text("THE CHART", W * 0.5f, 22, 30, kText, true, Center);
+    // the regions' names
+    const Vector2 mid[BIOMES] = {{0, 0}, {0, -8200}, {0, 8200}, {-8200, 0}, {8200, 0}};
+    for (int bb = 0; bb < BIOMES; ++bb) {
+        const Vector2 p = toScreen(mid[bb].x, mid[bb].y + (bb == TEMPERATE ? 2600.0f : 0.0f));
+        Label(TextToUpper(kBiomeNames[bb]), p.x, p.y, 12, {255, 255, 255, 110}, Center);
+    }
+    Label("N", x0 + S * 0.5f, y0 + 6, 12, kGold, Center);
+    // the ports: gold where we've been, the last one marked
+    for (int h = 0; h < (int)pred.harbours.size() && h < kPorts; ++h) {
+        const Harbour& hb = pred.harbours[h];
+        const Vector2 p = toScreen(hb.x, hb.z);
+        const bool seen = (campSeen >> h) & 1;
+        const Color c = seen ? kGold : Color{230, 230, 230, 200};
+        DrawCircleV(p, 6.0f, {0, 0, 0, 170});
+        DrawCircleLines((int)p.x, (int)p.y, 5.0f, c);
+        if (h == campLastPort) DrawCircleV(p, 2.5f, c);
+        Text(PortName(h), p.x, p.y + 8, 15, c, true, Center);
+    }
+    // pirates in sight, and us
+    for (int id = 0; id < NumShips(); ++id)
+        if (view[id].present && (view[id].s.flags & SF_ALIVE) && IsEnemy(id)) DrawCircleV(toScreen(view[id].s.pos.x, view[id].s.pos.z), 3.0f, kRed);
+    if (myId >= 0 && myId < NumShips() && view[myId].present) {
+        const NetShip& m = view[myId].s;
+        const Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, m.rot);
+        Vector2 d = Vector2Normalize({-f.x, -f.z});  // (on the chart: +x to the left, +z up)
+        const Vector2 p = toScreen(m.pos.x, m.pos.z), n = {-d.y, d.x};
+        const Vector2 tip = Vector2Add(p, Vector2Scale(d, 11.0f)), l = Vector2Add(Vector2Subtract(p, Vector2Scale(d, 6.0f)), Vector2Scale(n, 6.0f)),
+                      rr = Vector2Subtract(Vector2Subtract(p, Vector2Scale(d, 6.0f)), Vector2Scale(n, 6.0f));
+        DrawCircleV(p, 14.0f, {255, 255, 255, 30});
+        DrawTriangle(tip, l, rr, WHITE);
+        DrawTriangle(tip, rr, l, WHITE);
+    }
+    int seenN = 0;
+    for (int h = 0; h < kPorts; ++h) seenN += (campSeen >> h) & 1;
+    Label(TextFormat("PORTS PUT INTO %d OF %d   \xC2\xB7   %d PIRATES SUNK   \xC2\xB7   TAB: CLOSE", seenN, kPorts, campSunk), W * 0.5f, y0 + S + 22, 12, kDim, Center);
+}
+
+void Game::DrawPort(float W, float H) {
+    using namespace ui;
+    if (campDocked < 0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
+    const NetShip& me = view[myId].s;
+    DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
+    const float pw = 560, ph = 400;
+    Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
+    Panel(r, A(kPanel, 0.97f), 14);
+    const int b = campaign::PortBiome(campDocked);
+    Text(campaign::PortName(campDocked), r.x + 28, r.y + 22, 36, kText, true);
+    Label(TextFormat("%s   \xC2\xB7   %s GOLD", TextToUpper(campaign::kBiomeNames[b]), Thousands(campGold).c_str()), r.x + 30, r.y + 66, 12, kGold);
+    float y = r.y + 104;
+    // the harbourmaster's yard
+    Label("THE HARBOURMASTER", r.x + 30, y, 12, kDim);
+    const float frac = me.maxHp > 0 ? me.hp / me.maxHp : 1.0f;
+    Bar({r.x + 30, y + 22, pw - 60, 8}, frac, frac > 0.6f ? kGreen : frac > 0.3f ? kGold : kRed);
+    const int cost = (int)ceilf(fmaxf(0.0f, me.maxHp - me.hp) * campaign::repairPerHp);
+    Label(TextFormat("HULL %d%%", (int)roundf(frac * 100.0f)), r.x + 30, y + 36, 11, kText);
+    const bool damaged = cost > 0 && frac < 0.995f;
+    const char* rep = !damaged ? "Her hull is sound" : campGold >= cost ? TextFormat("Repair  \xC2\xB7  %s gold", Thousands(cost).c_str())
+                                                      : TextFormat("Repair what %s gold buys", Thousands(campGold).c_str());
+    if (Button({r.x + 30, y + 58, pw - 60, 48}, rep, damaged && campGold > 0, damaged && campGold > 0)) {
+        CampaignAct(campaign::ACT_REPAIR);
+        sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
+    }
+    y += 130;
+    // the tavern: the quests come here
+    Label("THE TAVERN", r.x + 30, y, 12, kDim);
+    Text("Sailors' talk of pirates thick in the Ember Reach and the Fog Banks, and", r.x + 30, y + 22, 16, kText, false);
+    Text("bounties paid on every one sunk. (Quests and recruits are on the way.)", r.x + 30, y + 42, 16, kText, false);
+    if (Button({r.x + 30, r.y + ph - 72, pw - 60, 48}, "Set sail  (E)", true)) {
+        portOpen = false;
+        DisableCursor();
     }
 }
 

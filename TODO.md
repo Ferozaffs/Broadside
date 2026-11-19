@@ -859,3 +859,20 @@ If the session runs out of tokens, continue when they refresh.
 - [x] Music / sound volume bars on the front page and in the pause menu, saved in audio.cfg. Ducked under water / paused.
 - [x] Tested with ffmpeg sine placeholders (BS_MUSICDIR, BS_MUSICLOG): menu -> sail -> battle -> sail -> defeat -> sail -> battle; boss -> battle.
 - [ ] Generate the tracks (YuE on ZWUUUP's ComfyUI once it listens on the LAN; check YuE's licence first).
+
+## Campaign, phase 1: the sea (2026-11-19, "classic campaign, huge map with quests, biomes...")
+Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains, bosses; fleet and crew).
+- [x] MODE_CAMPAIGN (7; MODE_ODYSSEY moved to 8) on ARENA_WORLD: 24 km square, five regions (campaign::BiomeAt),
+  12 ports (3/3/2/2/2), ~800 islands in archipelagos shaped by region, stacks; a grid for RocksHeight past 300 rocks.
+- [x] Server: start in the home port, docking (slow within 90 m), harbourmaster repairs for gold, bounties on pirates,
+  a fifth of the purse lost on a sinking (back in the last port), fast-sail (x2.6, no enemy within 1.4 km),
+  pirate bands by region danger, kept 1.5 km off the ports, giving up when far behind; campaign.sav (text) on
+  docking / sinking / repair / quitting; Continue / New campaign on the front page (new over a save: press twice).
+- [x] Client: purse / region / day bar, region banner, port labels by name, the chart (Tab), the port screen (E),
+  the campaign's help keys; islands painted per region in the shader (vertex colour red = biome x 50).
+- [x] Protocol 28: the campaign block, MSG_CAMPAIGN. Tests: BS_CAMPTEST (sea, ports, a bot captain at sea);
+  BS_CAMPAT=x,z, BS_CHART, BS_PORTSCREEN, BS_CAMPCONTINUE, --mode campaign.
+- [ ] Phase 2: quests (treasure, bounties, convoys, escorts, cargo, rescues, chains to the bosses), the quest log.
+- [ ] Phase 3: fleet and crew, upgrades and ships at the shipwright.
+- [ ] Phase 4: each region's water, sky, fog and weather; palms, ice floes, ash; the Fog Banks' fog.
+- [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.
