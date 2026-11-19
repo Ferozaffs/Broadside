@@ -8851,7 +8851,7 @@ void Game::DrawPort(float W, float H) {
     using namespace campaign;
     if (campDocked < 0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
-    DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
+    DrawRectangle(0, 0, (int)W, (int)H, {3, 6, 11, 195});  // (the sea behind, dimmed evenly edge to edge)
     const float pw = 760, ph = fminf(H - 50.0f, 680.0f);
     // the panel sits to the right: on the left, whoever keeps this shop (their portrait, and what they have to say)
     Rectangle r = {W - pw - fmaxf(24.0f, (W - pw) * 0.1f), H * 0.5f - ph * 0.5f, pw, ph};
@@ -8870,7 +8870,6 @@ void Game::DrawPort(float W, float H) {
         }
         const Texture2D* tex = Portrait(who.id);
         const float room = r.x - 12.0f;  // (left of the panel)
-        DrawRectangleGradientH(0, 0, (int)(room + 12.0f), (int)H, {2, 4, 8, 190}, {2, 4, 8, 40});  // (the HUD behind them, dimmed)
         Rectangle pb{};
         if (tex) {
             const float aspect = (float)tex->width / tex->height, h = fminf(H * 0.94f, room / aspect);
