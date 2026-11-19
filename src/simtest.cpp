@@ -1338,7 +1338,219 @@ static int SeaLifeTest() {
     return problems ? 1 : 0;
 }
 
+// The fleet, the officers and the shipwright: upgrades bought (her perks and hull follow), an officer hired, a new
+// flagship, escorts bought and sailing with her, a pirate struck and taken as a prize, an escort lost, and it all saved
+static int FleetTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    World g;
+    g.campSavePath = "fleettest.sav";
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    int problems = 0;
+    auto check = [&](bool ok, const char* what) {
+        printf("   %-60s %s\n", what, ok ? "ok" : "<-- PROBLEM");
+        problems += !ok;
+    };
+    auto tick = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            g.Step();
+            g.events.clear();
+        }
+    };
+    auto put = [&](Vector2 p) {
+        Ship& c = g.ships[me];
+        c.pos = {p.x, g.ocean.Height(p.x, p.y) + 1.0f, p.y};
+        c.vel = {0, 0, 0};
+    };
+    const Harbour& home = g.harbours[homePort];
+    auto dock = [&]() {
+        for (int i = 0; i < 60 * 3; ++i) {
+            put({home.x - cosf(home.ang) * 30.0f, home.z - sinf(home.ang) * 30.0f});
+            tick(1);
+        }
+    };
+    dock();
+    g.campGold = 30000;
+    const float hull0 = g.ships[me].maxHp;
+    check(g.CampaignAct(me, ACT_UPGRADE, 0) && g.CampaignAct(me, ACT_UPGRADE, 0), "two levels of stout timbers bought");
+    tick(2);
+    check(g.ships[me].perks[PK_HULL] == 2 && g.ships[me].maxHp > hull0 * 1.3f, TextFormat("her hull %.0f -> %.0f", hull0, g.ships[me].maxHp));
+    check(g.CampaignAct(me, ACT_UPGRADE, 10), "a hot-shot furnace");
+    tick(2);
+    check(g.ships[me].perks[PK_HOTSHOT] == 1, "her shot sets them ablaze");
+    if (!g.campRecruits.empty()) {
+        const Recruit rc = g.campRecruits[0];
+        check(g.CampaignAct(me, ACT_HIRE, 0) && g.campOfficer[rc.role] == rc.level, TextFormat("%s hired as %s (level %d)", OfficerName(rc.seed).c_str(), kOfficerNames[rc.role], rc.level));
+    } else printf("   (nobody in the tavern today)\n");
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE) && g.ships[me].cls == SC_LINE, "a ship of the line for her flagship");
+    check(g.CampaignAct(me, ACT_BUY_ESCORT, SC_FRIGATE) && g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "a frigate and a cutter for her fleet");
+    tick(60);
+    int out = 0;
+    for (const World::FleetShip& f : g.campFleet) out += f.ship >= 0 && g.ships[f.ship].active && g.ships[f.ship].leader == me;
+    check(out == 2, TextFormat("%d of her fleet afloat round her", out));
+    // out to sea: the fleet keeps with her
+    Vector2 sea = {home.x - cosf(home.ang) * 1400.0f, home.z - sinf(home.ang) * 1400.0f};
+    for (int tries = 0; tries < 50 && RocksHeight(g.rocks, sea.x, sea.y) > -30.0f; ++tries) sea = Vector2Add(sea, {120.0f, 60.0f});
+    put(sea);
+    tick(60 * 30);
+    float far = 0.0f;
+    for (const World::FleetShip& f : g.campFleet)
+        if (f.ship >= 0 && g.ships[f.ship].active) far = fmaxf(far, Vector3Distance(g.ships[f.ship].pos, g.ships[me].pos));
+    check(far < 450.0f, TextFormat("after 30 s at sea her fleet is within %.0f m", far));
+    // a pirate, crippled until she strikes (one chance each: try a few)
+    int struck = -1;
+    for (int k = 0; k < 8 && struck < 0; ++k) {
+        const Vector2 at = {g.ships[me].pos.x + 300.0f, g.ships[me].pos.z};
+        g.TestSpawnRaider(at, 0.0f, SC_FRIGATE);
+        int p = -1;
+        for (int i = g.ShipCount() - 1; i >= 0; --i)
+            if (g.ships[i].active && g.ships[i].raider && Vector2Distance({g.ships[i].pos.x, g.ships[i].pos.z}, at) < 1.0f) { p = i; break; }
+        if (p < 0) break;
+        g.TestDamage(g.ships[p], g.ships[p].maxHp * 0.85f, me);
+        if (g.ships[p].struck) struck = p;
+        else g.RemoveShip(p);
+    }
+    check(struck >= 0, "a pirate struck her colours");
+    if (struck >= 0) {
+        for (int i = 0; i < 30; ++i) {
+            put({g.ships[struck].pos.x + 40.0f, g.ships[struck].pos.z});
+            tick(1);
+        }
+        check(g.campPrize == struck && g.CampaignAct(me, ACT_PRIZE, 1) && g.campFleet.size() == 3, "alongside her: taken as a prize, into the fleet");
+        tick(60);
+    }
+    // an escort lost
+    const size_t before = g.campFleet.size();
+    for (const World::FleetShip& f : g.campFleet)
+        if (f.ship >= 0 && g.ships[f.ship].active) { g.TestKnockOut(g.ships[f.ship]); break; }
+    tick(60 * 6);
+    check(g.campFleet.size() + 1 == before, TextFormat("an escort sunk: the fleet %zu -> %zu", before, g.campFleet.size()));
+    // saved, and back
+    g.SaveCampaign();
+    World h;
+    h.campSavePath = "fleettest.sav";
+    h.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    h.LoadCampaign();
+    int upg = 0, off = 0;
+    for (int i = 0; i < kUpgradeCount; ++i) upg += h.campUpg[i];
+    for (int o = 0; o < OFFICERS; ++o) off += h.campOfficer[o] > 0;
+    check(upg == 3 && h.campFleet.size() == g.campFleet.size() && h.campLoadCls == SC_LINE, TextFormat("saved: %d upgrades, %d officer(s), %zu in the fleet, her %s", upg, off, h.campFleet.size(),
+                                                                                                    ClassOf(h.campLoadCls >= 0 ? h.campLoadCls : 0).name));
+    remove("fleettest.sav");
+    printf("fleet: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
+// The zones: a captain (a bot) held in water of a given level for a few minutes (she can't sink: the test is what she
+// meets there): how many pirates find her, how hard they hit her (hull a minute), how many she sinks - a frigate fresh
+// from the shipwright at levels 1.5, 4, 7 and 9.5, then a ship of the line with every upgrade and a fleet at 7. The
+// sea doesn't change for her: she does.
+static int ZoneTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    const float secs = getenv("BS_ZONESECS") ? (float)atof(getenv("BS_ZONESECS")) : 120.0f;
+    struct Run { float level; bool strong; };
+    const Run runs[] = {{1.5f, false}, {4.0f, false}, {7.0f, false}, {9.5f, false}, {7.0f, true}};
+    int problems = 0;
+    float perMin[5] = {};
+    for (int r = 0; r < 5; ++r) {
+      if (getenv("BS_ZONEONLY") && atoi(getenv("BS_ZONEONLY")) != r) continue;
+      int metAll = 0, killedAll = 0;
+      int dbgFireP = 0, dbgFireMe = 0, dbgFireO = 0, dbgHitMe = 0, dbgHitP = 0;
+      float takenAll = 0.0f;
+      std::vector<Vector2> spots;  // (three spots of open water at about that level, apart from each other, off the ports)
+      {
+        World probe;
+        probe.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        for (float x = -9000.0f; x <= 9000.0f; x += 500.0f)
+            for (float z = -9000.0f; z <= 9000.0f; z += 500.0f) {
+                if (spots.size() >= 3 || RocksHeight(probe.rocks, x, z) > -40.0f || fabsf(ZoneLevel(x, z) - runs[r].level) > 0.5f) continue;
+                bool clear = true;
+                for (const Harbour& h : probe.harbours) clear &= Vector2Distance({h.x, h.z}, {x, z}) > 2500.0f;
+                for (const Vector2& o : spots) clear &= Vector2Distance(o, {x, z}) > 3000.0f;
+                if (clear) spots.push_back({x, z});
+            }
+      }
+      for (const Vector2& at : spots) {
+        World g;
+        g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        g.campBotCaptain = true;
+        if (runs[r].strong) {  // every upgrade, every officer at 3, three ships of the line with her
+            for (int i = 0; i < kUpgradeCount; ++i) g.campUpg[i] = kUpgrades[i].max;
+            for (int o = 0; o < OFFICERS; ++o) g.campOfficer[o] = 3;
+            for (int k = 0; k < 3; ++k) { World::FleetShip f; f.cls = SC_LINE; f.seed = (uint16_t)k; g.campFleet.push_back(f); }
+        }
+        const int me = g.AddShip("captain", true, runs[r].strong ? SC_LINE : SC_FRIGATE);
+        auto put = [&]() {
+            Ship& c = g.ships[me];
+            c.pos = {at.x, g.ocean.Height(at.x, at.y) + 1.0f, at.y};
+            c.vel = {0, 0, 0};
+        };
+        put();
+        g.campSpawn = 5.0f;
+        int met = 0, killed = 0;
+        float taken = 0.0f;
+        for (int i = 0; i < (int)(secs * 60); ++i) {
+            Ship& c = g.ships[me];
+            const float before = c.hp;
+            g.Step();
+            if (getenv("BS_ZONEDEBUG") && i % 600 == 0)
+                for (const Ship& o : g.ships)
+                    if (o.active && o.raider)
+                        printf("      t %d: %s (%s) %.0f m off, hull %.0f/%.0f, speed %.1f, sail %.2f, struck %d, idle %.0f, land under %.0f, her at (%.0f, %.0f)\n", i / 60, o.name.c_str(),
+                               ClassOf(o.cls).name, Vector3Distance(o.pos, c.pos), o.hp, o.maxHp, Vector3Length(o.vel), o.input.sail, o.struck, o.raiderIdle,
+                               RocksHeight(g.rocks, o.pos.x + sinf(atan2f(Vector3RotateByQuaternion({0, 0, 1}, o.rot).x, Vector3RotateByQuaternion({0, 0, 1}, o.rot).z)) * 60.0f, o.pos.z), c.pos.x, c.pos.z);
+            if (c.alive) {
+                taken += fmaxf(0.0f, before - c.hp) / fmaxf(c.maxHp, 1.0f) * 100.0f;  // (her hull's share, in %)
+                c.hp = fmaxf(c.hp, c.maxHp * 0.35f);
+            }
+            for (const GameEvent& e : g.events) {
+                if (e.type == EventType::Fire && e.a < g.ShipCount()) (g.ships[e.a].raider ? dbgFireP : e.a == me ? dbgFireMe : dbgFireO)++;
+                if (e.type == EventType::Hit && e.a < g.ShipCount() && e.b < g.ShipCount()) {
+                    if (g.ships[e.a].raider && e.b == me) dbgHitMe++;
+                    if (e.a == me && g.ships[e.b].raider) dbgHitP++;
+                }
+                if (e.type == EventType::Respawn && (e.flags & 1)) ++met;
+                if (e.type == EventType::Kill && e.b < g.ShipCount() && g.ships[e.b].raider) ++killed;
+            }
+            g.events.clear();
+            if (Vector2Distance({c.pos.x, c.pos.z}, at) > 1500.0f) put();  // (kept in that water)
+        }
+        metAll += met;
+        killedAll += killed;
+        takenAll += taken;
+      }
+      const float mins = secs / 60.0f * fmaxf(1.0f, (float)spots.size());
+      perMin[r] = takenAll / mins;
+      if (getenv("BS_ZONEDEBUG")) printf("      shots: the pirates fired %d, hit her %d; she fired %d, hit them %d; others fired %d\n", dbgFireP, dbgHitMe, dbgFireMe, dbgHitP, dbgFireO);
+      printf("   level %4.1f (%zu spots) %-62s: %4.1f pirates a minute found her, she lost %4.0f%% of her hull a minute, sank %.1f a minute\n", runs[r].level, spots.size(),
+             runs[r].strong ? "a ship of the line, every upgrade, three of the line with her" : "a frigate, no upgrades", metAll / mins, perMin[r], killedAll / mins);
+    }
+    // the zones' own tables, level by level: everything that makes a pirate dangerous rises with the level, and so
+    // does the pay (bot-against-bot fights are too few hits a minute to rank every level by)
+    printf("   level  hull  shot  aim(rad)  at once  band   pay\n");
+    float prev[5] = {};
+    for (int L = 1; L <= 10; ++L) {
+        const float v[5] = {PirateHull((float)L), 0.55f + 0.07f * L, -fmaxf(0.03f, 0.17f - 0.02f * L), (float)(2 + L / 3), LevelMul((float)L)};
+        printf("   %5d  %4.2f  %4.2f  %8.3f  %7d  %4.2f  %4.2f\n", L, v[0], v[1], -v[2], (int)v[3], 1.0f + 0.08f * L + 0.045f * (L - 2), v[4]);
+        for (int k = 0; k < 5; ++k)
+            if (L > 1 && v[k] < prev[k]) { printf("   level %d: a column falls   <-- PROBLEM\n", L); ++problems; }
+        for (int k = 0; k < 5; ++k) prev[k] = v[k];
+    }
+    // and the fights that do say something: far out hurts more than home, and her upgrades and fleet are what hold it
+    if (!(perMin[2] > perMin[0] && perMin[4] < perMin[2] * 0.5f)) {
+        printf("   the far seas aren't harder than home, or the strong ship isn't better off there   <-- PROBLEM\n");
+        ++problems;
+    }
+    printf("zones: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_ZONETEST")) return ZoneTest();
+    if (getenv("BS_FLEETTEST")) return FleetTest();
     if (getenv("BS_SEALIFETEST")) return SeaLifeTest();
     if (getenv("BS_CHAINTEST")) return ChainTest();
     if (getenv("BS_QUESTTEST")) return QuestTest();

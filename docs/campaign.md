@@ -16,6 +16,13 @@ convoys, rescues, escorts, cargo, and mystery chains that lead to the big boss f
 - The chart (Tab): the whole sea, ports, the quest markers, where you've been.
 - Fast-sail (hold F when no enemy is near): the sea runs at 4x.
 
+## Danger by place (no rubber banding)
+Every point of the sea has a danger level 1-10 that depends on where it is and nothing else: the Temperate Isles 1-2,
+the Tropics and the Frozen North 3-6, the Fog Banks 5-8, the Ember Reach 6-10, rising toward the edge of the chart.
+Pirates, monsters, the dread pirates and the lairs' bosses there are that strong (hull, gunnery, heavy shot, special
+shot), and pay that well. A fresh ship is safe at home and sunk out in the wild; the upgrades, officers and fleet are
+how she earns the far seas. The HUD shows the danger against a rating of her ship. (The Odyssey keeps its scaling.)
+
 ## Ports (sail in, press E)
 - **Harbourmaster**: repairs (gold by the hull missing), the port's news.
 - **Tavern**: quests (2-4 on offer, by biome and how far you've got), recruits (crew with a trait each).
@@ -52,7 +59,7 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
   Calypso Vane (fire and grape), Old Rime (chain and mortar), Cinder Kate (fire and mortar), the Grey Widow (homing,
   spectral).
 
-## Fleet and crew
+## Fleet and crew (built: see TODO.md, phase 3)
 - **Fleet**: up to 3 escort ships, recruited in port or captured, following you (the existing escort AI), each with
   its own hull that carries over.
 - **Crew**: named officers with a trait (gunner: reload, bosun: repairs, navigator: speed, surgeon: crew losses...)

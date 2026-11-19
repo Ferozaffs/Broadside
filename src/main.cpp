@@ -398,6 +398,23 @@ public:
     void DrawQuests(float W, float H);
     void DrawSeaLife(float W, float H);
     int16_t campDread = -1;          // (the snapshot's: the dread pirate hunting us)
+    uint8_t campUpgC[campaign::kUpgradeCount] = {};  // (the snapshot's: her upgrades, officers, fleet, the tavern's recruits)
+    uint8_t campOfficerC[campaign::OFFICERS] = {};
+    uint16_t campOfficerSeedC[campaign::OFFICERS] = {};
+    std::vector<Snapshot::CampFleet> campFleetC;
+    std::vector<campaign::Recruit> campRecruitsC;
+    uint8_t campChainC[campaign::BIOMES] = {};
+    int16_t campPrizeC = -1;
+    int portTab = 0;                 // the port screen: harbour, tavern, shipwright
+    float CampRating() const {       // how strong her ship and fleet are, on the zones' scale (1-10): for the HUD only, nothing adapts to it
+        float p = 0.0f;
+        for (uint8_t u : campUpgC) p += u;
+        for (uint8_t o : campOfficerC) p += 1.5f * o;
+        const int cls = myId >= 0 && myId < NumShips() && view[myId].present ? view[myId].s.cls : SC_FRIGATE;
+        p += cls == SC_LINE ? 4.0f : cls == SC_FRIGATE ? 2.0f : 0.0f;
+        for (const Snapshot::CampFleet& f : campFleetC) p += f.cls == SC_LINE ? 4.0f : f.cls == SC_FRIGATE ? 2.5f : 1.5f;
+        return 1.0f + 9.0f * Clamp(p / 75.0f, 0.0f, 1.0f);
+    }
     Vector3 seaWreck{};              // the wreckage last sighted, and when
     double seaWreckAt = -1000.0;
     int seaDistress = -1;            // a merchantman under attack
@@ -1269,6 +1286,12 @@ void Game::Interpolate() {
             for (int k = 0; k < campaign::maxQuests; ++k) campQuests[k] = sn.campQuests[k];
             campOffers = sn.campOffers;
             campDread = sn.campDread;
+            for (int k = 0; k < campaign::kUpgradeCount; ++k) campUpgC[k] = sn.campUpg[k];
+            for (int k = 0; k < campaign::OFFICERS; ++k) { campOfficerC[k] = sn.campOfficer[k]; campOfficerSeedC[k] = sn.campOfficerSeed[k]; }
+            campFleetC = sn.campFleet;
+            campRecruitsC = sn.campRecruits;
+            for (int k = 0; k < campaign::BIOMES; ++k) campChainC[k] = sn.campChain[k];
+            campPrizeC = sn.campPrize;
         }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
@@ -1404,7 +1427,12 @@ void Game::UpdateInput(float dt) {
     static bool autoPause = getenv("BS_PAUSED") != nullptr;  // (screenshots: the pause menu)
     static bool autoChart = getenv("BS_CHART") != nullptr, autoPort = getenv("BS_PORTSCREEN") != nullptr;  // (screenshots: the campaign's chart, a port)
     if (campaign && autoChart && GetTime() - sessionStart > 6.0) { autoChart = false; chartOpen = true; }
-    if (campaign && autoPort && campDocked >= 0 && GetTime() - sessionStart > 6.0) { autoPort = false; portOpen = true; EnableCursor(); }
+    if (campaign && autoPort && campDocked >= 0 && GetTime() - sessionStart > 6.0) {
+        autoPort = false;
+        portOpen = true;
+        EnableCursor();
+        if (getenv("BS_PORTTAB")) portTab = atoi(getenv("BS_PORTTAB"));
+    }
     static bool autoTake = getenv("BS_TAKEQUESTS") != nullptr;  // (screenshots: take every quest on offer)
     if (campaign && autoTake && campDocked >= 0 && !campOffers.empty() && GetTime() - sessionStart > 7.0) {
         autoTake = false;
@@ -1419,6 +1447,10 @@ void Game::UpdateInput(float dt) {
             if (paused) EnableCursor();
             else DisableCursor();
         }
+    }
+    if (campaign && !IsCrew() && !paused && campPrizeC >= 0 && !portOpen) {  // a prize alongside: 1 into the fleet, 2 plunder (before the ship keys)
+        if (IsKeyPressed(KEY_ONE)) CampaignAct(campaign::ACT_PRIZE, 1);
+        if (IsKeyPressed(KEY_TWO)) CampaignAct(campaign::ACT_PRIZE, 0);
     }
     if (campaign && !IsCrew() && !paused) {  // the campaign: the chart (Tab), fast-sail (F), ashore in port (E)
         if (IsKeyPressed(KEY_TAB) && !portOpen) chartOpen = !chartOpen;
@@ -1448,7 +1480,7 @@ void Game::UpdateInput(float dt) {
     for (int c = 0; c < std::max((int)SC_PLAYABLE, 4); ++c)
         if (IsKeyPressed((KeyboardKey)(KEY_ONE + c))) {
             if (odyssey && matchState == 1 && odWon) PickPerkUi(c);  // (the Odyssey, between rounds: the upgrades)
-            else if (c < SC_PLAYABLE) PickClass(c);
+            else if (c < SC_PLAYABLE && !campaign) PickClass(c);  // (the campaign: the shipwright sells ships)
         }
     if (IsKeyPressed(KEY_M) && soundOn) {
         sfx::SetMuted(!sfx::Muted());
@@ -3195,6 +3227,14 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_CHEST: if (e.a == myId) { floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("+%d GOLD", (int)e.value), ui::kGold, 2.2f}); sfx::PlayFlat(sfx::Treasure, 0.6f, 1.2f); } break;
                 case EV_MAP: Feed3("A CHART", "  in the sea-chest: a treasure to dig up", "", ui::kGold, ui::kText); break;
                 case EV_MONSTERSLAIN: Feed3("SLAIN", "  the sea gives up its reward", gold, ui::kGreen, ui::kGold); break;
+                case EV_STRUCK:
+                    Feed3(NameOf(e.a), "  has struck her colours: come alongside", "", ui::kGold, ui::kText);
+                    floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
+                    break;
+                case EV_PRIZE: Feed3("A PRIZE", "  she sails with your fleet now", "", ui::kGold, ui::kText); sfx::PlayFlat(sfx::Treasure, 0.8f, 0.9f); break;
+                case EV_PLUNDER: Feed3("PLUNDERED", "  her hold emptied", gold, ui::kGold, ui::kGold); sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
+                case EV_ESCORTLOST: Feed3(NameOf(e.a), "  is lost, with all hands", "", ui::kRed, ui::kText); break;
+                case EV_OFFICERLOST: Feed3("YOUR " + std::string(TextToUpper(kOfficerNames[e.a % OFFICERS])), "  went down with the ship", "", ui::kRed, ui::kText); break;
                 default: break;
             }
             break;
@@ -8121,6 +8161,14 @@ void Game::DrawSeaLife(float W, float H) {
     if (now - seaWreckAt < 240.0 && !chartOpen && !portOpen) mark(seaWreck, "WRECKAGE", Scenery::PowerColor(PU_COUNT));
     if (seaDistress >= 0 && seaDistress < NumShips() && view[seaDistress].present && (view[seaDistress].s.flags & SF_ALIVE) && !chartOpen && !portOpen)
         mark(Vector3Add(view[seaDistress].s.pos, {0, 34, 0}), "UNDER ATTACK", kGold);
+    // a struck pirate alongside: take her as a prize (1) or empty her hold (2)
+    if (campPrizeC >= 0 && campPrizeC < NumShips() && view[campPrizeC].present && !chartOpen && !portOpen) {
+        const bool room = (int)campFleetC.size() < campaign::fleetMax;
+        const char* t = room ? "SHE'S STRUCK   \xC2\xB7   1: TAKE HER INTO YOUR FLEET   \xC2\xB7   2: PLUNDER HER HOLD" : "SHE'S STRUCK   \xC2\xB7   YOUR FLEET IS FULL   \xC2\xB7   2: PLUNDER HER HOLD";
+        const Vector2 m = Measure(t, 15, true);
+        Panel({W * 0.5f - m.x * 0.5f - 16, H * 0.66f, m.x + 32, 30}, A(kPanel, 0.9f), 8);
+        Text(t, W * 0.5f, H * 0.66f + 6, 15, kGold, true, Center);
+    }
     // the dread pirate: her name and her hull under the top bar while she's near
     if (campDread >= 0 && campDread < NumShips() && view[campDread].present && (view[campDread].s.flags & SF_ALIVE)) {
         const NetShip& d = view[campDread].s;
@@ -8194,6 +8242,14 @@ void Game::DrawCampaignHud(float W, float H) {
     Rectangle r = {W * 0.5f - m.x * 0.5f - 18, 6, m.x + 36, 28};
     Panel(r, A(kPanel, 0.9f), 8);
     Text(line.c_str(), W * 0.5f, r.y + 5, 16, kGold, true, Center);
+    {  // the danger here, against how strong she is: green, gold, or red (out of her depth)
+        const float level = campaign::ZoneLevel(at.x, at.z), rating = CampRating(), gap = level - rating;
+        const Color dc = gap <= 0.5f ? kGreen : gap <= 2.0f ? kGold : kRed;
+        const std::string dt = TextFormat("DANGER %d   \xC2\xB7   YOUR SHIP %d%s", (int)roundf(level), (int)roundf(rating), gap > 2.0f ? "   \xC2\xB7   OUT OF YOUR DEPTH" : "");
+        const Vector2 dm = Measure(dt.c_str(), 13, true);
+        Panel({r.x + r.width + 8, r.y + 3, dm.x + 24, 22}, A(kPanel, 0.88f), 6);
+        Text(dt.c_str(), r.x + r.width + 20, r.y + 7, 13, dc, true);
+    }
     if (GetTime() - campGoldAt < 2.5 && campGoldDelta != 0) {  // a bounty paid, a bill
         const float k = (float)(GetTime() - campGoldAt) / 2.5f;
         Text(TextFormat("%s%s", campGoldDelta > 0 ? "+" : "", Thousands(campGoldDelta).c_str()), r.x - 12, r.y + 3 - k * 8.0f, 20,
@@ -8264,6 +8320,8 @@ void Game::DrawChart(float W, float H) {
     for (int bb = 0; bb < BIOMES; ++bb) {
         const Vector2 p = toScreen(mid[bb].x, mid[bb].y + (bb == TEMPERATE ? 2600.0f : 0.0f));
         Label(TextToUpper(kBiomeNames[bb]), p.x, p.y, 12, {255, 255, 255, 110}, Center);
+        static const char* const kLevels[BIOMES] = {"DANGER 1-2", "DANGER 3-6", "DANGER 3-6", "DANGER 6-10", "DANGER 5-8"};
+        Label(kLevels[bb], p.x, p.y + 16, 10, {255, 255, 255, 80}, Center);
     }
     Label("N", x0 + S * 0.5f, y0 + 6, 12, kGold, Center);
     // the ports: gold where we've been, the last one marked
@@ -8317,65 +8375,162 @@ void Game::DrawChart(float W, float H) {
 
 void Game::DrawPort(float W, float H) {
     using namespace ui;
+    using namespace campaign;
     if (campDocked < 0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
     DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
-    const float pw = 720, ph = fminf(H - 60.0f, 640.0f);
+    const float pw = 760, ph = fminf(H - 50.0f, 680.0f);
     Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
     Panel(r, A(kPanel, 0.97f), 14);
-    const int b = campaign::PortBiome(campDocked);
-    Text(campaign::PortName(campDocked), r.x + 28, r.y + 22, 36, kText, true);
-    Label(TextFormat("%s   \xC2\xB7   %s GOLD", TextToUpper(campaign::kBiomeNames[b]), Thousands(campGold).c_str()), r.x + 30, r.y + 66, 12, kGold);
-    float y = r.y + 104;
-    // the harbourmaster's yard
-    Label("THE HARBOURMASTER", r.x + 30, y, 12, kDim);
-    const float frac = me.maxHp > 0 ? me.hp / me.maxHp : 1.0f;
-    Bar({r.x + 30, y + 22, pw - 60, 8}, frac, frac > 0.6f ? kGreen : frac > 0.3f ? kGold : kRed);
-    const int cost = (int)ceilf(fmaxf(0.0f, me.maxHp - me.hp) * campaign::repairPerHp);
-    Label(TextFormat("HULL %d%%", (int)roundf(frac * 100.0f)), r.x + 30, y + 36, 11, kText);
-    const bool damaged = cost > 0 && frac < 0.995f;
-    const char* rep = !damaged ? "Her hull is sound" : campGold >= cost ? TextFormat("Repair  \xC2\xB7  %s gold", Thousands(cost).c_str())
-                                                      : TextFormat("Repair what %s gold buys", Thousands(campGold).c_str());
-    if (Button({r.x + 30, y + 58, pw - 60, 48}, rep, damaged && campGold > 0, damaged && campGold > 0)) {
-        CampaignAct(campaign::ACT_REPAIR);
-        sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
-    }
-    y += 130;
-    // the tavern: today's work, and what's under way
-    Label("THE TAVERN   \xC2\xB7   TODAY'S WORK", r.x + 30, y, 12, kDim);
-    y += 20;
-    int active = 0;
-    for (const Quest& q : campQuests) active += q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN;
-    if (campOffers.empty()) { Text("Nothing more today. Come back tomorrow.", r.x + 30, y + 4, 16, kDim, false); y += 30; }
-    for (size_t k = 0; k < campOffers.size(); ++k) {
-        const Quest& q = campOffers[k];
-        if (q.chain) {
-            Label(TextFormat("A STORY OF %s   %s   PART %d OF %d", TextToUpper(campaign::kBiomeNames[q.chain - 1]), "\xC2\xB7", q.step + 1, campaign::chainSteps + 1), r.x + 30, y - 2, 10, kGold);
-            y += 14;
+    const int b = PortBiome(campDocked);
+    Text(PortName(campDocked), r.x + 28, r.y + 20, 34, kText, true);
+    Label(TextFormat("%s   \xC2\xB7   %s GOLD", TextToUpper(kBiomeNames[b]), Thousands(campGold).c_str()), r.x + 30, r.y + 62, 12, kGold);
+    static const char* const kTabs[3] = {"Harbour", "Tavern", "Shipwright"};
+    Segmented({r.x + pw - 30 - 360, r.y + 24, 360, 36}, kTabs, 3, portTab);
+    float y = r.y + 96;
+    const float x0 = r.x + 30, w0 = pw - 60;
+    auto shipLine = [&](const char* who, int cls, float frac, float yy) {
+        Text(who, x0, yy, 16, kText, true);
+        Label(TextFormat("%s   \xC2\xB7   HULL %d%%", TextToUpper(ClassOf(cls).name), (int)roundf(frac * 100.0f)), x0 + 260, yy + 3, 11, kDim);
+        Bar({x0 + 470, yy + 6, w0 - 470, 6}, frac, frac > 0.6f ? kGreen : frac > 0.3f ? kGold : kRed);
+    };
+    if (portTab == 0) {  // the harbourmaster: repairs, flagship and fleet
+        Label("THE HARBOURMASTER", x0, y, 12, kDim);
+        y += 24;
+        float missing = fmaxf(0.0f, me.maxHp - me.hp);
+        shipLine(NameOf(myId).c_str(), me.cls, me.maxHp > 0 ? me.hp / me.maxHp : 1.0f, y);
+        y += 28;
+        for (const Snapshot::CampFleet& f : campFleetC) {
+            float frac = f.hull;
+            if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present) {
+                frac = view[f.ship].s.maxHp > 0 ? view[f.ship].s.hp / view[f.ship].s.maxHp : f.hull;
+                missing += fmaxf(0.0f, view[f.ship].s.maxHp - view[f.ship].s.hp);
+            }
+            shipLine(TextFormat("the %s", FleetName(f.seed)), f.cls, frac, y);
+            y += 28;
         }
-        Text(QuestTitle(q).c_str(), r.x + 30, y, 18, q.chain ? kGold : kText, true);
-        Text(TextFormat("%s gold", Thousands(q.reward).c_str()), r.x + pw - 170, y + 1, 16, kGold, true, Right);
-        const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 14, pw - 220);
-        for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), r.x + 30, y + 24 + l * 17.0f, 14, kDim, false);
-        if (Button({r.x + pw - 150, y - 2, 120, 40}, active >= campaign::maxQuests ? "Full" : "Accept", true, active < campaign::maxQuests)) {
-            CampaignAct(campaign::ACT_ACCEPT, (int)k);
-            sfx::PlayFlat(sfx::Confirm, 0.8f, 1.0f);
+        const int cost = (int)ceilf(missing * repairPerHp);
+        const bool damaged = cost > 0;
+        const char* rep = !damaged ? "Every hull is sound" : campGold >= cost ? TextFormat("Repair them all  \xC2\xB7  %s gold", Thousands(cost).c_str())
+                                                          : TextFormat("Repair what %s gold buys", Thousands(campGold).c_str());
+        if (Button({x0, y + 8, w0, 48}, rep, damaged && campGold > 0, damaged && campGold > 0)) {
+            CampaignAct(ACT_REPAIR);
+            sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
         }
-        y += 30 + 17.0f * std::min<size_t>(lines.size(), 3) + 10;
-    }
-    if (active) {
-        y += 4;
-        Label("UNDER WAY", r.x + 30, y, 12, kDim);
+        y += 76;
+        int seenN = 0;
+        for (int h = 0; h < kPorts; ++h) seenN += (campSeen >> h) & 1;
+        Label(TextFormat("PORTS PUT INTO %d OF %d   \xC2\xB7   %d PIRATES SUNK   \xC2\xB7   DAY %d", seenN, kPorts, campSunk, (int)(campClock / dayLength) + 1), x0, y, 11, kDim);
+        y += 24;
+        int told = 0;
+        for (int k = 0; k < BIOMES; ++k) told += campChainC[k] > chainSteps;
+        Label(TextFormat("STORIES TOLD %d OF %d", told, BIOMES), x0, y, 11, told ? kGold : kDim);
+    } else if (portTab == 1) {  // the tavern: today's work, who's looking for a berth, her officers
+        Label("TODAY'S WORK", x0, y, 12, kDim);
         y += 20;
-        for (int k = 0; k < campaign::maxQuests; ++k) {
-            const Quest& q = campQuests[k];
-            if (q.state != campaign::QS_ACTIVE && q.state != campaign::QS_RETURN) continue;
-            Text(TextFormat("%d   %s", k + 1, QuestTitle(q).c_str()), r.x + 30, y + 6, 16, kGold, true);
-            if (Button({r.x + pw - 150, y, 120, 32}, "Give up")) CampaignAct(campaign::ACT_ABANDON, k);
-            y += 38;
+        int active = 0;
+        for (const Quest& q : campQuests) active += q.state == QS_ACTIVE || q.state == QS_RETURN;
+        if (campOffers.empty()) { Text("Nothing more today. Come back tomorrow.", x0, y + 4, 16, kDim, false); y += 30; }
+        for (size_t k = 0; k < campOffers.size(); ++k) {
+            const Quest& q = campOffers[k];
+            if (q.chain) {
+                Label(TextFormat("A STORY OF %s   \xC2\xB7   PART %d OF %d", TextToUpper(kBiomeNames[q.chain - 1]), q.step + 1, chainSteps + 1), x0, y - 2, 10, kGold);
+                y += 14;
+            }
+            Text(QuestTitle(q).c_str(), x0, y, 17, q.chain ? kGold : kText, true);
+            Text(TextFormat("%s gold", Thousands(q.reward).c_str()), x0 + w0 - 140, y + 1, 15, kGold, true, Right);
+            const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 13, w0 - 170);
+            for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), x0, y + 22 + l * 16.0f, 13, kDim, false);
+            if (Button({x0 + w0 - 120, y - 2, 120, 38}, active >= maxQuests ? "Full" : "Accept", true, active < maxQuests)) {
+                CampaignAct(ACT_ACCEPT, (int)k);
+                sfx::PlayFlat(sfx::Confirm, 0.8f, 1.0f);
+            }
+            y += 28 + 16.0f * std::min<size_t>(lines.size(), 3) + 8;
         }
+        if (active) {
+            for (int k = 0; k < maxQuests; ++k) {
+                const Quest& q = campQuests[k];
+                if (q.state != QS_ACTIVE && q.state != QS_RETURN) continue;
+                Text(TextFormat("%d   %s", k + 1, QuestTitle(q).c_str()), x0, y + 6, 14, q.chain ? kGold : kText, true);
+                if (Button({x0 + w0 - 120, y, 120, 28}, "Give up")) CampaignAct(ACT_ABANDON, k);
+                y += 32;
+            }
+        }
+        y += 8;
+        Label("LOOKING FOR A BERTH", x0, y, 12, kDim);
+        y += 20;
+        if (campRecruitsC.empty()) { Text("Nobody today.", x0, y, 14, kDim, false); y += 24; }
+        for (size_t k = 0; k < campRecruitsC.size(); ++k) {
+            const Recruit& rc = campRecruitsC[k];
+            Text(TextFormat("%s, %s", OfficerName(rc.seed).c_str(), kOfficerNames[rc.role]), x0, y, 16, kText, true);
+            std::string what = TextFormat("level %d", rc.level);
+            for (const OfficerPerk& op : kOfficerPerks[rc.role])
+                if (op.per) what += TextFormat("   \xC2\xB7   %s +%d", kPerkNames[op.perk], op.per * rc.level);
+            if (rc.role == OF_QUARTERMASTER) what += TextFormat("   \xC2\xB7   +%d%% bounties, crates last longer", 15 * rc.level);
+            if (rc.role == OF_NAVIGATOR && rc.level >= 2) what += "   \xC2\xB7   a fair wind after every kill";
+            if (campOfficerC[rc.role]) what += TextFormat("   \xC2\xB7   (replaces your level %d)", campOfficerC[rc.role]);
+            Text(what.c_str(), x0, y + 20, 13, kDim, false);
+            if (Button({x0 + w0 - 160, y - 2, 160, 38}, TextFormat("Hire  \xC2\xB7  %s", Thousands(rc.cost).c_str()), true, campGold >= rc.cost)) {
+                CampaignAct(ACT_HIRE, (int)k);
+                sfx::PlayFlat(sfx::Confirm, 0.8f, 1.0f);
+            }
+            y += 46;
+        }
+        y += 6;
+        Label("YOUR OFFICERS", x0, y, 12, kDim);
+        y += 18;
+        std::string mine;
+        for (int o = 0; o < OFFICERS; ++o)
+            if (campOfficerC[o]) mine += TextFormat("%s%s (%s, %d)", mine.empty() ? "" : "   \xC2\xB7   ", OfficerName(campOfficerSeedC[o]).c_str(), kOfficerNames[o], campOfficerC[o]);
+        Text(mine.empty() ? "None yet." : mine.c_str(), x0, y, 13, mine.empty() ? kDim : kText, false);
+    } else {  // the shipwright: upgrades, a new flagship, the fleet
+        Label("UPGRADES", x0, y, 12, kDim);
+        y += 20;
+        const float cw = (w0 - 16) * 0.5f;
+        for (int i = 0; i < kUpgradeCount; ++i) {
+            const Upgrade& u = kUpgrades[i];
+            const float cx = x0 + (i % 2) * (cw + 16), cy = y + (i / 2) * 44.0f;
+            const int lvl = campUpgC[i];
+            Text(u.name, cx, cy, 14, kText, true);
+            for (int k = 0; k < u.max; ++k) DrawRectangle((int)(cx + k * 12), (int)(cy + 20), 9, 5, k < lvl ? kGold : Color{255, 255, 255, 40});
+            Text(u.line, cx + u.max * 12 + 6, cy + 17, 11, kDim, false);
+            if (lvl < u.max) {
+                const int cost = UpgradeCost(i, lvl);
+                if (Button({cx + cw - 110, cy - 2, 110, 32}, Thousands(cost).c_str(), false, campGold >= cost)) {
+                    CampaignAct(ACT_UPGRADE, i);
+                    sfx::PlayFlat(sfx::Confirm, 0.8f, 1.1f);
+                }
+            } else Label("DONE", cx + cw - 55, cy + 8, 10, kGold, Center);
+        }
+        y += ((kUpgradeCount + 1) / 2) * 44.0f + 10;
+        Label("YOUR SHIP", x0, y, 12, kDim);
+        y += 20;
+        for (int c = 0; c < SC_PLAYABLE; ++c) {  // (the old one taken in part-payment)
+            const float bx = x0 + c * ((w0 + 10) / 3.0f), bw = (w0 + 10) / 3.0f - 10;
+            const int cost = ShipPrice(c) - ShipPrice(me.cls) * 2 / 5;
+            const bool hers = me.cls == c;
+            if (Button({bx, y, bw, 40}, hers ? TextFormat("%s  \xC2\xB7  yours", ClassOf(c).name) : TextFormat("%s  \xC2\xB7  %s", ClassOf(c).name, Thousands(std::max(cost, 0)).c_str()), false, !hers && campGold >= cost))
+                CampaignAct(ACT_FLAGSHIP, c);
+        }
+        y += 52;
+        Label(TextFormat("YOUR FLEET   \xC2\xB7   %d OF %d", (int)campFleetC.size(), fleetMax), x0, y, 12, kDim);
+        y += 20;
+        for (size_t k = 0; k < campFleetC.size(); ++k) {
+            const Snapshot::CampFleet& f = campFleetC[k];
+            Text(TextFormat("the %s, a %s", FleetName(f.seed), ClassOf(f.cls).name), x0, y + 6, 14, kText, true);
+            if (Button({x0 + w0 - 160, y, 160, 30}, TextFormat("Sell  \xC2\xB7  %s", Thousands((int)(ShipPrice(f.cls) * 0.4f * f.hull)).c_str()))) CampaignAct(ACT_SELL_ESCORT, (int)k);
+            y += 34;
+        }
+        if ((int)campFleetC.size() < fleetMax)
+            for (int c = 0; c < SC_PLAYABLE; ++c) {
+                const float bx = x0 + c * ((w0 + 10) / 3.0f), bw = (w0 + 10) / 3.0f - 10;
+                if (Button({bx, y, bw, 36}, TextFormat("Buy a %s  \xC2\xB7  %s", ClassOf(c).name, Thousands(ShipPrice(c)).c_str()), false, campGold >= ShipPrice(c))) {
+                    CampaignAct(ACT_BUY_ESCORT, c);
+                    sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
+                }
+            }
     }
-    if (Button({r.x + 30, r.y + ph - 72, pw - 60, 48}, "Set sail  (E)", true)) {
+    if (Button({r.x + 30, r.y + ph - 64, pw - 60, 44}, "Set sail  (E)", true)) {
         portOpen = false;
         DisableCursor();
     }

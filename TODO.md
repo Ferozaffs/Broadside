@@ -898,8 +898,27 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
     Gentleman Corwin, Calypso Vane, Old Rime, Cinder Kate, the Grey Widow;
   - the Odyssey's upgrades now work in the campaign (World::PerksOn) - the dread pirates use them, the upgrades of
     phase 3 can. Tests: BS_SEALIFETEST, BS_SEAEVENTS=s (how often), BS_SEAEVENT=1..4 (which).
+- [x] Zones, no rubber banding (2026-11-19, the user: "balancing per zone or sub zone ... you become stronger and get
+  destroyed if you venture too far without upgrades. No rubber banding. In Odyssey it's fine"). campaign::ZoneLevel
+  (x, z) 1-10 by place alone: the Temperate Isles 1-2.2 (middle to rim), the Tropics 3-6, the Frozen North 3-6.5, the
+  Fog Banks 5-8, the Ember Reach 6-10 (inner edge to the chart's edge). A campaign pirate gets the zone's hull
+  (x0.7-2.2), gunnery (aim error 0.09 rad at 1, none from 8), heavy shot and drilled gunners from 4-5, one or two
+  special shots from 6-8; bands bigger and more frequent and the classes heavier with the level; quest pirates, dread
+  pirates, monsters and the lairs' bosses (voyage::Difficulty by level) the same. Pay x LevelMul (0.53-1.7). Nothing
+  reads her strength. HUD: DANGER n against YOUR SHIP n (a rating from upgrades, officers, class, fleet) in green /
+  gold / red ("out of your depth"); the chart's regions show their ranges. Test: BS_ZONETEST.
 - [ ] Next: the Leviathan, the Armada and the Storm Caller (a last story across the regions?), reputation per port,
   fleet and crew (phase 3), balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
-- [ ] Phase 3: fleet and crew, upgrades and ships at the shipwright.
+- [x] Phase 3: fleet, officers, the shipwright (2026-11-19).
+  - The port screen in three tabs: Harbour (repairs for the flagship and the fleet), Tavern (quests; officers looking
+    for a berth, 1-2 a day; her officers), Shipwright (12 upgrades, each the Odyssey's upgrade at levels: timbers,
+    iron sheathing, copper bottom, drilled gunners, heavy shot, carpenters, long nines, swivel guns, grape, chain
+    shot, hot shot, boarding nets; a new flagship, the old one taken at 40%; fleet ships bought and sold).
+  - Officers (one of each, levels 1-3): master gunner (reload, shot), bosun (repairs underway), navigator (speed; a
+    fair wind after kills at 2+), surgeon (hull), quartermaster (+15% bounties a level, crates last longer). 30%
+    chance one goes down when she's sunk.
+  - The fleet: up to three escorts (the escort AI), bought, or a struck pirate taken as a prize (below 20% hull a
+    pirate may strike: come alongside, 1 = into the fleet, 2 = plunder her hold). Sunk, an escort is gone. They follow
+    her into the lairs. All saved. Test: BS_FLEETTEST; BS_CAMPGOLD, BS_CAMPFLEET, BS_PORTTAB for screenshots.
 - [ ] Phase 4: each region's water, sky, fog and weather; palms, ice floes, ash; the Fog Banks' fog.
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

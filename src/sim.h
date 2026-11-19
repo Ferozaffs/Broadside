@@ -490,7 +490,45 @@ constexpr float fastClear = 1400.0f;  // m: no enemy nearer than this for fast-s
 constexpr int startGold = 300;
 constexpr float repairPerHp = 1.5f;   // gold
 constexpr float lossOnSinking = 0.2f; // of the purse, to the salvors
-enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCEPT = 3, ACT_ABANDON = 4 };  // (accept: arg = the offer; abandon: arg = the slot)
+enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCEPT = 3, ACT_ABANDON = 4,  // (accept: arg = the offer; abandon: arg = the slot)
+                     ACT_UPGRADE = 5,     // the shipwright: arg = the upgrade (kUpgrades index)
+                     ACT_HIRE = 6,        // the tavern: arg = the recruit on offer
+                     ACT_FLAGSHIP = 7,    // the shipwright: a new ship for the captain, arg = the class
+                     ACT_BUY_ESCORT = 8,  // ...a ship for the fleet, arg = the class
+                     ACT_SELL_ESCORT = 9, // ...arg = which of the fleet
+                     ACT_PRIZE = 10 };    // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
+// The fleet: up to three ships of her own sailing with her (bought, or taken as prizes); sunk, they're gone
+constexpr int fleetMax = 3;
+int ShipPrice(int cls);               // the shipwright's price for a hull of this class
+const char* FleetName(uint16_t seed);  // a ship of her fleet's name
+// Officers: one of each, hired in a tavern; each adds to the captain's upgrades (levels 1-3)
+enum Officer : uint8_t { OF_GUNNER = 0, OF_BOSUN, OF_NAVIGATOR, OF_SURGEON, OF_QUARTERMASTER, OFFICERS };
+inline const char* const kOfficerNames[OFFICERS] = {"Master Gunner", "Bosun", "Navigator", "Surgeon", "Quartermaster"};
+std::string OfficerName(uint16_t seed);
+int OfficerCost(int level);
+struct OfficerPerk { uint8_t perk, per; };  // (per level)
+inline constexpr OfficerPerk kOfficerPerks[OFFICERS][2] = {
+    {{PK_RELOAD, 1}, {PK_SHOT, 1}}, {{PK_REGEN, 1}, {PK_REGEN, 0}}, {{PK_SPEED, 1}, {PK_FAIRWIND, 0}},
+    {{PK_HULL, 1}, {PK_HULL, 0}}, {{PK_QUARTER, 0}, {PK_QUARTER, 0}}};  // (the quartermaster: a bigger share of every bounty)
+// The shipwright's upgrades: which of the Odyssey's upgrades, how far, and the price of the first level
+struct Upgrade { uint8_t perk, max; int price; const char* name; const char* line; };
+inline constexpr Upgrade kUpgrades[] = {
+    {PK_HULL, 5, 400, "Stout timbers", "a stronger hull"},
+    {PK_ARMOUR, 5, 500, "Iron sheathing", "takes less from every hit"},
+    {PK_SPEED, 5, 400, "Copper bottom", "a faster ship"},
+    {PK_RELOAD, 5, 450, "Drilled gunners", "the guns reload faster"},
+    {PK_SHOT, 5, 450, "Heavy shot", "every ball hits harder"},
+    {PK_REGEN, 3, 600, "Carpenters' stores", "she mends a little all the time"},
+    {PK_LONG, 3, 700, "Long nines", "the further the shot flies, the harder it hits"},
+    {PK_SWIVEL, 1, 650, "Swivel guns", "the bow chaser fires three"},
+    {PK_GRAPE, 2, 900, "Grape and canister", "every gun fires a spread of pellets too"},
+    {PK_CHAIN, 3, 850, "Chain shot", "hits tear their rigging: they slow"},
+    {PK_HOTSHOT, 3, 1000, "Hot-shot furnace", "hits set them ablaze"},
+    {PK_NETTING, 3, 800, "Boarding nets", "stops a hit outright, now and then"},
+};
+constexpr int kUpgradeCount = (int)(sizeof(kUpgrades) / sizeof(kUpgrades[0]));
+int UpgradeCost(int i, int level);  // the next level's price
+struct Recruit { uint8_t role = 0, level = 1; uint16_t seed = 0; int32_t cost = 0; };
 // Quests: taken in a port's tavern, three at once at most
 enum QuestType : uint8_t { Q_TREASURE = 0, Q_BOUNTY, Q_CONVOY, Q_ESCORT, Q_CARGO, Q_CASTAWAYS, Q_CAPTIVE, Q_TYPES,
                            Q_LAIR = Q_TYPES };  // (a chain's end: sail into the boss's waters; never offered on its own)
@@ -511,7 +549,8 @@ enum QuestFlag : uint8_t { QF_SPAWNED = 1, QF_GUARDS = 2, QF_BAND1 = 4, QF_BAND2
 constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
 // The sea's own life: traders and the navy on their lanes, things that happen at sea, the regions' dread pirates
 enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS };
-enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN };
+enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN,
+                          EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST };
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -519,8 +558,15 @@ std::string PirateName(uint16_t seed);    // the quest's pirate captain
 std::string MerchantName(uint16_t seed);  // the convoy's / the escorted merchantman's name
 const char* CaptiveName(uint16_t seed);   // whom the captor holds
 const char* GoodsName(uint16_t seed);     // the cargo
-int Bounty(int cls);                  // gold for a pirate of this class sunk
-float Danger(uint8_t biome);          // how thick the pirates are (x)
+// How dangerous the sea is here: a level 1-10 set by the place alone (never by how strong she is), rising from the
+// middle of the chart outward and from the gentle regions to the wild ones. The pirates, monsters and bosses met
+// here are as strong as the level says, and pay as well: venture out before her ship is ready and she's sunk.
+float ZoneLevel(float x, float z);
+float LevelMul(float level);          // what a place pays (x): 0.53 at level 1, 1.7 at 10
+float PirateHull(float level);        // a pirate's hull here (x)
+inline int LevelDifficulty(float level) { return level <= 2.5f ? 0 : level <= 5.5f ? 1 : level <= 7.5f ? 2 : 3; }  // (voyage::Difficulty: the bosses, the monsters)
+int Bounty(int cls, float level);     // gold for a pirate of this class sunk here
+float Danger(uint8_t biome);          // a region's level, about its middle, as a multiplier (for what has no place of its own)
 }  // namespace campaign
 
 // A campaign quest (offered in a tavern, or under way: World::campQuests)
@@ -807,6 +853,7 @@ struct Ship {
     uint8_t npc = 0;        // ...the sea's own (campaign::Npc): a trader, the navy, a dread pirate
     int8_t laneFrom = -1, laneTo = -1;  // ...a trader / the navy: the lane she sails, port to port
     bool provoked = false;  // ...a trader fired on by us: she fights back
+    bool strikeRolled = false;  // ...a pirate: has she been given her chance to strike her colours?
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
     uint8_t perks[PK_COUNT] = {};  // the Odyssey: upgrades picked so far this run
@@ -841,6 +888,8 @@ struct Ship {
     bool fireship = false;  // boss mode: a burning hulk sailed at us, to blow up alongside
     int16_t chase = -1;     // ...the ship it's after
     float raiderIdle = 0.0f;  // voyage: s this pirate has been far from every convoy ship
+    float aimErr = 0.0f;      // the campaign: how poor her gunners are (rad), by the zone she's from
+    float gunMul = 1.0f;      // ...and how heavy her shot (x)
     bool pirate = false;  // pirate mode: carrying the treasure
     float maxHp = 100.0f;
     int booty = 0;        // pirate: chests aboard
@@ -1045,11 +1094,22 @@ public:
     uint8_t campChain[campaign::BIOMES] = {};  // each region's story: steps done (chainSteps + 1: its boss beaten)
     int8_t campBossSlot = -1;                // the lair's quest while its boss is fought (the world is in MODE_BOSS on the Isles)
     float campEventT = 120.0f;               // s to the next thing that happens at sea
+    struct FleetShip { uint8_t cls = SC_FRIGATE; float hull = 1.0f; uint16_t seed = 0; int16_t ship = -1; };
+    std::vector<FleetShip> campFleet;        // her fleet (at most campaign::fleetMax)
+    uint8_t campUpg[campaign::kUpgradeCount] = {};  // the shipwright's upgrades bought (levels)
+    uint8_t campOfficer[campaign::OFFICERS] = {};   // her officers' levels (0: none)
+    uint16_t campOfficerSeed[campaign::OFFICERS] = {};
+    std::vector<campaign::Recruit> campRecruits;   // the tavern's, in the port she lies in
+    int16_t campPrize = -1;                  // the struck pirate she's alongside, and how long
+    float campPrizeT = 0.0f;
+    int campPerkKey = -1, campPerkShip = -1;  // (her perks were last set for these upgrades, on this ship)
+    void ApplyCampPerks(Ship& cap);          // her upgrades and her officers' on her ship
+    void SyncFleet(Ship& cap);               // her fleet afloat round her
     float campNpcT = 0.0f;                   // s to the next look at the traffic
     int16_t campDread = -1;                  // the dread pirate hunting her (her ship)
     float campDreadAt[campaign::BIOMES] = {}; // campClock each region's was last sunk (a while before another)
     int16_t campDistress[3] = {-1, -1, -1};  // a merchantman under attack, and her two attackers
-    bool PerksOn() const { return odyssey || mode == MODE_CAMPAIGN; }  // (upgrades at work: the Odyssey's, the campaign's ships')
+    bool PerksOn() const { return odyssey || mode == MODE_CAMPAIGN || campBossSlot >= 0; }  // (the campaign's boss fights too)  // (upgrades at work: the Odyssey's, the campaign's ships')
     Ship* CampCaptain();
     int CampaignRepairCost(const Ship& s) const;  // gold to make good her hull
     bool SaveCampaign() const;
@@ -1128,6 +1188,7 @@ public:
     void UseCombo(int c) { if (c >= 0 && c < CB_COUNT) comboUse[c]++; }
     void TestKnockOut(Ship& s) { Damage(s, 1e6f, -1); }  // (tests)
     void TestDamage(Ship& s, float hp, int by) { Damage(s, hp, by); }  // (tests: a broadside from `by`)
+    void TestSpawnRaider(Vector2 at, float heading, int cls) { SpawnRaider(at, heading, cls); }  // (tests)
     void TestWinBoss() { voyageWinner = 0; bossState = 2; EndRound(true); }  // (tests: the boss beaten)
     void TestRoundPowers(Ship& s) { GiveRoundPowers(s); }
     void PerkFxAt(int kind, int a, int b, Vector3 pos, float value = 0.0f);

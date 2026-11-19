@@ -275,6 +275,13 @@ struct Snapshot {
     std::vector<Quest> campOffers;          // the tavern's (in port)
     uint8_t campChain[campaign::BIOMES] = {};
     int16_t campDread = -1;  // the dread pirate hunting her
+    uint8_t campUpg[campaign::kUpgradeCount] = {};
+    uint8_t campOfficer[campaign::OFFICERS] = {};
+    uint16_t campOfficerSeed[campaign::OFFICERS] = {};
+    struct CampFleet { uint8_t cls = 0; float hull = 1.0f; int16_t ship = -1; uint16_t seed = 0; };
+    std::vector<CampFleet> campFleet;
+    std::vector<campaign::Recruit> campRecruits;
+    int16_t campPrize = -1;
     bool odyssey = false;                 // the Odyssey: the run
     uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
@@ -487,6 +494,15 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         for (const Quest& q : world.campQuests) PutQuest(w, q);
         for (uint8_t c : world.campChain) w.Put(c);
         w.Put(world.campDread);
+        for (uint8_t u : world.campUpg) w.Put(u);
+        for (int o = 0; o < campaign::OFFICERS; ++o) { w.Put(world.campOfficer[o]); w.Put(world.campOfficerSeed[o]); }
+        w.Put((uint8_t)world.campFleet.size());
+        for (const World::FleetShip& f : world.campFleet) { w.Put(f.cls); w.Put((uint8_t)(f.hull * 255.0f)); w.Put(f.ship); w.Put(f.seed); }
+        const bool rec = world.campDocked >= 0 && world.campOffersPort == world.campDocked;
+        w.Put((uint8_t)(rec ? world.campRecruits.size() : 0));
+        if (rec)
+            for (const campaign::Recruit& r : world.campRecruits) { w.Put(r.role); w.Put(r.level); w.Put(r.seed); w.Put(r.cost); }
+        w.Put(world.campPrize);
         const bool offers = world.campDocked >= 0 && world.campOffersPort == world.campDocked;
         w.Put((uint8_t)(offers ? world.campOffers.size() : 0));
         if (offers)
@@ -697,6 +713,23 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         for (Quest& q : s.campQuests) q = GetQuest(r);
         for (uint8_t& c : s.campChain) c = r.Get<uint8_t>();
         s.campDread = r.Get<int16_t>();
+        for (uint8_t& u : s.campUpg) u = r.Get<uint8_t>();
+        for (int o = 0; o < campaign::OFFICERS; ++o) { s.campOfficer[o] = r.Get<uint8_t>(); s.campOfficerSeed[o] = r.Get<uint16_t>(); }
+        const uint8_t nf = r.Get<uint8_t>();
+        s.campFleet.clear();
+        for (int k = 0; k < nf && r.ok && k < 8; ++k) {
+            Snapshot::CampFleet f;
+            f.cls = r.Get<uint8_t>(); f.hull = r.Get<uint8_t>() / 255.0f; f.ship = r.Get<int16_t>(); f.seed = r.Get<uint16_t>();
+            s.campFleet.push_back(f);
+        }
+        const uint8_t nr = r.Get<uint8_t>();
+        s.campRecruits.clear();
+        for (int k = 0; k < nr && r.ok && k < 8; ++k) {
+            campaign::Recruit rc;
+            rc.role = r.Get<uint8_t>(); rc.level = r.Get<uint8_t>(); rc.seed = r.Get<uint16_t>(); rc.cost = r.Get<int32_t>();
+            s.campRecruits.push_back(rc);
+        }
+        s.campPrize = r.Get<int16_t>();
         const uint8_t no = r.Get<uint8_t>();
         s.campOffers.clear();
         for (int k = 0; k < no && r.ok && k < 8; ++k) s.campOffers.push_back(GetQuest(r));

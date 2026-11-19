@@ -1526,6 +1526,15 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     for (float& t : campDreadAt) t = 0.0f;
     for (int16_t& k : campDistress) k = -1;
     campLanes.clear();
+    campFleet.clear();
+    if (const char* e = getenv("BS_CAMPFLEET"))  // (screenshots: a fleet to start with)
+        for (int k = 0; k < atoi(e) && k < campaign::fleetMax; ++k) { FleetShip f; f.cls = (uint8_t)(k == 1 ? SC_CUTTER : SC_FRIGATE); f.seed = (uint16_t)(k * 7 + 3); campFleet.push_back(f); }
+    if (const char* e = getenv("BS_CAMPGOLD")) campGold = atoi(e);  // (screenshots)
+    for (uint8_t& u : campUpg) u = 0;
+    for (uint8_t& o : campOfficer) o = 0;
+    for (uint16_t& o : campOfficerSeed) o = 0;
+    campRecruits.clear();
+    campPrize = -1;
     voyageClock = 0.0f;
     voyageSpawn = 0.0f;  // (the first band as soon as the grace is up)
     voyageWait = 0.0f;
@@ -1896,6 +1905,17 @@ void World::Damage(Ship& v, float amount, int attacker) {
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
     if (mode == MODE_CAMPAIGN && v.team == campaign::neutral && attacker >= 0 && attacker < ShipCount() && ships[attacker].team == 0) v.provoked = true;  // (fired on: she fights back)
+    if (mode == MODE_CAMPAIGN && v.raider && v.questSlot < 0 && !v.npc && !v.struck && !v.strikeRolled && v.hp > 0.0f && v.hp < v.maxHp * 0.2f) {
+        v.strikeRolled = true;  // (one chance: she strikes her colours, or fights it out)
+        if (RandF() < (v.cls == SC_CUTTER ? 0.35f : 0.6f)) {
+            v.struck = true;
+            GameEvent ce{EventType::CampEvent};
+            ce.a = v.id;
+            ce.b = campaign::EV_STRUCK;
+            ce.pos = v.pos;
+            events.push_back(ce);
+        }
+    }
     if (mode == MODE_CAMPAIGN && v.questRole == campaign::QR_CAPTOR && !v.struck && v.hp > 0.0f && v.hp < v.maxHp * 0.3f) {  // the captor strikes her colours
         v.struck = true;
         GameEvent ev{EventType::Quest};
@@ -1941,10 +1961,34 @@ void World::Damage(Ship& v, float amount, int attacker) {
         if (mode == MODE_RAID && v.merchant) teamScore[1]++;  // a prize sunk
         if (mode == MODE_CAMPAIGN) {
             if (v.raider && (byEnemy || (killer >= 0 && !ships[killer].raider))) {  // a pirate sunk: the bounty on her
-                campGold += campaign::Bounty(v.cls);
+                campGold += (int32_t)(campaign::Bounty(v.cls, campaign::ZoneLevel(v.pos.x, v.pos.z)) * (1.0f + 0.15f * campOfficer[campaign::OF_QUARTERMASTER]));
                 campSunk++;
             }
+            if (v.leader >= 0)  // one of her fleet: lost
+                for (size_t k = 0; k < campFleet.size(); ++k)
+                    if (campFleet[k].ship == v.id) {
+                        GameEvent ce{EventType::CampEvent};
+                        ce.a = v.id;
+                        ce.b = campaign::EV_ESCORTLOST;
+                        ce.pos = v.pos;
+                        events.push_back(ce);
+                        campFleet.erase(campFleet.begin() + k);
+                        campSaveDue = true;
+                        break;
+                    }
             if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
+                int held = 0;
+                for (uint8_t o : campOfficer) held += o > 0;
+                if (held && RandF() < 0.3f) {  // (and now and then an officer goes down with her)
+                    int k = (int)(RandF() * campaign::OFFICERS) % campaign::OFFICERS;
+                    while (!campOfficer[k]) k = (k + 1) % campaign::OFFICERS;
+                    campOfficer[k] = 0;
+                    GameEvent ce{EventType::CampEvent};
+                    ce.a = (uint16_t)k;
+                    ce.b = campaign::EV_OFFICERLOST;
+                    events.push_back(ce);
+                    ApplyCampPerks(v);
+                }
                 campGold -= (int32_t)(campGold * campaign::lossOnSinking);
                 campSaveDue = true;
                 for (int k = 0; k < campaign::maxQuests; ++k)  // (her hold goes down with her)
@@ -1954,7 +1998,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (v.npc == campaign::NPC_DREAD) {  // a region's dread pirate: the bounty on her head
                 const int b = campaign::BiomeAt(v.pos.x, v.pos.z);
                 campDreadAt[b] = campClock;
-                const int gold = (int)(roundf(1500.0f * campaign::Danger((uint8_t)b) / 50.0f) * 50.0f);
+                const int gold = (int)(roundf(1500.0f * campaign::LevelMul(campaign::ZoneLevel(v.pos.x, v.pos.z)) / 50.0f) * 50.0f);
                 if (byEnemy || (killer >= 0 && ships[killer].team == 0)) campGold += gold;
                 GameEvent ce{EventType::CampEvent};
                 ce.a = v.id;
@@ -2210,6 +2254,7 @@ void World::FireCannon(Ship& s, const PendingShot& shot, bool authoritative) {
     b.airShot = s.submerged <= 0.0f;
     b.dmgMul = (side == 2 ? tune::chaserDamage : ClassOf(s.cls).damage) * (1.0f + 0.15f * s.perks[PK_SHOT]) *
                (s.perks[PK_DESPERADO] && s.hp < s.maxHp * 0.4f ? 1.0f + 0.3f * s.perks[PK_DESPERADO] : 1.0f);
+    b.dmgMul *= s.gunMul;  // (the campaign's pirates: their zone's powder and shot)
     if (s.perks[PK_OVERLOAD]) b.dmgMul *= 1.0f + 0.3f * s.perks[PK_OVERLOAD];  // (Double Charges)
     if (s.perks[PK_RUNNING]) {  // (Running Fight: the faster she goes, the harder)
         const float top = ClassOf(s.cls).topSpeed * (1.0f + 0.06f * s.perks[PK_SPEED]);
@@ -2769,7 +2814,7 @@ void World::UpdateCrates(float dt) {
             if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 13.0f) continue;  // (a generous reach: sail near it and it's yours)
             if (c.type >= PU_COUNT) {  // a sea-chest: gold, and now and then a chart
                 if (mode == MODE_CAMPAIGN && s.team == 0) {
-                    const int gold = (int)(roundf((60.0f + 100.0f * RandF()) * campaign::Danger(campaign::BiomeAt(c.x, c.z)) / 5.0f) * 5.0f);
+                    const int gold = (int)(roundf((60.0f + 100.0f * RandF()) * campaign::LevelMul(campaign::ZoneLevel(c.x, c.z)) / 5.0f) * 5.0f);
                     campGold += gold;
                     GameEvent ce{EventType::CampEvent};
                     ce.a = s.id;
@@ -3029,7 +3074,7 @@ void World::UpdateBalls(float dt) {
                 events.push_back(e);
                 if (b.owner < ShipCount() && ships[b.owner].active) ships[CaptainOf(b.owner)].kills++;
                 if (mode == MODE_CAMPAIGN && b.owner < ShipCount() && ships[b.owner].team == 0) {  // (the campaign: what it's worth)
-                    const int gold = (int)(roundf((m.type == MON_KRAKEN ? 700.0f : 450.0f) * campaign::Danger(campaign::BiomeAt(m.pos.x, m.pos.z)) / 10.0f) * 10.0f);
+                    const int gold = (int)(roundf((m.type == MON_KRAKEN ? 700.0f : 450.0f) * campaign::LevelMul(campaign::ZoneLevel(m.pos.x, m.pos.z)) / 10.0f) * 10.0f);
                     campGold += gold;
                     GameEvent ce{EventType::CampEvent};
                     ce.b = campaign::EV_MONSTERSLAIN;
@@ -3552,8 +3597,9 @@ void World::BotThink(Ship& s, float dt) {
         float sn = Clamp(tune::gravity * range / (MC.muzzleSpeed * MC.muzzleSpeed), -1.0f, 1.0f);
         float elev = 0.5f * asinf(sn) + atan2f(d.y, range);
         const float smoke = target && target->smokeT > 0.0f ? 0.06f + 0.06f * target->perks[PK_SMOKE] : 0.0f;  // (Smoke Pots: they can't see her to lay a gun)
-        if (((s.raider || s.merchant) && AimErr() > 0.0f) || smoke > 0.0f) {  // (voyage, Easy: the pirates' gunners are no great shots; their aim wanders)
-            const float err = ((s.raider || s.merchant) ? AimErr() : 0.0f) + smoke;
+        const float aimErr = mode == MODE_CAMPAIGN ? s.aimErr : AimErr();  // (the campaign: by the zone she's from)
+        if (((s.raider || s.merchant) && aimErr > 0.0f) || smoke > 0.0f) {  // (voyage, Easy: the pirates' gunners are no great shots; their aim wanders)
+            const float err = ((s.raider || s.merchant) ? aimErr : 0.0f) + smoke;
             const float t = (float)time, yawErr = err * sinf(t * 0.9f + s.id * 2.1f) + (smoke > 0.0f ? smoke * 0.8f * sinf(t * 2.3f + s.id) : 0.0f), c = cosf(yawErr), sn2 = sinf(yawErr);
             d = {d.x * c + d.z * sn2, d.y, -d.x * sn2 + d.z * c};
             elev += 0.6f * err * sinf(t * 1.3f + s.id * 0.7f);
@@ -3803,6 +3849,69 @@ void World::PlaceEscort(Ship& e, const Ship& c, bool atHarbour, Vector2 hp) {
     ev.a = e.id;
     ev.pos = e.pos;
     events.push_back(ev);
+}
+
+// ---- the fleet, the officers, the shipwright -------------------------------------------------------------------
+namespace campaign {
+int ShipPrice(int cls) { return cls == SC_LINE ? 4200 : cls == SC_FRIGATE ? 1700 : cls == SC_CUTTER ? 700 : 900; }
+const char* FleetName(uint16_t seed) { return kEscortNames[seed % 24]; }
+std::string OfficerName(uint16_t seed) {
+    static const char* const first[16] = {"Ezra", "Mary", "Tobias", "Anne", "Silas", "Grace", "Jonah", "Hester",
+                                          "Amos", "Bridget", "Caleb", "Martha", "Isaac", "Nell", "Gideon", "Ruth"};
+    static const char* const last[16] = {"Holt", "Quill", "Marsh", "Penhallow", "Crane", "Whitlock", "Thorne", "Abbot",
+                                         "Fairweather", "Gage", "Locke", "Rowe", "Stroud", "Tallow", "Vane", "Wick"};
+    return std::string(first[seed % 16]) + " " + last[(seed / 16) % 16];
+}
+int OfficerCost(int level) { return 350 * level * level + 150; }
+int UpgradeCost(int i, int level) {
+    if (i < 0 || i >= kUpgradeCount) return 0;
+    return (int)(roundf(kUpgrades[i].price * powf((float)(level + 1), 1.4f) / 50.0f) * 50.0f);
+}
+}  // namespace campaign
+
+// Her upgrades (the shipwright's) and what her officers bring, on her ship; her hull's share kept
+void World::ApplyCampPerks(Ship& cap) {
+    using namespace campaign;
+    uint8_t p[PK_COUNT] = {};
+    for (int i = 0; i < kUpgradeCount; ++i) p[kUpgrades[i].perk] = (uint8_t)std::min<int>(p[kUpgrades[i].perk] + campUpg[i], kPerkMax[kUpgrades[i].perk]);
+    for (int o = 0; o < OFFICERS; ++o)
+        for (const OfficerPerk& op : kOfficerPerks[o])
+            if (campOfficer[o] && op.per) p[op.perk] = (uint8_t)std::min<int>(p[op.perk] + op.per * campOfficer[o], kPerkMax[op.perk]);
+    if (campOfficer[OF_NAVIGATOR] >= 2) p[PK_FAIRWIND] = std::max<uint8_t>(p[PK_FAIRWIND], 1);
+    if (campOfficer[OF_QUARTERMASTER]) p[PK_QUARTER] = std::max<uint8_t>(p[PK_QUARTER], 1);
+    const float frac = cap.maxHp > 0.0f ? cap.hp / cap.maxHp : 1.0f;
+    for (int k = 0; k < PK_COUNT; ++k) cap.perks[k] = p[k];
+    cap.maxHp = MaxHpOf(cap);
+    cap.hp = cap.alive ? fmaxf(1.0f, frac * cap.maxHp) : cap.hp;
+}
+
+// Her fleet afloat round her: any of them not yet out (just bought, a new session, back from a lair) put to sea
+// astern of her; their hulls kept for the save
+void World::SyncFleet(Ship& cap) {
+    for (size_t k = 0; k < campFleet.size(); ++k) {
+        FleetShip& f = campFleet[k];
+        Ship* e = f.ship >= 0 && f.ship < ShipCount() && ships[f.ship].active && ships[f.ship].leader == cap.id ? &ships[f.ship] : nullptr;
+        if (e) {
+            if (e->alive) f.hull = Clamp(e->hp / fmaxf(e->maxHp, 1.0f), 0.05f, 1.0f);
+            e->slot = (uint8_t)k;
+            continue;
+        }
+        const int j = NewShipSlot();
+        if (j < 0) return;
+        Ship& n = ships[j];
+        n = Ship{};
+        n.active = true;
+        n.id = (uint16_t)j;
+        n.isBot = true;
+        n.leader = (int16_t)cap.id;
+        n.slot = (uint8_t)k;
+        n.cls = n.nextCls = f.cls;
+        n.fixedCls = true;
+        n.name = campaign::FleetName(f.seed);
+        PlaceEscort(n, cap, false, {});
+        n.hp = n.maxHp * f.hull;
+        f.ship = (int16_t)j;
+    }
 }
 
 void World::SpawnFleet(Ship& c) {
@@ -4477,7 +4586,8 @@ void World::Step() {
         if (!s.alive) {
             s.deadTimer -= dt;
             if (s.deadTimer <= 0) {
-                if (s.leader >= 0) s.stowed = true;  // lost escorts wait for their captain
+                if (s.leader >= 0 && mode == MODE_CAMPAIGN) RemoveShip(s.id);  // (the campaign: sunk, she's gone)
+                else if (s.leader >= 0) s.stowed = true;  // lost escorts wait for their captain
                 else if (s.fireship) FireshipBlast(s);
                 else if (s.raider || s.merchant) {  // (a pirate (voyage) or a merchant (raid) goes down for good; its slot isn't handed straight on)
                     RemoveShip(s.id);
@@ -4513,10 +4623,20 @@ void World::Step() {
 
 // ---- the campaign ----------------------------------------------------------------------------------
 namespace campaign {
-int Bounty(int cls) { return cls == SC_LINE ? 220 : cls == SC_FRIGATE ? 130 : 80; }
+float ZoneLevel(float x, float z) {
+    // each region's level at its inner edge and at the edge of the chart (the Temperate Isles: the middle and its rim)
+    static const float lo[BIOMES] = {1.0f, 3.0f, 3.0f, 6.0f, 5.0f}, hi[BIOMES] = {2.2f, 6.0f, 6.5f, 10.0f, 8.0f};
+    const int b = BiomeAt(x, z);
+    const float r = sqrtf(x * x + z * z);
+    const float t = b == TEMPERATE ? Clamp(r / 4300.0f, 0.0f, 1.0f) : Clamp((r - 4300.0f) / 8500.0f, 0.0f, 1.0f);
+    return lo[b] + (hi[b] - lo[b]) * t;
+}
+float LevelMul(float level) { return 0.4f + 0.13f * Clamp(level, 1.0f, 10.0f); }
+float PirateHull(float level) { return 0.7f + 0.17f * (Clamp(level, 1.0f, 10.0f) - 1.0f); }
+int Bounty(int cls, float level) { return (int)(roundf((cls == SC_LINE ? 220.0f : cls == SC_FRIGATE ? 130.0f : 80.0f) * LevelMul(level) / 5.0f) * 5.0f); }
 float Danger(uint8_t b) {
-    static const float k[BIOMES] = {0.6f, 1.0f, 1.0f, 1.35f, 1.2f};
-    return b < BIOMES ? k[b] : 1.0f;
+    static const float mid[BIOMES] = {1.5f, 4.5f, 4.7f, 8.0f, 6.5f};
+    return LevelMul(b < BIOMES ? mid[b] : 3.0f);
 }
 }  // namespace campaign
 
@@ -4531,14 +4651,23 @@ bool World::CampaignAct(int shipId, int act, int arg) {
     switch (act) {
         case campaign::ACT_REPAIR: {  // the harbourmaster's yard: as much of her hull as the purse will run to
             if (campDocked < 0 || !s.alive) return false;
-            const float missing = s.maxHp - s.hp;
+            float missing = s.maxHp - s.hp;
+            for (const FleetShip& f : campFleet)
+                if (f.ship >= 0 && f.ship < ShipCount() && ships[f.ship].active && ships[f.ship].alive) missing += ships[f.ship].maxHp - ships[f.ship].hp;
             if (missing <= 0.5f) return false;
-            const float afford = campGold / campaign::repairPerHp;
-            const float fix = fminf(missing, afford);
-            if (fix <= 0.5f) return false;
-            campGold -= (int32_t)ceilf(fix * campaign::repairPerHp);
+            float afford = campGold / campaign::repairPerHp;
+            auto mend = [&](Ship& m) {
+                const float fix = fminf(m.maxHp - m.hp, afford);
+                if (fix <= 0.0f) return;
+                afford -= fix;
+                campGold -= (int32_t)ceilf(fix * campaign::repairPerHp);
+                m.hp += fix;
+            };
+            mend(s);
+            for (const FleetShip& f : campFleet)
+                if (f.ship >= 0 && f.ship < ShipCount() && ships[f.ship].active && ships[f.ship].alive) mend(ships[f.ship]);
             campGold = std::max(campGold, 0);
-            s.hp = fminf(s.maxHp, s.hp + fix);
+            SyncFleet(s);
             GameEvent ev{EventType::Repaired};
             ev.a = s.id;
             ev.pos = s.pos;
@@ -4573,6 +4702,88 @@ bool World::CampaignAct(int shipId, int act, int arg) {
             ClearQuest(arg);
             campSaveDue = true;
             return true;
+        case campaign::ACT_UPGRADE: {
+            if (campDocked < 0 || arg < 0 || arg >= campaign::kUpgradeCount || campUpg[arg] >= campaign::kUpgrades[arg].max) return false;
+            const int cost = campaign::UpgradeCost(arg, campUpg[arg]);
+            if (campGold < cost) return false;
+            campGold -= cost;
+            campUpg[arg]++;
+            ApplyCampPerks(s);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_HIRE: {
+            if (campDocked < 0 || arg < 0 || arg >= (int)campRecruits.size() || campGold < campRecruits[arg].cost) return false;
+            const campaign::Recruit r = campRecruits[arg];
+            campGold -= r.cost;
+            campOfficer[r.role] = r.level;
+            campOfficerSeed[r.role] = r.seed;
+            campRecruits.erase(campRecruits.begin() + arg);
+            ApplyCampPerks(s);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_FLAGSHIP: {  // a new ship for her: the old one taken in part-payment
+            if (campDocked < 0 || arg < 0 || arg >= SC_PLAYABLE || arg == s.cls) return false;
+            const int cost = campaign::ShipPrice(arg) - campaign::ShipPrice(s.cls) * 2 / 5;
+            if (campGold < cost) return false;
+            campGold -= std::max(cost, 0);
+            s.cls = s.nextCls = (uint8_t)arg;
+            s.fixedCls = true;
+            s.maxHp = MaxHpOf(s);
+            s.hp = s.maxHp;
+            campLoadCls = arg;
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_BUY_ESCORT: {
+            if (campDocked < 0 || arg < 0 || arg >= SC_PLAYABLE || (int)campFleet.size() >= campaign::fleetMax) return false;
+            const int cost = campaign::ShipPrice(arg);
+            if (campGold < cost) return false;
+            campGold -= cost;
+            FleetShip f;
+            f.cls = (uint8_t)arg;
+            f.seed = (uint16_t)(RandF() * 65535.0f);
+            campFleet.push_back(f);
+            SyncFleet(s);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_SELL_ESCORT: {
+            if (campDocked < 0 || arg < 0 || arg >= (int)campFleet.size()) return false;
+            const FleetShip f = campFleet[arg];
+            campGold += (int32_t)(campaign::ShipPrice(f.cls) * 0.4f * f.hull);
+            if (f.ship >= 0 && f.ship < ShipCount() && ships[f.ship].active && ships[f.ship].leader == s.id) RemoveShip(f.ship);
+            campFleet.erase(campFleet.begin() + arg);
+            campSaveDue = true;
+            return true;
+        }
+        case campaign::ACT_PRIZE: {  // alongside a struck pirate: into the fleet, or her hold emptied
+            if (campPrize < 0 || campPrize >= ShipCount() || !ships[campPrize].active || !ships[campPrize].struck) return false;
+            Ship& p = ships[campPrize];
+            GameEvent ce{EventType::CampEvent};
+            ce.a = p.id;
+            ce.pos = p.pos;
+            if (arg == 1 && (int)campFleet.size() < campaign::fleetMax && p.cls < SC_PLAYABLE) {
+                FleetShip f;
+                f.cls = p.cls;
+                f.hull = 0.3f;
+                f.seed = (uint16_t)(RandF() * 65535.0f);
+                campFleet.push_back(f);
+                ce.b = campaign::EV_PRIZE;
+            } else {
+                const int gold = campaign::Bounty(p.cls, campaign::ZoneLevel(p.pos.x, p.pos.z)) * 2;
+                campGold += gold;
+                ce.b = campaign::EV_PLUNDER;
+                ce.value = (float)gold;
+            }
+            events.push_back(ce);
+            RemoveShip(p.id);
+            campPrize = -1;
+            SyncFleet(s);
+            campSaveDue = true;
+            return true;
+        }
         case campaign::ACT_FAST_ON: campWantFast = true; return true;
         case campaign::ACT_FAST_OFF: campWantFast = false; return true;
     }
@@ -4590,6 +4801,18 @@ void World::UpdateCampaign(float dt) {
         if (s.active && (!s.isBot || (campBotCaptain && !s.raider)) && s.leader < 0) { cap = &s; break; }
     if (!cap) return;
     if (cap->cls < SC_PLAYABLE) campLoadCls = cap->cls;  // (her ship and hull as they are, for the save: she may be gone when it's written)
+    if ((int)(campClock * 2.0f) != (int)((campClock - dt) * 2.0f)) SyncFleet(*cap);  // (twice a second)
+    {  // her perks as her upgrades and officers make them (cheap to check: a sum)
+        int want = 0, have = 0;
+        for (int i = 0; i < campaign::kUpgradeCount; ++i) want += campUpg[i] * (i + 1);
+        for (int o = 0; o < campaign::OFFICERS; ++o) want += campOfficer[o] * (o + 31);
+        (void)have;
+        if (want != campPerkKey || campPerkShip != cap->id) { ApplyCampPerks(*cap); campPerkKey = want; campPerkShip = cap->id; }
+    }
+    // a struck pirate alongside: hers, as a prize (the client asks which: into the fleet, or plunder)
+    campPrize = -1;
+    for (const Ship& p : ships)
+        if (p.active && p.alive && p.struck && p.raider && p.questSlot < 0 && cap->alive && Vector2Distance({p.pos.x, p.pos.z}, {cap->pos.x, cap->pos.z}) < 60.0f) { campPrize = (int16_t)p.id; break; }
     campLoadHull = cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f;
     // in port: lying slowly within reach of a harbour's anchorage
     const float spd = Vector2Length({cap->vel.x, cap->vel.z});
@@ -4615,17 +4838,38 @@ void World::UpdateCampaign(float dt) {
     for (Ship& p : ships) {
         if (!p.active || !p.raider || p.questSlot >= 0 || p.npc) continue;  // (a quest's pirates come and go with the quest; the dread pirate with hers)
         ++pirates;
-        if (!p.alive) continue;
+        if (!p.alive || p.struck) {
+            if (p.struck) p.raiderIdle += dt * 0.25f;  // (struck: she drifts off in a while)
+            if (p.raiderIdle > 90.0f) RemoveShip(p.id);
+            continue;
+        }
         const float nd = cap->alive ? Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}) : 1e9f;
         nearFoe = fminf(nearFoe, nd);
-        p.catchUp = 0.05f + Clamp((nd - 120.0f) / 400.0f, 0.0f, 1.0f) * 0.45f;
+        p.catchUp = Clamp((nd - 700.0f) / 900.0f, 0.0f, 1.0f) * 0.35f;  // (quicker far off, to find her; at fighting speed by the time they close: no flying in on a crest at 60 m/s)
         p.raiderIdle = (nd > 3200.0f || campDocked >= 0) ? p.raiderIdle + dt : 0.0f;
         if (p.raiderIdle > 20.0f) {
             RemoveShip(p.id);
             gone = true;
         }
     }
-    if (campDocked >= 0 && (campOffersPort != campDocked || campOffersDay != (int)(campClock / dayLength))) MakeOffers(campDocked);  // (the tavern's work today)
+    if (campDocked >= 0 && (campOffersPort != campDocked || campOffersDay != (int)(campClock / dayLength))) {  // (the tavern's work today, and who's looking for a berth)
+        MakeOffers(campDocked);
+        campRecruits.clear();
+        uint32_t h = seedUsed * 374761393u ^ (uint32_t)(campDocked + 3) * 668265263u ^ (uint32_t)(campOffersDay + 5) * 2246822519u;
+        auto R = [&]() { h = h * 1664525u + 1013904223u; return (h >> 8) / 16777216.0f; };
+        const int n = 1 + (R() < 0.6f ? 1 : 0);
+        for (int k = 0; k < n; ++k) {
+            campaign::Recruit r;
+            r.role = (uint8_t)((int)(R() * campaign::OFFICERS) % campaign::OFFICERS);
+            const float u = R() + 0.05f * (campaign::ZoneLevel(harbours[campDocked].x, harbours[campDocked].z) - 2.0f);  // (better hands in the wilder ports)
+            r.level = (uint8_t)(u < 0.55f ? 1 : u < 0.9f ? 2 : 3);
+            r.seed = (uint16_t)(R() * 65535.0f);
+            r.cost = campaign::OfficerCost(r.level);
+            bool dup = false;
+            for (const campaign::Recruit& o : campRecruits) dup |= o.role == r.role;
+            if (!dup) campRecruits.push_back(r);
+        }
+    }
     static bool lairTest = getenv("BS_CAMPLAIR") != nullptr;  // (screenshots: a region's lair right ahead, "biome")
     if (lairTest && campClock > 6.0f && campQuests[0].state == QS_NONE) {
         lairTest = false;
@@ -4646,18 +4890,19 @@ void World::UpdateCampaign(float dt) {
         if (p.active && p.alive && p.questSlot >= 0 && p.team == 1 && !p.struck) nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
     campFast = campWantFast && cap->alive && campDocked < 0 && nearFoe > fastClear;
     // a new band, now and then, out of sight round her (not in port, not near one)
-    const uint8_t biome = BiomeAt(cap->pos.x, cap->pos.z);
-    campSpawn -= dt * Danger(biome) * (campFast ? 1.6f : 1.0f);  // (making way fast, she meets more of them)
+    const float level = ZoneLevel(cap->pos.x, cap->pos.z);
+    difficulty = (uint8_t)LevelDifficulty(level);  // (the monsters here: as the zone is)
+    campSpawn -= dt * (0.45f + 0.09f * level) * (campFast ? 1.6f : 1.0f);  // (making way fast, she meets more of them)
     if (gone) campSpawn = fmaxf(campSpawn, 1.0f);
-    if (campSpawn > 0.0f || !cap->alive || campDocked >= 0 || pirates >= 4) return;
+    const int most = 2 + (int)(ZoneLevel(cap->pos.x, cap->pos.z) / 3.0f);  // (at once: two at home, five out in the wild)
+    if (campSpawn > 0.0f || !cap->alive || campDocked >= 0 || pirates >= most) return;
     campSpawn = 70.0f + RandF() * 80.0f;
     float portD = 1e9f;
     for (const Harbour& hb : harbours) portD = fminf(portD, Vector2Distance({hb.x, hb.z}, {cap->pos.x, cap->pos.z}));
     if (portD < portSafe) return;  // (her port's forts: try again later)
-    const float danger = Danger(biome);
-    const int band = 1 + (RandF() < 0.35f * danger ? 1 : 0) + (RandF() < 0.12f * danger ? 1 : 0);
+    const int band = 1 + (RandF() < 0.08f * level ? 1 : 0) + (RandF() < 0.045f * (level - 2.0f) ? 1 : 0);
     const float base = RandF() * 2.0f * PI;
-    for (int k = 0; k < band && pirates < 4; ++k) {
+    for (int k = 0; k < band && pirates < most; ++k) {
         for (int tries = 0; tries < 16; ++tries) {
             const float a = base + (k - 0.5f * (band - 1)) * 0.35f + (RandF() - 0.5f) * 0.3f, d = 1150.0f + RandF() * 350.0f;
             const Vector2 at = {cap->pos.x + sinf(a) * d, cap->pos.z + cosf(a) * d};
@@ -4665,8 +4910,8 @@ void World::UpdateCampaign(float dt) {
             bool nearPort = false;
             for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, at) < portSafe;
             if (nearPort) continue;
-            const float u = RandF() + (danger - 1.0f) * 0.6f;
-            const int cls = u < 0.45f ? SC_CUTTER : u < 0.9f ? SC_FRIGATE : SC_LINE;
+            const float u = RandF() + (level - 4.0f) * 0.1f;  // (cutters in the gentle seas, ships of the line out in the wild)
+            const int cls = u < 0.45f ? SC_CUTTER : u < 0.92f ? SC_FRIGATE : SC_LINE;
             SpawnRaider(at, atan2f(cap->pos.x - at.x, cap->pos.z - at.y), cls);
             ++pirates;
             break;
@@ -4808,8 +5053,8 @@ bool World::BuildQuest(Quest& q, int type, int port, int tb, uint32_t& h) {
     q.x = p.x;
     q.z = p.y;
     q.biome = BiomeAt(q.x, q.z);
-    float danger = Danger(q.biome);
-    if (q.to >= 0) danger = fmaxf(danger, Danger(PortBiome(q.to)));
+    float danger = LevelMul(ZoneLevel(q.x, q.z));
+    if (q.to >= 0) danger = fmaxf(danger, LevelMul(ZoneLevel(harbours[q.to].x, harbours[q.to].z)));
     q.reward = (int32_t)(roundf(q.reward * danger / 10.0f) * 10.0f);
     return true;
 }
@@ -4819,7 +5064,7 @@ uint8_t ChainBoss(int b) {
     static const uint8_t k[BIOMES] = {BOSS_FORTRESS, BOSS_KRAKEN, BOSS_SERPENT, BOSS_IRONCLAD, BOSS_DUTCHMAN};
     return b >= 0 && b < BIOMES ? k[b] : BOSS_LEVIATHAN;
 }
-int ChainReward(int b) { return (int)(roundf(2500.0f * Danger((uint8_t)b) / 50.0f) * 50.0f); }
+int ChainReward(int b) { return (int)(roundf(2500.0f * Danger((uint8_t)b) / 50.0f) * 50.0f); }  // (about: a lair pays as where it is, ChainQuest)
 }  // namespace campaign
 
 // A step of a region's story: the kind its table says, in that region (a little better paid than the tavern's own)
@@ -4831,7 +5076,7 @@ bool World::ChainQuest(Quest& q, int biome, int step, int port, uint32_t& h) {
     q.chain = (uint8_t)(biome + 1);
     q.step = (uint8_t)step;
     q.deadline = 0.0f;  // (the story waits for her)
-    q.reward = type == Q_LAIR ? ChainReward(biome) : (int32_t)(roundf(q.reward * 1.3f / 10.0f) * 10.0f);
+    q.reward = type == Q_LAIR ? (int32_t)(roundf(2500.0f * LevelMul(ZoneLevel(q.x, q.z)) / 50.0f) * 50.0f) : (int32_t)(roundf(q.reward * 1.3f / 10.0f) * 10.0f);
     if (type == Q_CONVOY && q.to >= 0 && q.to == port) q.to = (int8_t)((port + 1) % kPorts);
     return true;
 }
@@ -4892,6 +5137,7 @@ void World::CampaignBoss(int slot) {
         crates[i].timer = 0.5f + 0.4f * i;
     }
     bossChoice = ChainBoss(q.biome < BIOMES ? q.biome : q.chain - 1);
+    difficulty = (uint8_t)LevelDifficulty(ZoneLevel(q.x, q.z));  // (the boss as strong as where its lair is)
     bossId = -1;
     bossPhase = bossPat = 0;
     bossWait = 20.0f;
@@ -4979,6 +5225,7 @@ int World::SpawnQuestShip(int slot, int role, Vector2 at, float heading, int cls
     s.merchant = merchant;
     s.raider = team == 1 && !merchant;  // (a merchantman of either side isn't a pirate)
     s.name = name;
+    if (merchant || team != 1) { for (uint8_t& k : s.perks) k = 0; s.aimErr = 0.0f; s.gunMul = 1.0f; }
     if (merchant) s.maxHp = s.hp = MaxHpOf(s) * hullMul;
     if ((merchant || role == campaign::QR_GUARD) && !events.empty() && events.back().type == EventType::Respawn && events.back().a == id)
         events.back().flags = 0;  // (a convoy putting to sea far off: no alarm; a pirate found close by: the alarm)
@@ -5124,7 +5371,7 @@ void World::UpdateQuests(float dt, Ship& cap) {
                         at = Vector2Add(me, Vector2Scale(dir, 1100.0f));
                         if (RocksHeight(rocks, at.x, at.y) > -25.0f && !OpenSpot(h, -1, me, 1000.0f, 1300.0f, at)) break;
                     }
-                    const float hull = (q.type == Q_BOUNTY ? 1.5f : 1.15f) * Danger(q.biome);
+                    const float hull = q.type == Q_BOUNTY ? 1.5f : 1.15f;  // (on top of the zone's: SpawnRaider)
                     const int cls = q.type == Q_CAPTIVE ? SC_FRIGATE : q.seed % 3 == 0 ? SC_LINE : SC_FRIGATE;
                     SpawnQuestShip(slot, role, at, atan2f(me.x - at.x, me.y - at.y), cls, 1, false, hull, PirateName(q.seed));
                     if (q.type == Q_BOUNTY) {
@@ -5268,7 +5515,8 @@ int World::SpawnNpc(int npc, Vector2 at, float heading, int cls, int team, bool 
     s.raider = team == 1 && !merchant;
     s.name = name;
     s.wp = 0;
-    if (merchant) s.maxHp = s.hp = MaxHpOf(s) * hullMul;
+    if (merchant || team != 1) { for (uint8_t& k : s.perks) k = 0; s.aimErr = 0.0f; s.gunMul = 1.0f; }
+    if (merchant || team != 1) s.maxHp = s.hp = MaxHpOf(s) * hullMul;
     if (team != 1 && !events.empty() && events.back().type == EventType::Respawn && events.back().a == id) events.back().flags = 0;  // (no alarm for a friend)
     return id;
 }
@@ -5343,7 +5591,7 @@ void World::UpdateSeaLife(float dt, Ship& cap, float nearFoe) {
             ce.a = (uint16_t)m;
             ce.pos = alive ? ships[m].pos : cap.pos;
             if (alive) {  // her thanks
-                const int gold = (int)(roundf(350.0f * Danger((uint8_t)BiomeAt(me.x, me.y)) / 10.0f) * 10.0f);
+                const int gold = (int)(roundf(350.0f * LevelMul(ZoneLevel(me.x, me.y)) / 10.0f) * 10.0f);
                 campGold += gold;
                 ce.b = EV_SAVED;
                 ce.value = (float)gold;
@@ -5394,7 +5642,7 @@ void World::SeaEvent(Ship& cap) {
     // what: by the region (the wilder, the more dangerous), and what's possible now
     const bool dreadReady = campDread < 0 && (campDreadAt[b] == 0.0f || campClock - campDreadAt[b] > 3.0f * dayLength) && campClock > 240.0f;
     const bool monsterReady = !monsters[MON_KRAKEN].active && !monsters[MON_MEGALODON].active;
-    float w[5] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 10.0f + 8.0f * Danger((uint8_t)b) : 0.0f, 0.0f};
+    float w[5] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 8.0f + 2.0f * ZoneLevel(me.x, me.y) : 0.0f, 0.0f};
     if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one)
         const int k = atoi(e) - 1;
         for (int i = 0; i < 5; ++i) w[i] = i == k ? 1.0f : 0.0f;
@@ -5457,7 +5705,7 @@ void World::SeaEvent(Ship& cap) {
         case EV_DREAD: {  // the region's dread pirate, and two of her mates: hunting her
             if (!ahead(1200.0f, 1500.0f, at)) return;
             const float hd = atan2f(me.x - at.x, me.y - at.y);
-            const float hull = 2.6f * fmaxf(Danger((uint8_t)b), 0.8f);
+            const float hull = 2.6f * PirateHull(ZoneLevel(at.x, at.y));
             const int d = SpawnNpc(NPC_DREAD, at, hd, SC_LINE, 1, false, hull, DreadName(b));
             if (d < 0) return;
             Ship& s = ships[d];
@@ -5465,7 +5713,7 @@ void World::SeaEvent(Ship& cap) {
                 {{PK_CHAIN, 2}, {PK_RICOCHET, 1}}, {{PK_HOTSHOT, 2}, {PK_GRAPE, 1}}, {{PK_CHAIN, 3}, {PK_MORTAR, 1}},
                 {{PK_HOTSHOT, 3}, {PK_MORTAR, 1}}, {{PK_HOMING, 2}, {PK_SPECTRAL, 1}}};
             for (const auto& pk : kPerks[b]) s.perks[pk[0]] = (uint8_t)std::min<int>(pk[1], kPerkMax[pk[0]]);
-            s.maxHp = s.hp = MaxHpOf(s) * hull;
+            s.maxHp = s.hp = MaxHpOf(s) * hull;  // (her own: the zone's and the dread's together)
             campDread = (int16_t)d;
             for (int k = 0; k < 2; ++k) {
                 const Vector2 p = {at.x + (k ? 90.0f : -90.0f), at.y - 70.0f};
@@ -5498,7 +5746,12 @@ bool World::SaveCampaign() const {
                     q.biome, q.count, q.sunk, q.gone, q.chain, q.step);
     fprintf(f, "chains");
     for (uint8_t c : campChain) fprintf(f, " %d", c);
+    fprintf(f, "\nupgrades");
+    for (uint8_t u : campUpg) fprintf(f, " %d", u);
+    fprintf(f, "\nofficers");
+    for (int o = 0; o < campaign::OFFICERS; ++o) fprintf(f, " %d %u", campOfficer[o], (unsigned)campOfficerSeed[o]);
     fprintf(f, "\n");
+    for (const FleetShip& fs : campFleet) fprintf(f, "fleet %d %.2f %u\n", fs.cls, fs.hull, (unsigned)fs.seed);
     if (cap) fprintf(f, "class %d\nhull %.2f\n", (int)cap->cls, cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f);
     else if (campLoadCls >= 0) fprintf(f, "class %d\nhull %.2f\n", campLoadCls, campLoadHull);  // (she's left the sea already: as she was last)
     fclose(f);
@@ -5549,6 +5802,17 @@ bool World::LoadCampaign() {
                     }
         } else if (!strcmp(key, "chains")) {
             for (uint8_t& c : campChain) { int v = 0; if (fscanf(f, "%d", &v) == 1) c = (uint8_t)v; }
+        } else if (!strcmp(key, "upgrades")) {
+            for (uint8_t& u : campUpg) { int v = 0; if (fscanf(f, "%d", &v) == 1) u = (uint8_t)v; }
+        } else if (!strcmp(key, "officers")) {
+            for (int o = 0; o < campaign::OFFICERS; ++o) { int v = 0; unsigned sd = 0; if (fscanf(f, "%d %u", &v, &sd) == 2) { campOfficer[o] = (uint8_t)v; campOfficerSeed[o] = (uint16_t)sd; } }
+        } else if (!strcmp(key, "fleet")) {
+            int c = 0; float hl = 1.0f; unsigned sd = 0;
+            if (fscanf(f, "%d %f %u", &c, &hl, &sd) == 3 && (int)campFleet.size() < campaign::fleetMax) {
+                FleetShip fs;
+                fs.cls = (uint8_t)c; fs.hull = hl; fs.seed = (uint16_t)sd;
+                campFleet.push_back(fs);
+            }
         }
     }
     fclose(f);
@@ -5630,6 +5894,17 @@ void World::SpawnRaider(Vector2 at, float heading, int cls, float hullMul) {
     p.name = n < 16 ? std::string(kPirateNames[n]) : std::string(nm);
     p.pos = {at.x, ocean.Height(at.x, at.y) + 1.0f, at.y};
     p.rot = QuaternionFromAxisAngle({0, 1, 0}, heading);
+    if (mode == MODE_CAMPAIGN) {  // (the campaign: as the zone she's in makes her - her hull, her gunners, her powder, her tricks)
+        const float L = campaign::ZoneLevel(at.x, at.y);
+        hullMul *= campaign::PirateHull(L);
+        p.aimErr = fmaxf(0.03f, 0.17f - 0.02f * L);  // (poor gunners at home, good ones out in the wild: a little wander always - a whole salvo laid on one point misses together)
+        p.gunMul = 0.55f + 0.07f * L;                // (light shot and weak powder at home, heavy out there)
+        p.perks[PK_SHOT] = (uint8_t)Clamp((L - 3.0f) * 0.5f, 0.0f, 3.0f);
+        p.perks[PK_RELOAD] = (uint8_t)Clamp((L - 4.0f) * 0.5f, 0.0f, 3.0f);
+        static const uint8_t kTricks[4] = {PK_HOTSHOT, PK_CHAIN, PK_GRAPE, PK_LONG};
+        for (int k = 0; k < 2 && !getenv("BS_NOTRICKS"); ++k)
+            if (RandF() < (L - 5.5f - 2.0f * k) * 0.22f) p.perks[kTricks[(int)(RandF() * 4) % 4]] = (uint8_t)(getenv("BS_ONLYTRICK") ? 0 : 1);
+    }
     p.maxHp = p.hp = MaxHpOf(p) * hullMul;
     p.alive = true;
     p.sail = 1.0f;
