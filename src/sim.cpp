@@ -1509,6 +1509,9 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campLastPort = (int8_t)campaign::homePort;
     campSeen = (uint16_t)(1u << campaign::homePort);
     campClock = getenv("BS_CAMPCLOCK") ? (float)atof(getenv("BS_CAMPCLOCK")) : 0.0f;  // (screenshots: a time of day, a squall)
+    campParts = getenv("BS_CAMPPARTS") ? (uint8_t)atoi(getenv("BS_CAMPPARTS")) : 0;  // (tests, screenshots)
+    campHulls = 1u << SC_CUTTER;
+    for (float& h : campHullFrac) h = 1.0f;
     campSpawn = 75.0f;
     campWantFast = campFast = false;
     campSunk = 0;
@@ -1641,7 +1644,7 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         ships[i].name = name;
         ships[i].isBot = bot;
         ships[i].fixedCls = cls >= 0;
-        ships[i].nextCls = (uint8_t)AllowedClass(cls >= 0 && cls < SC_PLAYABLE ? cls : SC_FRIGATE);
+        ships[i].nextCls = (uint8_t)AllowedClass(cls >= 0 && cls < SC_PLAYABLE ? cls : mode == MODE_CAMPAIGN ? SC_CUTTER : SC_FRIGATE);
         if (mode == MODE_TEAMS) {  // join the smaller side
             int n[2] = {0, 0};
             for (const Ship& o : ships)
@@ -2006,6 +2009,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
                 ce.value = (float)gold;
                 ce.pos = v.pos;
                 events.push_back(ce);
+                if (byEnemy || (killer >= 0 && ships[killer].team == 0)) GivePart(NextPart(campaign::ZoneLevel(v.pos.x, v.pos.z), false), v.pos);
                 campDread = -1;
                 campSaveDue = true;
             }
@@ -4809,21 +4813,28 @@ bool World::CampaignAct(int shipId, int act, int arg) {
             campSaveDue = true;
             return true;
         }
-        case campaign::ACT_FLAGSHIP: {  // a new ship for her: the old one taken in part-payment
+        case campaign::ACT_FLAGSHIP: {  // her flagship: one she owns (laid up here, as sound as she was left), or one built from her parts
             if (campDocked < 0 || arg < 0 || arg >= SC_PLAYABLE || arg == s.cls) return false;
-            const int cost = campaign::ShipPrice(arg) - campaign::ShipPrice(s.cls) * 2 / 5;
-            if (campGold < cost) return false;
-            campGold -= std::max(cost, 0);
+            const bool owned = (campHulls >> arg) & 1;
+            if (!owned) {
+                const uint8_t need = campaign::PartsFor(arg);
+                if ((campParts & need) != need || campGold < campaign::BuildCost(arg)) return false;
+                campParts &= (uint8_t)~need;
+                campGold -= campaign::BuildCost(arg);
+                campHulls |= (uint8_t)(1u << arg);
+                campHullFrac[arg] = 1.0f;
+            }
+            if (s.cls < SC_PLAYABLE) campHullFrac[s.cls] = s.maxHp > 0.0f ? Clamp(s.hp / s.maxHp, 0.15f, 1.0f) : 1.0f;
             s.cls = s.nextCls = (uint8_t)arg;
             s.fixedCls = true;
             s.maxHp = MaxHpOf(s);
-            s.hp = s.maxHp;
+            s.hp = s.maxHp * campHullFrac[arg];
             campLoadCls = arg;
             campSaveDue = true;
             return true;
         }
-        case campaign::ACT_BUY_ESCORT: {
-            if (campDocked < 0 || arg < 0 || arg >= SC_PLAYABLE || (int)campFleet.size() >= campaign::fleetMax) return false;
+        case campaign::ACT_BUY_ESCORT: {  // (the shipwright sells cutters and gunboats; bigger ones are prizes)
+            if (campDocked < 0 || !campaign::Buyable(arg) || (int)campFleet.size() >= campaign::fleetMax) return false;
             const int cost = campaign::ShipPrice(arg);
             if (campGold < cost) return false;
             campGold -= cost;
@@ -4997,7 +5008,8 @@ void World::UpdateCampaign(float dt) {
             for (const Harbour& hb : harbours) nearPort |= Vector2Distance({hb.x, hb.z}, at) < portSafe;
             if (nearPort) continue;
             const float u = RandF() + (level - 4.0f) * 0.1f;  // (cutters in the gentle seas, ships of the line out in the wild)
-            const int cls = u < 0.45f ? SC_CUTTER : u < 0.92f ? SC_FRIGATE : SC_LINE;
+            int cls = u < 0.45f ? SC_CUTTER : u < 0.92f ? SC_FRIGATE : SC_LINE;
+            if (cls == SC_LINE && level < 3.0f) cls = SC_FRIGATE;
             SpawnRaider(at, atan2f(cap->pos.x - at.x, cap->pos.z - at.y), cls);
             ++pirates;
             break;
@@ -5192,6 +5204,44 @@ void World::MakeOffers(int port) {
         Quest q;
         if (BuildQuest(q, order[n], port, tb, h)) campOffers.push_back(q);
     }
+    // a part for her next ship on one of today's (not every day): a frigate's anywhere, a ship of the line's only far out
+    if (R() < 0.45f && !campOffers.empty()) {
+        Quest& q = campOffers[(size_t)(R() * campOffers.size()) % campOffers.size()];
+        const int part = NextPart(ZoneLevel(q.x, q.z), false);
+        if (part >= 0 && !q.chain) {
+            q.part = (int8_t)part;
+            q.reward = (int32_t)(roundf(q.reward * 0.6f / 10.0f) * 10.0f);
+        }
+    }
+}
+
+int World::NextPart(float level, bool line) {
+    using namespace campaign;
+    int pick = -1, n = 0;
+    auto consider = [&](int lo, int hi) {
+        for (int p = lo; p < hi; ++p)
+            if (!((campParts >> p) & 1) && !(campHulls & (p < PT_FRAMES ? 1u << SC_FRIGATE : 1u << SC_LINE)) && RandF() * ++n < 1.0f) pick = p;
+    };
+    const bool lineOk = level >= lineParts;
+    if (line && lineOk) consider(PT_FRAMES, PARTS);  // (a lair's: a ship of the line's, while she needs one)
+    if (pick < 0) consider(PT_KEEL, PT_FRAMES);
+    if (pick < 0 && lineOk) consider(PT_FRAMES, PARTS);
+    return pick;
+}
+
+void World::GivePart(int part, Vector3 at) {
+    using namespace campaign;
+    if (part < 0 || part >= PARTS) return;
+    GameEvent ce{EventType::CampEvent};
+    ce.b = EV_PART;
+    ce.flags = (uint8_t)part;
+    ce.pos = at;
+    if ((campParts >> part) & 1) {  // (she has one: the shipwrights pay for it)
+        campGold += partValue;
+        ce.value = (float)partValue;
+    } else campParts |= (uint8_t)(1u << part);
+    events.push_back(ce);
+    campSaveDue = true;
 }
 
 // Into the lair: the campaign's sea is put away (the quests' ships with it - they put to sea again after) and the
@@ -5282,6 +5332,7 @@ void World::CampaignBack(bool won) {
         if (won) {
             if (q.chain >= 1 && q.chain <= BIOMES) campChain[q.chain - 1] = chainSteps + 1;
             EndQuest(slot, true);
+            GivePart(NextPart(10.0f, true), {q.x, 0.0f, q.z});
         } else {
             campGold -= (int32_t)(campGold * lossOnSinking);
         }
@@ -5337,6 +5388,7 @@ void World::EndQuest(int slot, bool won) {
     q.state = won ? campaign::QS_DONE : campaign::QS_FAILED;
     q.t = 0.0f;
     if (won && q.type != campaign::Q_CONVOY) campGold += q.reward;  // (the convoy pays a share a ship, as they go down)
+    if (won && q.part >= 0) GivePart(q.part, {q.x, 0.0f, q.z});
     for (Ship& s : ships)  // the guards and the pirates fight on as pirates; a captor that's struck stays struck
         if (s.active && s.questSlot == slot && !s.merchant) { s.questSlot = -1; s.questRole = 0; }
     GameEvent ev{EventType::Quest};
@@ -5458,7 +5510,9 @@ void World::UpdateQuests(float dt, Ship& cap) {
                         if (RocksHeight(rocks, at.x, at.y) > -25.0f && !OpenSpot(h, -1, me, 1000.0f, 1300.0f, at)) break;
                     }
                     const float hull = q.type == Q_BOUNTY ? 1.5f : 1.15f;  // (on top of the zone's: SpawnRaider)
-                    const int cls = q.type == Q_CAPTIVE ? SC_FRIGATE : q.seed % 3 == 0 ? SC_LINE : SC_FRIGATE;
+                    const float ql = ZoneLevel(at.x, at.y);  // (as big as the waters she's in: a cutter near home)
+                    const int cls = ql < 2.5f ? (q.type == Q_BOUNTY && q.seed % 3 == 0 ? SC_FRIGATE : SC_CUTTER)
+                                  : ql < 5.0f || q.type == Q_CAPTIVE ? SC_FRIGATE : q.seed % 3 == 0 ? SC_LINE : SC_FRIGATE;
                     SpawnQuestShip(slot, role, at, atan2f(me.x - at.x, me.y - at.y), cls, 1, false, hull, PirateName(q.seed));
                     if (q.type == Q_BOUNTY) {
                         const Vector2 g = {at.x + 70.0f, at.y - 60.0f};
@@ -5828,8 +5882,8 @@ bool World::SaveCampaign() const {
             (unsigned)campSeen, campClock, campSunk);
     for (const Quest& q : campQuests)
         if (q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN)
-            fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
-                    q.biome, q.count, q.sunk, q.gone, q.chain, q.step);
+            fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
+                    q.biome, q.count, q.sunk, q.gone, q.chain, q.step, q.part);
     fprintf(f, "chains");
     for (uint8_t c : campChain) fprintf(f, " %d", c);
     fprintf(f, "\nupgrades");
@@ -5838,6 +5892,7 @@ bool World::SaveCampaign() const {
     for (int o = 0; o < campaign::OFFICERS; ++o) fprintf(f, " %d %u", campOfficer[o], (unsigned)campOfficerSeed[o]);
     fprintf(f, "\n");
     for (const FleetShip& fs : campFleet) fprintf(f, "fleet %d %.2f %u\n", fs.cls, fs.hull, (unsigned)fs.seed);
+    fprintf(f, "parts %d\nhulls %d\nlaidup %.2f %.2f %.2f\n", campParts, campHulls, campHullFrac[0], campHullFrac[1], campHullFrac[2]);
     if (cap) fprintf(f, "class %d\nhull %.2f\n", (int)cap->cls, cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f);
     else if (campLoadCls >= 0) fprintf(f, "class %d\nhull %.2f\n", campLoadCls, campLoadHull);  // (she's left the sea already: as she was last)
     fclose(f);
@@ -5868,15 +5923,18 @@ bool World::LoadCampaign() {
         else if (!strcmp(key, "seen")) { unsigned v; if (fscanf(f, "%u", &v) == 1) campSeen = (uint16_t)v; }
         else if (!strcmp(key, "clock")) { float v; if (fscanf(f, "%f", &v) == 1) campClock = v; }
         else if (!strcmp(key, "sunk")) { int v; if (fscanf(f, "%d", &v) == 1) campSunk = v; }
-        else if (!strcmp(key, "class")) { int v; if (fscanf(f, "%d", &v) == 1) campLoadCls = v; }
+        else if (!strcmp(key, "class")) { int v; if (fscanf(f, "%d", &v) == 1) { campLoadCls = v; if (v >= 0 && v < SC_PLAYABLE) campHulls |= (uint8_t)(1u << v); } }  // (an older save: she owns what she sails)
+        else if (!strcmp(key, "parts")) { int v; if (fscanf(f, "%d", &v) == 1) campParts = (uint8_t)v; }
+        else if (!strcmp(key, "hulls")) { int v; if (fscanf(f, "%d", &v) == 1) campHulls |= (uint8_t)v; }
+        else if (!strcmp(key, "laidup")) { for (float& h : campHullFrac) { float v; if (fscanf(f, "%f", &v) == 1) h = Clamp(v, 0.15f, 1.0f); } }
         else if (!strcmp(key, "hull")) { float v; if (fscanf(f, "%f", &v) == 1) campLoadHull = v; }
         else if (!strcmp(key, "quest")) {
-            int ty, st, fr, to, rw, bi, co, su, go, ch = 0, sp = 0;
+            int ty, st, fr, to, rw, bi, co, su, go, ch = 0, sp = 0, pt = -1;
             unsigned sd;
             float x, z, dl;
             char line[256] = {};
             if (!fgets(line, sizeof line, f)) break;
-            const int got = sscanf(line, "%d %d %d %d %f %f %d %f %u %d %d %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go, &ch, &sp);
+            const int got = sscanf(line, "%d %d %d %d %f %f %d %f %u %d %d %d %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go, &ch, &sp, &pt);
             if (got >= 13 && ty >= 0 && ty <= campaign::Q_LAIR)
                 for (Quest& q : campQuests)
                     if (q.state == campaign::QS_NONE) {
@@ -5884,6 +5942,7 @@ bool World::LoadCampaign() {
                         q.type = (uint8_t)ty; q.state = (uint8_t)st; q.from = (int8_t)fr; q.to = (int8_t)to; q.x = x; q.z = z; q.reward = rw;
                         q.deadline = dl; q.seed = (uint16_t)sd; q.biome = (uint8_t)bi; q.count = (uint8_t)co; q.sunk = (uint8_t)su; q.gone = (uint8_t)go;
                         q.chain = (uint8_t)ch; q.step = (uint8_t)sp;
+                        q.part = (int8_t)(pt >= 0 && pt < campaign::PARTS ? pt : -1);
                         break;
                     }
         } else if (!strcmp(key, "chains")) {

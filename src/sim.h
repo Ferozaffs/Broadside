@@ -499,7 +499,18 @@ enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCE
                      ACT_PRIZE = 10 };    // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
 // The fleet: up to three ships of her own sailing with her (bought, or taken as prizes); sunk, they're gone
 constexpr int fleetMax = 3;
-int ShipPrice(int cls);               // the shipwright's price for a hull of this class
+int ShipPrice(int cls);               // the shipwright's price for a hull of this class (escorts: the cutter and the gunboat only)
+// Her flagship is earned, not bought: she starts in a cutter; a frigate and a ship of the line are built by the shipwright
+// from three parts each (won on quests, from the dread pirates, in the bosses' lairs) and the labour
+enum Part : uint8_t { PT_KEEL = 0, PT_RIG, PT_GUNS18, PT_FRAMES, PT_MAINMAST, PT_GUNS32, PARTS };
+inline const char* const kPartNames[PARTS] = {"a seasoned oak keel", "a frigate's masts and rigging", "a battery of 18-pounders",
+                                             "live-oak frames for three decks", "a great mainmast", "a battery of 32-pounders"};
+inline const char* const kPartShort[PARTS] = {"Keel", "Rigging", "18-pdrs", "Frames", "Mainmast", "32-pdrs"};
+inline uint8_t PartsFor(int cls) { return cls == SC_LINE ? 0x38 : cls == SC_FRIGATE ? 0x07 : 0; }
+inline int BuildCost(int cls) { return cls == SC_LINE ? 3500 : cls == SC_FRIGATE ? 1200 : 0; }
+constexpr int partValue = 400;        // gold instead, for a part she has already
+constexpr float lineParts = 5.0f;     // a ship of the line's parts are only found in waters this dangerous (or in a lair)
+inline bool Buyable(int cls) { return cls == SC_CUTTER || cls == SC_GUNBOAT; }  // (escorts the shipwright sells)
 const char* FleetName(uint16_t seed);  // a ship of her fleet's name
 // Officers: one of each, hired in a tavern; each adds to the captain's upgrades (levels 1-3)
 enum Officer : uint8_t { OF_GUNNER = 0, OF_BOSUN, OF_NAVIGATOR, OF_SURGEON, OF_QUARTERMASTER, OFFICERS };
@@ -550,7 +561,8 @@ constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
 // The sea's own life: traders and the navy on their lanes, things that happen at sea, the regions' dread pirates
 enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS };
 enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN,
-                          EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST };
+                          EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST,
+                          EV_PART };  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -584,6 +596,7 @@ struct Quest {
     int16_t ships[campaign::questShips] = {-1, -1, -1, -1};
     uint8_t chain = 0;             // a region's story: its biome + 1 (0: an ordinary quest), and which step of it
     uint8_t step = 0;
+    int8_t part = -1;              // a ship's part it pays as well (campaign::Part), -1 none
 };
 
 namespace strait {
@@ -1106,6 +1119,11 @@ public:
     float campEventT = 120.0f;               // s to the next thing that happens at sea
     struct FleetShip { uint8_t cls = SC_FRIGATE; float hull = 1.0f; uint16_t seed = 0; int16_t ship = -1; };
     std::vector<FleetShip> campFleet;        // her fleet (at most campaign::fleetMax)
+    uint8_t campParts = 0;                   // the ship's parts she holds (bit per campaign::Part)
+    uint8_t campHulls = 1u << SC_CUTTER;     // the flagships she owns (bit per class: the cutter always; the others built)
+    float campHullFrac[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};  // how sound each one she's not sailing is
+    int NextPart(float level, bool line);  // the part a reward brings: a frigate's she lacks first (or a line's, line), -1 none
+    void GivePart(int part, Vector3 at);         // into her hold (or its worth in gold, if she has it)
     uint8_t campUpg[campaign::kUpgradeCount] = {};  // the shipwright's upgrades bought (levels)
     uint8_t campOfficer[campaign::OFFICERS] = {};   // her officers' levels (0: none)
     uint16_t campOfficerSeed[campaign::OFFICERS] = {};

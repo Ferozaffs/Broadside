@@ -130,7 +130,7 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
             id = world.crew[crewId].ship;
             peerCrew[peer] = crewId;
         } else {
-            id = world.AddShip(name, false, cls);
+            id = world.AddShip(name, false, world.mode == MODE_CAMPAIGN ? -1 : cls);  // (the campaign: she sails what she has - a cutter to start, or the save's)
             if (id >= 0) world.ships[id].fixedCls = false;
             if (id < 0) return reject("server full");
             peerShip[peer] = id;

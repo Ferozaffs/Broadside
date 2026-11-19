@@ -1384,8 +1384,11 @@ static int FleetTest() {
         const Recruit rc = g.campRecruits[0];
         check(g.CampaignAct(me, ACT_HIRE, 0) && g.campOfficer[rc.role] == rc.level, TextFormat("%s hired as %s (level %d)", OfficerName(rc.seed).c_str(), kOfficerNames[rc.role], rc.level));
     } else printf("   (nobody in the tavern today)\n");
-    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE) && g.ships[me].cls == SC_LINE, "a ship of the line for her flagship");
-    check(g.CampaignAct(me, ACT_BUY_ESCORT, SC_FRIGATE) && g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "a frigate and a cutter for her fleet");
+    check(!g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE), "no ship of the line without her parts");
+    g.campParts = PartsFor(SC_LINE);
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE) && g.ships[me].cls == SC_LINE && g.campParts == 0 && ((g.campHulls >> SC_LINE) & 1), "a ship of the line built from her parts");
+    check(!g.CampaignAct(me, ACT_BUY_ESCORT, SC_FRIGATE), "no frigates for sale");
+    check(g.CampaignAct(me, ACT_BUY_ESCORT, SC_GUNBOAT) && g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "a gunboat and a cutter for her fleet");
     tick(60);
     int out = 0;
     for (const World::FleetShip& f : g.campFleet) out += f.ship >= 0 && g.ships[f.ship].active && g.ships[f.ship].leader == me;
@@ -1516,10 +1519,11 @@ static int ZoneTest() {
     const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
     const float secs = getenv("BS_ZONESECS") ? (float)atof(getenv("BS_ZONESECS")) : 120.0f;
     struct Run { float level; bool strong; };
-    const Run runs[] = {{1.5f, false}, {4.0f, false}, {7.0f, false}, {9.5f, false}, {7.0f, true}};
+    const Run runs[] = {{1.5f, false}, {4.0f, false}, {7.0f, false}, {9.5f, false}, {7.0f, true}, {1.5f, false}, {3.0f, false}};  // (5, 6: in a cutter, as she starts)
+    const int nRuns = (int)(sizeof runs / sizeof runs[0]);
     int problems = 0;
-    float perMin[5] = {};
-    for (int r = 0; r < 5; ++r) {
+    float perMin[7] = {};
+    for (int r = 0; r < nRuns; ++r) {
       if (getenv("BS_ZONEONLY") && atoi(getenv("BS_ZONEONLY")) != r) continue;
       int metAll = 0, killedAll = 0;
       int dbgFireP = 0, dbgFireMe = 0, dbgFireO = 0, dbgHitMe = 0, dbgHitP = 0;
@@ -1546,7 +1550,7 @@ static int ZoneTest() {
             for (int o = 0; o < OFFICERS; ++o) g.campOfficer[o] = 3;
             for (int k = 0; k < 3; ++k) { World::FleetShip f; f.cls = SC_LINE; f.seed = (uint16_t)k; g.campFleet.push_back(f); }
         }
-        const int me = g.AddShip("captain", true, runs[r].strong ? SC_LINE : SC_FRIGATE);
+        const int me = g.AddShip("captain", true, runs[r].strong ? SC_LINE : r >= 5 ? SC_CUTTER : SC_FRIGATE);
         auto put = [&]() {
             Ship& c = g.ships[me];
             c.pos = {at.x, g.ocean.Height(at.x, at.y) + 1.0f, at.y};
@@ -1590,7 +1594,7 @@ static int ZoneTest() {
       perMin[r] = takenAll / mins;
       if (getenv("BS_ZONEDEBUG")) printf("      shots: the pirates fired %d, hit her %d; she fired %d, hit them %d; others fired %d\n", dbgFireP, dbgHitMe, dbgFireMe, dbgHitP, dbgFireO);
       printf("   level %4.1f (%zu spots) %-62s: %4.1f pirates a minute found her, she lost %4.0f%% of her hull a minute, sank %.1f a minute\n", runs[r].level, spots.size(),
-             runs[r].strong ? "a ship of the line, every upgrade, three of the line with her" : "a frigate, no upgrades", metAll / mins, perMin[r], killedAll / mins);
+             runs[r].strong ? "a ship of the line, every upgrade, three of the line with her" : r >= 5 ? "a cutter, no upgrades" : "a frigate, no upgrades", metAll / mins, perMin[r], killedAll / mins);
     }
     // the zones' own tables, level by level: everything that makes a pirate dangerous rises with the level, and so
     // does the pay (bot-against-bot fights are too few hits a minute to rank every level by)
