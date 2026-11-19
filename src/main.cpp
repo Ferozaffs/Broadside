@@ -9000,7 +9000,7 @@ void Game::DrawPort(float W, float H) {
             const bool parts = (campPartsC & need) == need;
             const char* label = hers ? TextFormat("%s  \xC2\xB7  yours", ClassOf(c).name)
                               : owned ? TextFormat("%s  \xC2\xB7  sail her (%d%%)", ClassOf(c).name, (int)roundf(campHullFracC[c] * 100.0f))
-                                      : TextFormat("Build a %s  \xC2\xB7  %s", ClassOf(c).name, Thousands(BuildCost(c)).c_str());
+                                      : TextFormat("%s  \xC2\xB7  build %s", ClassOf(c).name, Thousands(BuildCost(c)).c_str());
             if (Button({bx, y, bw, 40}, label, false, !hers && (owned || (parts && campGold >= BuildCost(c))))) {
                 CampaignAct(ACT_FLAGSHIP, c);
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.8f);

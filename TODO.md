@@ -950,4 +950,13 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   its PirateGame-ArtPipeline), picked in tools/portrait_picks.json, brought in by tools/import_portraits.py (trimmed,
   820 px, 256 colours: ~90 KB each). BS_SAY=<id> shows a line at sea for screenshots.
   The campaign's nights are moonlit now (the match modes' night lifted) and shorter (0.72-0.88 of the day).
+- [x] Progression (2026-11-19, the user: the frigate and the ship of the line should be striven for, built from parts
+  won on quests, not bought). A campaign starts in a cutter. The shipwright builds a frigate from a seasoned oak keel,
+  masts and rigging and 18-pounders (+1,200 labour), a ship of the line from live-oak frames, a great mainmast and
+  32-pounders (+3,500). Parts: about every other day one of the tavern's quests pays one (less gold); a frigate's
+  anywhere, a line's only in waters of danger 5+; every dread pirate sunk gives one; every lair's boss one (a line's
+  first). A part she has already sells for 400. Hulls she's built are hers to switch between (laid up as sound as she
+  left them). The shipwright sells only cutters and gunboats for the fleet; bigger escorts are prizes. Near home the
+  pirates and the quests' ships are cutters (no ships of the line under danger 3). Protocol 29. Tests: BS_FLEETTEST;
+  BS_CAMPPARTS=<bits> for screenshots; BS_ZONETEST runs 5-6 are a stock cutter (danger 1.5: 7% of her hull a minute).
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.
