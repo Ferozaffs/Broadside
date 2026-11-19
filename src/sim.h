@@ -509,6 +509,12 @@ enum QuestState : uint8_t { QS_NONE = 0, QS_OFFER, QS_ACTIVE, QS_RETURN, QS_DONE
 enum QuestRole : uint8_t { QR_NONE = 0, QR_TARGET, QR_MERCHANT, QR_GUARD, QR_CAPTOR, QR_ESCORTED };  // (a quest's ships)
 enum QuestFlag : uint8_t { QF_SPAWNED = 1, QF_GUARDS = 2, QF_BAND1 = 4, QF_BAND2 = 8, QF_STRUCK = 16 };
 constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
+// The sea's own life: traders and the navy on their lanes, things that happen at sea, the regions' dread pirates
+enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS };
+enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN };
+constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
+const char* DreadName(int biome);     // each region's dread pirate
+std::string NavyName(uint16_t seed);
 std::string PirateName(uint16_t seed);    // the quest's pirate captain
 std::string MerchantName(uint16_t seed);  // the convoy's / the escorted merchantman's name
 const char* CaptiveName(uint16_t seed);   // whom the captor holds
@@ -798,6 +804,9 @@ struct Ship {
     uint8_t questRole = 0;
     int16_t wp = 0;         // ...a merchantman: the next point of her sea lane
     bool struck = false;    // ...a captor: crippled, she's struck her colours (heaves to, holds her fire)
+    uint8_t npc = 0;        // ...the sea's own (campaign::Npc): a trader, the navy, a dread pirate
+    int8_t laneFrom = -1, laneTo = -1;  // ...a trader / the navy: the lane she sails, port to port
+    bool provoked = false;  // ...a trader fired on by us: she fights back
     bool lost = false;    // voyage: a convoy ship sunk with none left in reserve (out until the next voyage)
     bool downed = false;  // boss mode: disabled, not sunk - afloat, low in the water, until a friend brings her round
     uint8_t perks[PK_COUNT] = {};  // the Odyssey: upgrades picked so far this run
@@ -919,6 +928,7 @@ enum class EventType : uint8_t {
     Perked = 36,     // the Odyssey: a = ship, b = the upgrade she took
     Wave = 37,       // the Odyssey's sea battle: b = this wave, flags = how many waves, value = pirates in it
     Quest = 39,      // the campaign: a = the quest's slot, flags 1 taken / 2 done / 3 failed / 4 a step (aboard, freed, struck), value = gold
+    CampEvent = 40,  // the campaign's sea: b = campaign::SeaEvent, a = the ship (or slot), pos, value = gold
     PerkFx = 38,     // an upgrade at work: a = whose, b = on whom (or the combo), flags = PerkFxKind, pos
     Repaired = 35,   // a = ship, the harbour's done with her (b = 1: she sailed before they'd finished); the cooldown starts
 };
@@ -1034,6 +1044,13 @@ public:
     bool campCargo = false;                  // a hold full (a cargo quest under way): she's a little slower
     uint8_t campChain[campaign::BIOMES] = {};  // each region's story: steps done (chainSteps + 1: its boss beaten)
     int8_t campBossSlot = -1;                // the lair's quest while its boss is fought (the world is in MODE_BOSS on the Isles)
+    float campEventT = 120.0f;               // s to the next thing that happens at sea
+    float campNpcT = 0.0f;                   // s to the next look at the traffic
+    int16_t campDread = -1;                  // the dread pirate hunting her (her ship)
+    float campDreadAt[campaign::BIOMES] = {}; // campClock each region's was last sunk (a while before another)
+    int16_t campDistress[3] = {-1, -1, -1};  // a merchantman under attack, and her two attackers
+    bool PerksOn() const { return odyssey || mode == MODE_CAMPAIGN; }  // (upgrades at work: the Odyssey's, the campaign's ships')
+    Ship* CampCaptain();
     int CampaignRepairCost(const Ship& s) const;  // gold to make good her hull
     bool SaveCampaign() const;
     bool LoadCampaign();                          // after Init (the seed comes from CampaignSeed first)
@@ -1203,6 +1220,11 @@ private:
     void UpdateVoyage(float dt);
     void UpdateCampaign(float dt);
     void UpdateQuests(float dt, Ship& cap);
+    void UpdateSeaLife(float dt, Ship& cap, float nearFoe);  // traffic, events, dread pirates
+    void SeaEvent(Ship& cap);
+    int SpawnNpc(int npc, Vector2 at, float heading, int cls, int team, bool merchant, float hullMul, const std::string& name);
+    const std::vector<Vector2>& Lane(int from, int to);
+    std::vector<std::vector<Vector2>> campLanes;  // port to port (built when first sailed)
     void MakeOffers(int port);
     bool BuildQuest(Quest& q, int type, int port, int biome, uint32_t& h);  // where, how much (false: nowhere fit)
     bool ChainQuest(Quest& q, int biome, int step, int port, uint32_t& h);  // the region's story, this step

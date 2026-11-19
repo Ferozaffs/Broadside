@@ -274,6 +274,7 @@ struct Snapshot {
     Quest campQuests[campaign::maxQuests];  // under way
     std::vector<Quest> campOffers;          // the tavern's (in port)
     uint8_t campChain[campaign::BIOMES] = {};
+    int16_t campDread = -1;  // the dread pirate hunting her
     bool odyssey = false;                 // the Odyssey: the run
     uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
@@ -485,6 +486,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((uint16_t)world.campSunk);
         for (const Quest& q : world.campQuests) PutQuest(w, q);
         for (uint8_t c : world.campChain) w.Put(c);
+        w.Put(world.campDread);
         const bool offers = world.campDocked >= 0 && world.campOffersPort == world.campDocked;
         w.Put((uint8_t)(offers ? world.campOffers.size() : 0));
         if (offers)
@@ -694,6 +696,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.campSunk = r.Get<uint16_t>();
         for (Quest& q : s.campQuests) q = GetQuest(r);
         for (uint8_t& c : s.campChain) c = r.Get<uint8_t>();
+        s.campDread = r.Get<int16_t>();
         const uint8_t no = r.Get<uint8_t>();
         s.campOffers.clear();
         for (int k = 0; k < no && r.ok && k < 8; ++k) s.campOffers.push_back(GetQuest(r));

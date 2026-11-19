@@ -43,6 +43,15 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
     crew -> the Flying Dutchman.
   The lair turns the sea into the boss's arena for the fight, then back to the last port.
 
+## The sea's own life (built)
+- **Traffic**: traders sailing port to port (the pirates hunt them; fire on one and she fights back) and navy patrols
+  (they fight pirates near them), more of both in the quieter regions.
+- **At sea, every few minutes**: wreckage with sea-chests (gold, sometimes a treasure chart), a merchantman under
+  attack (save her for a reward), a sea monster rising under you, or the region's **dread pirate** - a mini-boss
+  ship of the line with two special shots and two mates, and a big bounty: Gentleman Corwin (chain and ricochet),
+  Calypso Vane (fire and grape), Old Rime (chain and mortar), Cinder Kate (fire and mortar), the Grey Widow (homing,
+  spectral).
+
 ## Fleet and crew
 - **Fleet**: up to 3 escort ships, recruited in port or captured, following you (the existing escort AI), each with
   its own hull that carries over.

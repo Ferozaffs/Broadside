@@ -887,6 +887,17 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   Flying Dutchman); 9 s of results, then CampaignBack to the last port (won: the reward, the story told; lost: a fifth
   of the purse, the lair waits). The first step offered in the region's taverns until taken; each step done brings the
   next. Saved (campChain, quests' chain/step). Tests: BS_CHAINTEST (Temperate + Ember through), BS_CAMPLAIR=biome.
+- [x] The sea's own life (2026-11-19, "mini bosses and random events and npcs to fill our ocean"):
+  - traffic: traders (team campaign::neutral = 2: the pirates' prey, nobody else's enemy unless fired on) and navy
+    patrols (team 0, turn aside to fight pirates within 900 m) on port-to-port lanes (World::Lane, built when first
+    sailed), 2-3 traders and 0-2 navy within ~7 km by region, put to sea from ports out of sight, gone in port or 8.5 km off;
+  - every ~2-4 min at sea (no enemy within 1.6 km, not near a port): wreckage (sea-chests: gold, 35% a treasure
+    chart; power-up crates; gone in 4 min), a merchantman under attack by two pirates (save her: her thanks), a sea
+    monster under her (the kraken / megalodon, a reward when slain), or the region's dread pirate (a ship of the line,
+    hull x2.6 x danger, two of the Odyssey's upgrades, two mates; a bounty; another in that region after 3 days):
+    Gentleman Corwin, Calypso Vane, Old Rime, Cinder Kate, the Grey Widow;
+  - the Odyssey's upgrades now work in the campaign (World::PerksOn) - the dread pirates use them, the upgrades of
+    phase 3 can. Tests: BS_SEALIFETEST, BS_SEAEVENTS=s (how often), BS_SEAEVENT=1..4 (which).
 - [ ] Next: the Leviathan, the Armada and the Storm Caller (a last story across the regions?), reputation per port,
   fleet and crew (phase 3), balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
 - [ ] Phase 3: fleet and crew, upgrades and ships at the shipwright.

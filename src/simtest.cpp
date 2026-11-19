@@ -1258,7 +1258,88 @@ static int ChainTest() {
     return problems ? 1 : 0;
 }
 
+// The sea's own life: the captain (a bot) out in the Tropics; the traffic that comes and goes round her, and each of the
+// things that happen at sea made to happen in turn (wreckage, a merchantman under attack, a monster, the dread pirate)
+static int SeaLifeTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    int problems = 0;
+    // out in open water in the Tropics, well clear of the ports
+    Vector2 out = {0.0f, -7000.0f};
+    for (int tries = 0; tries < 400; ++tries) {
+        const Vector2 p = {(tries % 20 - 10) * 300.0f, -6000.0f - (tries / 20) * 150.0f};
+        bool clear = RocksHeight(g.rocks, p.x, p.y) < -40.0f && BiomeAt(p.x, p.y) == TROPICS;
+        for (const Harbour& h : g.harbours) clear &= Vector2Distance({h.x, h.z}, p) > 2500.0f;
+        if (clear) { out = p; break; }
+    }
+    auto place = [&]() {
+        Ship& c = g.ships[me];
+        c.pos = {out.x, g.ocean.Height(out.x, out.y) + 1.0f, out.y};
+        c.vel = {0, 0, 0};
+    };
+    place();
+    g.campClock = 600.0f;  // (late enough for a dread pirate)
+    double sum = 0.0;
+    int ticks = 0;
+    auto run = [&](float secs, int& traders, int& navy) {
+        for (int i = 0; i < (int)(secs * 60); ++i) {
+            g.ships[me].hp = fmaxf(g.ships[me].hp, g.ships[me].maxHp * 0.6f);
+            const double a = GetTimeNow();
+            g.Step();
+            sum += GetTimeNow() - a;
+            ++ticks;
+            g.events.clear();
+        }
+        traders = navy = 0;
+        for (const Ship& s : g.ships) {
+            traders += s.active && s.npc == NPC_TRADER;
+            navy += s.active && s.npc == NPC_NAVY;
+        }
+    };
+    int traders = 0, navy = 0;
+    run(70.0f, traders, navy);
+    printf("   the traffic after 70 s: %d trader(s), %d navy\n", traders, navy);
+    if (traders == 0) { printf("   no traders   <-- PROBLEM\n"); ++problems; }
+    static const char* const kName[4] = {"wreckage", "a merchantman under attack", "a monster", "the dread pirate"};
+    for (int k = 1; k <= 4; ++k) {
+        place();
+        for (Ship& s : g.ships)  // (nothing else about: the event must be what she meets)
+            if (s.active && s.raider && s.id != me) g.RemoveShip(s.id);
+        _putenv_s("BS_SEAEVENT", TextFormat("%d", k));
+        g.campEventT = 0.01f;
+        for (int i = 0; i < 3; ++i) { g.Step(); }
+        bool happened = false;
+        for (const GameEvent& e : g.events) happened |= e.type == EventType::CampEvent && e.b == k;
+        g.events.clear();
+        int crates = 0;
+        for (const Crate& c : g.crates) crates += c.active;
+        const bool monster = g.monsters[MON_KRAKEN].active || g.monsters[MON_MEGALODON].active;
+        const char* what = k == EV_WRECK ? TextFormat("%d crates afloat", crates)
+                         : k == EV_DISTRESS ? TextFormat("merchantman %d, attackers %d %d", g.campDistress[0], g.campDistress[1], g.campDistress[2])
+                         : k == EV_MONSTER ? (monster ? "it's risen" : "nothing came up")
+                         : TextFormat("she is %s", g.campDread >= 0 ? g.ships[g.campDread].name.c_str() : "NOT HERE");
+        bool ok = happened && (k != EV_WRECK || crates > 0) && (k != EV_DISTRESS || (g.campDistress[0] >= 0 && g.campDistress[1] >= 0)) && (k != EV_MONSTER || monster) &&
+                  (k != EV_DREAD || g.campDread >= 0);
+        if (k == EV_DREAD && g.campDread >= 0) {
+            const Ship& d = g.ships[g.campDread];
+            what = TextFormat("%s, a %s with %.0f hull, chain %d hot %d grape %d", d.name.c_str(), ClassOf(d.cls).name, d.maxHp, d.perks[PK_CHAIN], d.perks[PK_HOTSHOT], d.perks[PK_GRAPE]);
+        }
+        printf("   %-26s: %s%s\n", kName[k - 1], what, ok ? "" : "   <-- PROBLEM");
+        problems += !ok;
+        run(60.0f, traders, navy);  // (and the sea carries on)
+    }
+    _putenv_s("BS_SEAEVENT", "");
+    printf("   gold %d, tick avg %.2f ms\n", g.campGold, sum / ticks * 1000.0);
+    printf("sea life: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_SEALIFETEST")) return SeaLifeTest();
     if (getenv("BS_CHAINTEST")) return ChainTest();
     if (getenv("BS_QUESTTEST")) return QuestTest();
     if (getenv("BS_CAMPTEST")) return CampaignTest();

@@ -396,6 +396,11 @@ public:
     std::vector<Quest> campOffers;
     bool QuestGoal(int slot, std::string& what, Vector3& at) const;
     void DrawQuests(float W, float H);
+    void DrawSeaLife(float W, float H);
+    int16_t campDread = -1;          // (the snapshot's: the dread pirate hunting us)
+    Vector3 seaWreck{};              // the wreckage last sighted, and when
+    double seaWreckAt = -1000.0;
+    int seaDistress = -1;            // a merchantman under attack
     void DrawCampaignHud(float W, float H);
     void DrawChart(float W, float H);
     void DrawPort(float W, float H);
@@ -655,6 +660,7 @@ private:
         const NetShip& s = view[id].s;
         if (curMode == MODE_PIRATE && IsCarrier(s.leader >= 0 ? s.leader : id)) return kPirate;
         if (curMode == MODE_TEAMS) return kSide[s.team == 1 ? 1 : 0];
+        if (curMode == MODE_CAMPAIGN && s.team == campaign::neutral) return {236, 232, 220, 255};  // (a trader: plain canvas)
         if (PassageMode(curMode) || curMode == MODE_CAMPAIGN) return s.team == 1 ? kPirate : kNavy;  // (the pirates fly black)
         if (curMode == MODE_BOSS && s.cls == SC_GHOST) return {150, 255, 200, 255};  // (the Dutchman's sails glow green)
         if (curMode == MODE_BOSS && s.cls == SC_IRON) return {50, 50, 56, 255};  // (the Ironclad: iron grey, its canvas furled)
@@ -684,6 +690,7 @@ private:
     bool IsEnemy(int id) const {
         if (myId < 0 || id == myId || id < 0 || id >= NumShips()) return false;
         const NetShip &a = view[myId].s, &b = view[id].s;
+        if (curMode == MODE_CAMPAIGN && (a.team == campaign::neutral || b.team == campaign::neutral)) return false;  // (the campaign's traders)
         if (curMode != MODE_TEAMS && !PassageMode(curMode) && curMode != MODE_BOSS && curMode != MODE_CAMPAIGN) return (a.leader >= 0 ? a.leader : myId) != (b.leader >= 0 ? b.leader : id);
         return a.team != b.team;
     }
@@ -1261,6 +1268,7 @@ void Game::Interpolate() {
             campSunk = sn.campSunk;
             for (int k = 0; k < campaign::maxQuests; ++k) campQuests[k] = sn.campQuests[k];
             campOffers = sn.campOffers;
+            campDread = sn.campDread;
         }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
@@ -3160,6 +3168,37 @@ void Game::PlayEvent(const GameEvent& e) {
             if (e.a == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), "BACK IN THE FIGHT", ui::kGreen, 2.6f});
             if (e.b == myId) floats.push_back({Vector3Add(e.pos, {0, 16, 0}), TextFormat("BROUGHT %s ROUND", TextToUpper(NameOf(e.a).c_str())), ui::kGreen, 2.6f});
             break;
+        case EventType::CampEvent: {
+            using namespace campaign;
+            const std::string gold = e.value > 0.0f ? TextFormat("  +%d gold", (int)e.value) : "";
+            switch (e.b) {
+                case EV_WRECK:
+                    seaWreck = e.pos;
+                    seaWreckAt = GetTime();
+                    Feed3("WRECKAGE", TextFormat("  %s: sea-chests in the water", BearingFrom(e.pos).c_str()), "", Scenery::PowerColor(PU_COUNT), ui::kText);
+                    sfx::PlayFlat(sfx::Chime, 0.5f, 1.2f);
+                    break;
+                case EV_DISTRESS:
+                    seaDistress = e.a;
+                    Feed3("A MERCHANTMAN", TextFormat("  under attack, %s", BearingFrom(e.pos).c_str()), "", ui::kGold, ui::kText);
+                    Notice("A MERCHANTMAN UNDER ATTACK", ui::kGold, 3.0f);
+                    sfx::PlayFlat(sfx::Chime, 0.7f, 0.6f);
+                    break;
+                case EV_SAVED: Feed3("SAVED", "  the merchantman sends her thanks", gold, ui::kGreen, ui::kGold); seaDistress = -1; sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
+                case EV_LOST: Feed3("LOST", "  the merchantman went down", "", ui::kRed, ui::kText); seaDistress = -1; break;
+                case EV_DREAD:
+                    Notice(TextFormat("THE DREAD PIRATE %s", TextToUpper(DreadName(e.flags))), ui::kRed, 4.5f);
+                    Feed3(DreadName(e.flags), "  hunts these waters, and she's found you", "", ui::kRed, ui::kText);
+                    sfx::PlayFlat(sfx::Thunder, 0.6f, 0.7f);
+                    break;
+                case EV_DREADSUNK: Feed3("THE DREAD PIRATE", "  is sunk: the bounty on her head", gold, ui::kGold, ui::kGold); Notice("THE DREAD PIRATE IS SUNK", ui::kGold, 3.5f); sfx::PlayFlat(sfx::Treasure, 1.0f, 0.9f); break;
+                case EV_CHEST: if (e.a == myId) { floats.push_back({Vector3Add(e.pos, {0, 10, 0}), TextFormat("+%d GOLD", (int)e.value), ui::kGold, 2.2f}); sfx::PlayFlat(sfx::Treasure, 0.6f, 1.2f); } break;
+                case EV_MAP: Feed3("A CHART", "  in the sea-chest: a treasure to dig up", "", ui::kGold, ui::kText); break;
+                case EV_MONSTERSLAIN: Feed3("SLAIN", "  the sea gives up its reward", gold, ui::kGreen, ui::kGold); break;
+                default: break;
+            }
+            break;
+        }
         case EventType::Quest: {
             if (e.a >= campaign::maxQuests) break;
             const Quest& q = campQuests[e.a];
@@ -4865,7 +4904,7 @@ void Game::DrawHUD() {
         if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE) || GhostHidden(id)) continue;
         const NetShip& s = view[id].s;
         bool pirate = s.flags & SF_PIRATE;
-        bool friendTag = !IsEnemy(id) && curMode != MODE_FFA;
+        bool friendTag = !IsEnemy(id) && curMode != MODE_FFA && curMode != MODE_CAMPAIGN;  // (the campaign: the traffic goes unmarked)
         if (s.leader >= 0) continue;  // (no markers on escorts; your own have their green ring on the water)
         if (!pirate && !friendTag) continue;
         Vector2 sp;
@@ -5065,6 +5104,7 @@ void Game::DrawHUD() {
     if (curMode == MODE_CAMPAIGN) {
         DrawCampaignHud(W, H);
         DrawQuests(W, H);
+        DrawSeaLife(W, H);
     }
     else if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
         int secs = (int)ceilf(matchClock);
@@ -8065,6 +8105,35 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
     return false;
 }
 
+// The sea's events, as the captain sees them: the wreckage's spot, a merchantman in trouble, the dread pirate's hull
+void Game::DrawSeaLife(float W, float H) {
+    using namespace ui;
+    const double now = GetTime();
+    auto mark = [&](Vector3 at, const char* what, Color c) {
+        Vector2 sp;
+        const Vector3 camF = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+        if (Vector3DotProduct(Vector3Subtract(at, rv.pos), camF) <= 0.0f || !rv.Project(at, sp) || sp.x < 20 || sp.y < 20 || sp.x > W - 20 || sp.y > H - 20) return;
+        DrawCircleV(sp, 9.0f, {0, 0, 0, 160});
+        DrawCircleLines((int)sp.x, (int)sp.y, 8.0f, c);
+        Label(what, sp.x, sp.y - 24, 10, c, Center);
+        Text(TextFormat("%d m", (int)Vector3Distance(at, rv.pos)), sp.x, sp.y + 12, 12, c, false, Center);
+    };
+    if (now - seaWreckAt < 240.0 && !chartOpen && !portOpen) mark(seaWreck, "WRECKAGE", Scenery::PowerColor(PU_COUNT));
+    if (seaDistress >= 0 && seaDistress < NumShips() && view[seaDistress].present && (view[seaDistress].s.flags & SF_ALIVE) && !chartOpen && !portOpen)
+        mark(Vector3Add(view[seaDistress].s.pos, {0, 34, 0}), "UNDER ATTACK", kGold);
+    // the dread pirate: her name and her hull under the top bar while she's near
+    if (campDread >= 0 && campDread < NumShips() && view[campDread].present && (view[campDread].s.flags & SF_ALIVE)) {
+        const NetShip& d = view[campDread].s;
+        const float dist = Vector3Distance(d.pos, rv.pos);
+        if (dist < 3500.0f) {
+            const float bw = fminf(520.0f, W - 120.0f), x = W * 0.5f - bw * 0.5f, y = 62.0f;
+            Panel({x, y, bw, 38}, A(kPanel, 0.88f), 8);
+            Label(TextFormat("THE DREAD PIRATE %s   \xC2\xB7   %d M", TextToUpper(NameOf(campDread).c_str()), (int)dist), W * 0.5f, y + 6, 11, kRed, Center);
+            Bar({x + 14, y + 24, bw - 28, 6}, d.maxHp > 0 ? d.hp / d.maxHp : 0.0f, kRed, {0, 0, 0, 120});
+        }
+    }
+}
+
 void Game::DrawQuests(float W, float H) {
     using namespace ui;
     using namespace campaign;
@@ -8208,6 +8277,11 @@ void Game::DrawChart(float W, float H) {
         if (h == campLastPort) DrawCircleV(p, 2.5f, c);
         Text(PortName(h), p.x, p.y + 8, 15, c, true, Center);
     }
+    // the traffic: traders white, the navy blue (pirates, red, below)
+    for (int id = 0; id < NumShips(); ++id)
+        if (id != myId && view[id].present && (view[id].s.flags & SF_ALIVE) && !IsEnemy(id))
+            DrawCircleV(toScreen(view[id].s.pos.x, view[id].s.pos.z), 2.5f, view[id].s.team == campaign::neutral ? Color{236, 232, 220, 220} : Color{120, 170, 255, 220});
+    if (GetTime() - seaWreckAt < 240.0) DrawPoly(toScreen(seaWreck.x, seaWreck.z), 4, 5.0f, 45.0f, Scenery::PowerColor(PU_COUNT));
     // the quests: where each one points (numbered), and its ships
     for (int k = 0; k < campaign::maxQuests; ++k) {
         if (campQuests[k].state != campaign::QS_ACTIVE && campQuests[k].state != campaign::QS_RETURN) continue;

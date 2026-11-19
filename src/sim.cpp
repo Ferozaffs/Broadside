@@ -1520,6 +1520,12 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campCargo = false;
     for (uint8_t& c : campChain) c = 0;
     campBossSlot = -1;
+    campEventT = 120.0f;
+    campNpcT = 0.0f;
+    campDread = -1;
+    for (float& t : campDreadAt) t = 0.0f;
+    for (int16_t& k : campDistress) k = -1;
+    campLanes.clear();
     voyageClock = 0.0f;
     voyageSpawn = 0.0f;  // (the first band as soon as the grace is up)
     voyageWait = 0.0f;
@@ -1846,7 +1852,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
     }
     if (!friendlyFire && attacker >= 0 && attacker != v.id && ships[attacker].active && !Enemies(ships[attacker], v)) return;  // (host option)
     if (v.perks[PK_ARMOUR]) amount *= powf(0.88f, (float)v.perks[PK_ARMOUR]);
-    if (odyssey) {
+    if (PerksOn()) {
         if (v.markT > 0.0f) amount *= v.markMul;  // the Black Spot: everyone's at her
         if (v.team == 0) {  // the Admiral's Pennant: her friends close by (and she herself) take less (Fleet Admiral: further)
             int pen = 0;
@@ -1874,7 +1880,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
         events.push_back(c);
         return;
     }
-    if (odyssey && attacker >= 0 && attacker < ShipCount() && attacker != v.id && amount > 0.0f && ships[attacker].active && Enemies(ships[attacker], v)) {
+    if (PerksOn() && attacker >= 0 && attacker < ShipCount() && attacker != v.id && amount > 0.0f && ships[attacker].active && Enemies(ships[attacker], v)) {
         Ship& K = ships[CaptainOf(attacker)];
         if (K.active && K.alive && K.perks[PK_SALVAGE]) {  // Salvage Crew: what she knocks off them mends her (Bloodthirst: thrice, off the hurt)
             const bool thirst = HasCombo(K.perks, CB_BLOODTHIRST) && v.hp < v.maxHp * 0.5f;
@@ -1889,6 +1895,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
     }
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
+    if (mode == MODE_CAMPAIGN && v.team == campaign::neutral && attacker >= 0 && attacker < ShipCount() && ships[attacker].team == 0) v.provoked = true;  // (fired on: she fights back)
     if (mode == MODE_CAMPAIGN && v.questRole == campaign::QR_CAPTOR && !v.struck && v.hp > 0.0f && v.hp < v.maxHp * 0.3f) {  // the captor strikes her colours
         v.struck = true;
         GameEvent ev{EventType::Quest};
@@ -1944,6 +1951,20 @@ void World::Damage(Ship& v, float amount, int attacker) {
                     if (campQuests[k].type == campaign::Q_CARGO && campQuests[k].state == campaign::QS_ACTIVE) EndQuest(k, false);
             }
             if (v.questSlot >= 0) QuestShipSunk(v);
+            if (v.npc == campaign::NPC_DREAD) {  // a region's dread pirate: the bounty on her head
+                const int b = campaign::BiomeAt(v.pos.x, v.pos.z);
+                campDreadAt[b] = campClock;
+                const int gold = (int)(roundf(1500.0f * campaign::Danger((uint8_t)b) / 50.0f) * 50.0f);
+                if (byEnemy || (killer >= 0 && ships[killer].team == 0)) campGold += gold;
+                GameEvent ce{EventType::CampEvent};
+                ce.a = v.id;
+                ce.b = campaign::EV_DREADSUNK;
+                ce.value = (float)gold;
+                ce.pos = v.pos;
+                events.push_back(ce);
+                campDread = -1;
+                campSaveDue = true;
+            }
         }
         // one of us (boss mode, the voyage's convoy): disabled, afloat, until a friend comes alongside
         const bool down = (mode == MODE_BOSS || mode == MODE_VOYAGE) && v.team == 0 && v.leader < 0 && !v.raider;
@@ -1955,7 +1976,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
             v.burnT = v.chainT = 0.0f;
             v.selfT = 0.0f;
         }
-        if (down && odyssey) OnFriendDown(v);
+        if (down && PerksOn()) OnFriendDown(v);
         if (byEnemy) {  // the upgrades that live on a kill: Prize Crew, and its Plunderer / Devil's Luck combos
             Ship& K = ships[CaptainOf(killer)];
             if (K.perks[PK_PRIZE] && K.alive) {
@@ -1977,7 +1998,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
                 K.charmUsed--;
                 UseCombo(CB_DEVIL);
             }
-            if (odyssey) OnPerkKill(K, v);
+            if (PerksOn()) OnPerkKill(K, v);
         }
         if (v.perks[PK_KEGS]) {  // (Powder Kegs: she takes them with her)
             KegBlast(v);
@@ -2724,7 +2745,11 @@ void World::PlaceCrate(Crate& c) {
 
 void World::UpdateCrates(float dt) {
     for (Crate& c : crates) {
-        if (!c.active) {
+        if (mode == MODE_CAMPAIGN) {  // (the campaign: only wreckage, and it drifts off in a few minutes)
+            if (!c.active) continue;
+            c.timer -= dt;
+            if (c.timer <= 0.0f) { c.active = false; continue; }
+        } else if (!c.active) {
             c.timer -= dt;
             if (c.timer <= 0.0f) PlaceCrate(c);
             continue;
@@ -2742,6 +2767,42 @@ void World::UpdateCrates(float dt) {
             Vector3 ab = Vector3Subtract(b, a);
             float t = Clamp(Vector3DotProduct(Vector3Subtract(cp, a), ab) / Vector3DotProduct(ab, ab), 0.0f, 1.0f);
             if (Vector3Distance(cp, Vector3Add(a, Vector3Scale(ab, t))) > 13.0f) continue;  // (a generous reach: sail near it and it's yours)
+            if (c.type >= PU_COUNT) {  // a sea-chest: gold, and now and then a chart
+                if (mode == MODE_CAMPAIGN && s.team == 0) {
+                    const int gold = (int)(roundf((60.0f + 100.0f * RandF()) * campaign::Danger(campaign::BiomeAt(c.x, c.z)) / 5.0f) * 5.0f);
+                    campGold += gold;
+                    GameEvent ce{EventType::CampEvent};
+                    ce.a = s.id;
+                    ce.b = campaign::EV_CHEST;
+                    ce.value = (float)gold;
+                    ce.pos = cp;
+                    events.push_back(ce);
+                    int slot = -1;
+                    for (int k = 0; k < campaign::maxQuests && slot < 0; ++k)
+                        if (campQuests[k].state == campaign::QS_NONE) slot = k;
+                    if (slot >= 0 && RandF() < 0.35f) {  // a chart in it: a treasure to dig up
+                        int port = 0;
+                        float best = 1e9f;
+                        for (int h = 0; h < (int)harbours.size(); ++h) {
+                            const float d = Vector2Distance({harbours[h].x, harbours[h].z}, {c.x, c.z});
+                            if (d < best) { best = d; port = h; }
+                        }
+                        uint32_t hh = (uint32_t)(c.x * 13.0f) ^ (uint32_t)(campClock * 7.0f);
+                        Quest q;
+                        if (BuildQuest(q, campaign::Q_TREASURE, port, campaign::BiomeAt(c.x, c.z), hh)) {
+                            q.state = campaign::QS_ACTIVE;
+                            q.reward = (int32_t)(q.reward * 1.4f);
+                            campQuests[slot] = q;
+                            ce.b = campaign::EV_MAP;
+                            ce.a = (uint16_t)slot;
+                            events.push_back(ce);
+                        }
+                    }
+                }
+                c.active = false;
+                c.timer = 0.0f;
+                break;
+            }
             float dur = tune::powerMin + RandF() * (tune::powerMax - tune::powerMin);
             if (s.perks[PK_QUARTER]) {  // (Quartermaster: he knows how to stow it)
                 dur *= 2.0f;
@@ -2803,7 +2864,7 @@ void World::UpdateBalls(float dt) {
             e.value = splashed ? b.splash : 0.0f;  // (a mortar's burst: the clients make it big)
             events.push_back(e);
         }
-        if (skipped && odyssey && b.owner < ShipCount() && ships[b.owner].active) {
+        if (skipped && PerksOn() && b.owner < ShipCount() && ships[b.owner].active) {
             const uint8_t* P = ships[b.owner].perks;
             if (P[PK_SKIP]) {  // Skipping Shot: every skip, harder
                 b.dmgMul *= 1.0f + 0.35f * P[PK_SKIP];
@@ -2854,7 +2915,7 @@ void World::UpdateBalls(float dt) {
             float t;
             if (!SegmentBox(h0, h1, hull::boxMin, hull::boxMax, t)) continue;
             Vector3 hitPos = Vector3Lerp(prev, b.pos, t);
-            if (odyssey && sh.alive && b.owner < ShipCount() && ships[b.owner].active && Enemies(ships[b.owner], sh)) {
+            if (PerksOn() && sh.alive && b.owner < ShipCount() && ships[b.owner].active && Enemies(ships[b.owner], sh)) {
                 if (sh.perks[PK_NETTING] && sh.wardT <= 0.0f) {  // Boarding Nettings: that one's stopped
                     sh.wardT = 12.0f - 3.0f * (sh.perks[PK_NETTING] - 1);
                     UsePerk(PK_NETTING);
@@ -2898,7 +2959,7 @@ void World::UpdateBalls(float dt) {
                 dmg *= f;
                 armour = f < 0.5f ? EF_SKIP : EF_RAKE;  // (glanced off / went home)
             }
-            if (odyssey) dmg *= PerkDamageMul(b, hitPos, sh.hp / fmaxf(sh.maxHp, 1.0f));
+            if (PerksOn()) dmg *= PerkDamageMul(b, hitPos, sh.hp / fmaxf(sh.maxHp, 1.0f));
             ApplyImpulse(sh, Vector3Scale(Vector3Normalize(b.vel), tune::ballKnockback * speedF * (Real() ? tune::realKnock : 1.0f)), hitPos, {tune::hitPitch, tune::hitYaw, tune::hitRoll});
             GameEvent e{EventType::Hit};
             e.a = b.owner;
@@ -2928,7 +2989,7 @@ void World::UpdateBalls(float dt) {
             }
             Damage(sh, dmg, b.owner);
             OnPerkHit(sh, b.owner, hitPos, dmg, false);
-            if (odyssey) BallPerks(b, sh, hitPos);
+            if (PerksOn()) BallPerks(b, sh, hitPos);
             if (wasAlive && !sh.alive && b.crew >= 0 && b.crew < CrewCount() && crew[b.crew].active) {  // that crewman's shot sank her
                 crew[b.crew].kills++;
                 for (auto it = events.rbegin(); it != events.rend(); ++it)
@@ -2946,7 +3007,7 @@ void World::UpdateBalls(float dt) {
                        b.owner, bAt, Vector3Normalize(b.vel));
             dead = true;
         }
-        if (!dead && Voyaging() && BallHitsMonster(b, prev, mk, mAt)) {  // a sea monster
+        if (!dead && (Voyaging() || mode == MODE_CAMPAIGN) && BallHitsMonster(b, prev, mk, mAt)) {  // a sea monster
             Monster& m = monsters[mk];
             float speedF = Clamp(Vector3Length(b.vel) / 95.0f, 0.2f, 1.3f);
             float dmg = tune::ballDamage * speedF * b.dmgMul * (b.inWater ? 0.6f : 1.0f);
@@ -2967,6 +3028,15 @@ void World::UpdateBalls(float dt) {
                 e.flags = MEV_SLAIN;
                 events.push_back(e);
                 if (b.owner < ShipCount() && ships[b.owner].active) ships[CaptainOf(b.owner)].kills++;
+                if (mode == MODE_CAMPAIGN && b.owner < ShipCount() && ships[b.owner].team == 0) {  // (the campaign: what it's worth)
+                    const int gold = (int)(roundf((m.type == MON_KRAKEN ? 700.0f : 450.0f) * campaign::Danger(campaign::BiomeAt(m.pos.x, m.pos.z)) / 10.0f) * 10.0f);
+                    campGold += gold;
+                    GameEvent ce{EventType::CampEvent};
+                    ce.b = campaign::EV_MONSTERSLAIN;
+                    ce.value = (float)gold;
+                    ce.pos = m.pos;
+                    events.push_back(ce);
+                }
             }
             dead = true;
         }
@@ -3355,6 +3425,24 @@ void World::BotThink(Ship& s, float dt) {
         in.sail = aidDist < tune::reviveRadius * 0.6f ? 0.1f : 1.0f;
     }
 
+    if (mode == MODE_CAMPAIGN && s.laneFrom >= 0 && s.laneTo >= 0 && !s.provoked) {  // a trader or the navy on her lane (the navy turns aside to fight)
+        const std::vector<Vector2>& path = Lane(s.laneFrom, s.laneTo);
+        if (!path.empty() && !(s.npc == campaign::NPC_NAVY && target && best < 900.0f)) {
+            while (s.wp + 1 < (int)path.size() && Vector2Distance({s.pos.x, s.pos.z}, path[s.wp]) < 130.0f) s.wp++;
+            const Vector2 g = path[std::min<int>(s.wp, (int)path.size() - 1)];
+            goal = {g.x, 0.0f, g.y};
+            haveGoal = true;
+            fight = false;
+        }
+    } else if (mode == MODE_CAMPAIGN && s.npc == campaign::NPC_DISTRESS && !s.provoked) {  // under attack: run for the warship coming to help
+        for (const Ship& o : ships)
+            if (o.active && o.alive && !o.isBot && o.leader < 0) {
+                goal = o.pos;
+                haveGoal = true;
+                fight = false;
+                break;
+            }
+    }
     if (mode == MODE_CAMPAIGN && s.questSlot >= 0 && s.questSlot < campaign::maxQuests) {
         const Quest& q = campQuests[s.questSlot];
         const std::vector<Vector2>& path = campPaths[s.questSlot];
@@ -3432,7 +3520,7 @@ void World::BotThink(Ship& s, float dt) {
     Vector3 tPos{}, tVel{};
     float tDist = 1e9f;
     if (target) { tPos = target->pos; tVel = target->vel; tDist = best; }
-    if (Voyaging() && s.team == PlayerTeam() && !s.raider && !s.merchant)  // the players' side shoots the monsters too (whichever's closer)
+    if ((Voyaging() || mode == MODE_CAMPAIGN) && s.team == PlayerTeam() && !s.raider && !s.merchant)  // the players' side shoots the monsters too (whichever's closer)
         for (const Monster& m : monsters) {
             if (!MonsterShootable(m) || m.state == MS_DEAD) continue;
             Vector3 p = MonsterAimPoint(m);
@@ -3648,6 +3736,11 @@ static const char* kEscortNames[] = {"Resolute", "Swiftsure", "Defiance", "Valia
 bool World::Enemies(const Ship& a, const Ship& b) const {
     if (a.id == b.id) return false;
     if (!TeamMode()) return CaptainOf(a.id) != CaptainOf(b.id);
+    if (mode == MODE_CAMPAIGN && (a.team == campaign::neutral || b.team == campaign::neutral) && a.team != b.team) {  // a trader: the pirates' prey; ours only if we fired on her
+        const Ship& t = a.team == campaign::neutral ? a : b;
+        const Ship& o = a.team == campaign::neutral ? b : a;
+        return o.team == 1 || t.provoked;
+    }
     return a.team != b.team;
 }
 
@@ -4413,8 +4506,8 @@ void World::Step() {
     if (mode == MODE_RAID && matchState == 0) UpdateRaid(dt);
     if (mode == MODE_BOSS && matchState == 0) UpdateBoss(dt);
     if ((mode == MODE_BOSS || mode == MODE_VOYAGE) && matchState == 0) UpdateRevives(dt);
-    if (odyssey && matchState == 0) UpdatePerks(dt);
-    if (Voyaging() && matchState == 0) UpdateMonsters(dt);
+    if (PerksOn() && matchState == 0) UpdatePerks(dt);
+    if ((Voyaging() || mode == MODE_CAMPAIGN) && matchState == 0) UpdateMonsters(dt);
     if (rounds) UpdateMatch(dt);
 }
 
@@ -4520,7 +4613,7 @@ void World::UpdateCampaign(float dt) {
     int pirates = 0;
     bool gone = false;
     for (Ship& p : ships) {
-        if (!p.active || !p.raider || p.questSlot >= 0) continue;  // (a quest's pirates come and go with the quest)
+        if (!p.active || !p.raider || p.questSlot >= 0 || p.npc) continue;  // (a quest's pirates come and go with the quest; the dread pirate with hers)
         ++pirates;
         if (!p.alive) continue;
         const float nd = cap->alive ? Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}) : 1e9f;
@@ -4548,6 +4641,7 @@ void World::UpdateCampaign(float dt) {
     }
     UpdateQuests(dt, *cap);
     if (mode != MODE_CAMPAIGN) return;  // (into a lair: the rest is a boss fight's business)
+    UpdateSeaLife(dt, *cap, nearFoe);
     for (const Ship& p : ships)  // (the quests' pirates count as near too)
         if (p.active && p.alive && p.questSlot >= 0 && p.team == 1 && !p.struck) nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
     campFast = campWantFast && cap->alive && campDocked < 0 && nearFoe > fastClear;
@@ -4776,7 +4870,10 @@ void World::CampaignBoss(int slot) {
     const Quest& q = campQuests[slot];
     campBossSlot = (int8_t)slot;
     for (Ship& s : ships)
-        if (s.active && (s.raider || s.merchant || s.boss)) RemoveShip(s.id);
+        if (s.active && (s.raider || s.merchant || s.boss || s.npc)) RemoveShip(s.id);
+    campDread = -1;
+    for (int16_t& k : campDistress) k = -1;
+    campLanes.clear();
     for (int k = 0; k < maxQuests; ++k) {
         campQuests[k].flags &= (uint8_t)~(QF_SPAWNED | QF_STRUCK | QF_BAND1 | QF_BAND2 | QF_GUARDS);
         for (int16_t& id : campQuests[k].ships) id = -1;
@@ -5122,6 +5219,267 @@ void World::UpdateQuests(float dt, Ship& cap) {
             }
         }
     }
+}
+
+// ---- the sea's own life ------------------------------------------------------------------------------------------
+namespace campaign {
+const char* DreadName(int b) {
+    static const char* const k[BIOMES] = {"Gentleman Corwin", "Calypso Vane", "Old Rime", "Cinder Kate", "The Grey Widow"};
+    return b >= 0 && b < BIOMES ? k[b] : k[0];
+}
+std::string NavyName(uint16_t seed) {
+    static const char* const k[12] = {"Vigilant", "Resolute", "Steadfast", "Intrepid", "Defiance", "Sentinel", "Valour", "Constancy",
+                                      "Retribution", "Warden", "Tenacious", "Guardian"};
+    return std::string("Navy frigate ") + k[seed % 12];
+}
+}  // namespace campaign
+
+Ship* World::CampCaptain() {
+    for (Ship& s : ships)
+        if (s.active && (!s.isBot || (campBotCaptain && !s.raider && !s.merchant && !s.npc)) && s.leader < 0) return &s;
+    return nullptr;
+}
+
+const std::vector<Vector2>& World::Lane(int from, int to) {
+    static const std::vector<Vector2> none;
+    const int n = (int)harbours.size();
+    if (from < 0 || to < 0 || from >= n || to >= n || from == to) return none;
+    if ((int)campLanes.size() != n * n) campLanes.assign((size_t)n * n, {});
+    std::vector<Vector2>& l = campLanes[(size_t)from * n + to];
+    if (l.empty()) {  // out of one harbour's mouth, into the other's
+        const Harbour &a = harbours[from], &b = harbours[to];
+        l = MakeRoute(rocks, {a.x - cosf(a.ang) * 200.0f, a.z - sinf(a.ang) * 200.0f}, {b.x - cosf(b.ang) * 120.0f, b.z - sinf(b.ang) * 120.0f}, false);
+    }
+    return l;
+}
+
+int World::SpawnNpc(int npc, Vector2 at, float heading, int cls, int team, bool merchant, float hullMul, const std::string& name) {
+    const int before = voyagePirates;
+    SpawnRaider(at, heading, cls, merchant ? 1.0f : hullMul);
+    voyagePirates = before;
+    int id = -1;
+    for (int i = ShipCount() - 1; i >= 0; --i)
+        if (ships[i].active && ships[i].raider && !ships[i].npc && ships[i].questSlot < 0 && Vector2Distance({ships[i].pos.x, ships[i].pos.z}, at) < 1.0f) { id = i; break; }
+    if (id < 0) return -1;
+    Ship& s = ships[id];
+    s.npc = (uint8_t)npc;
+    s.team = (int8_t)team;
+    s.merchant = merchant;
+    s.raider = team == 1 && !merchant;
+    s.name = name;
+    s.wp = 0;
+    if (merchant) s.maxHp = s.hp = MaxHpOf(s) * hullMul;
+    if (team != 1 && !events.empty() && events.back().type == EventType::Respawn && events.back().a == id) events.back().flags = 0;  // (no alarm for a friend)
+    return id;
+}
+
+// Traffic, the things that happen at sea, the regions' dread pirates. Traders and navy patrols are kept to a few
+// within some kilometres of her, put to sea from ports out of her sight and gone when they make port or she leaves
+// them far behind; every couple of minutes at sea, something happens.
+void World::UpdateSeaLife(float dt, Ship& cap, float nearFoe) {
+    using namespace campaign;
+    const Vector2 me = {cap.pos.x, cap.pos.z};
+    // the traffic
+    campNpcT -= dt;
+    if (campNpcT <= 0.0f) {
+        campNpcT = 8.0f;
+        int traders = 0, navy = 0;
+        for (Ship& s : ships) {
+            if (!s.active || (s.npc != NPC_TRADER && s.npc != NPC_NAVY)) continue;
+            const float d = Vector2Distance(me, {s.pos.x, s.pos.z});
+            const std::vector<Vector2>& path = Lane(s.laneFrom, s.laneTo);
+            const bool home = !path.empty() && s.wp + 1 >= (int)path.size() && Vector2Distance({s.pos.x, s.pos.z}, path.back()) < 200.0f;
+            if (!s.alive) continue;
+            if (d > 8500.0f || home || path.empty()) { RemoveShip(s.id); continue; }
+            (s.npc == NPC_TRADER ? traders : navy)++;
+        }
+        const int b = BiomeAt(me.x, me.y);
+        const int wantTraders = b == EMBER || b == FOG ? 2 : 3;
+        const int wantNavy = b == TEMPERATE ? 2 : b == EMBER || b == FOG ? 0 : 1;
+        const bool tradeShort = traders < wantTraders, navyShort = navy < wantNavy;
+        if ((tradeShort || navyShort) && campDocked < 0) {
+            // a port out of sight of her, and somewhere else to sail for
+            int from = -1;
+            for (int tries = 0; tries < 12 && from < 0; ++tries) {
+                const int p = (int)(RandF() * harbours.size()) % (int)harbours.size();
+                const float d = Vector2Distance(me, {harbours[p].x, harbours[p].z});
+                if (d > 1800.0f && d < 7000.0f) from = p;
+            }
+            int to = -1;
+            for (int tries = 0; tries < 12 && from >= 0 && to < 0; ++tries) {
+                const int p = (int)(RandF() * harbours.size()) % (int)harbours.size();
+                const float d = Vector2Distance({harbours[from].x, harbours[from].z}, {harbours[p].x, harbours[p].z});
+                if (p != from && d > 2500.0f && d < 12000.0f) to = p;
+            }
+            if (from >= 0 && to >= 0) {
+                const std::vector<Vector2>& path = Lane(from, to);
+                if (path.size() > 2) {
+                    const bool trader = tradeShort;
+                    const uint16_t seed = (uint16_t)(RandF() * 65535.0f);
+                    const Vector2 at = path.front(), nx = path[1];
+                    const int id = SpawnNpc(trader ? NPC_TRADER : NPC_NAVY, at, atan2f(nx.x - at.x, nx.y - at.y), trader ? (RandF() < 0.3f ? SC_LINE : SC_FRIGATE) : SC_FRIGATE,
+                                            trader ? neutral : 0, trader, trader ? 1.2f : 1.0f, trader ? "the " + MerchantName(seed) : NavyName(seed));
+                    if (id >= 0) {
+                        ships[id].laneFrom = (int8_t)from;
+                        ships[id].laneTo = (int8_t)to;
+                    }
+                }
+            }
+        }
+    }
+    // a dread pirate gone off (far astern, or out of the world): she's still out there
+    if (campDread >= 0 && (campDread >= ShipCount() || !ships[campDread].active || ships[campDread].npc != NPC_DREAD)) campDread = -1;
+    // a merchantman under attack: saved, or lost
+    if (campDistress[0] >= 0) {
+        const int m = campDistress[0];
+        const bool alive = m < ShipCount() && ships[m].active && ships[m].alive && ships[m].npc == NPC_DISTRESS;
+        bool attackers = false;
+        for (int k = 1; k < 3; ++k) {
+            const int p = campDistress[k];
+            attackers |= p >= 0 && p < ShipCount() && ships[p].active && ships[p].alive && ships[p].raider;
+        }
+        if (!alive || !attackers) {
+            GameEvent ce{EventType::CampEvent};
+            ce.a = (uint16_t)m;
+            ce.pos = alive ? ships[m].pos : cap.pos;
+            if (alive) {  // her thanks
+                const int gold = (int)(roundf(350.0f * Danger((uint8_t)BiomeAt(me.x, me.y)) / 10.0f) * 10.0f);
+                campGold += gold;
+                ce.b = EV_SAVED;
+                ce.value = (float)gold;
+                ships[m].npc = NPC_TRADER;  // (she goes on her way: to the nearest port)
+                int best = -1;
+                float bd = 1e9f;
+                for (int h = 0; h < (int)harbours.size(); ++h) {
+                    const float d = Vector2Distance({harbours[h].x, harbours[h].z}, {ships[m].pos.x, ships[m].pos.z});
+                    if (d < bd) { bd = d; best = h; }
+                }
+                ships[m].laneFrom = (int8_t)((best + 1) % (int)harbours.size());
+                ships[m].laneTo = (int8_t)best;
+                ships[m].wp = 1 << 14;  // (straight for the end of that lane)
+                ships[m].wp = (int16_t)std::max<int>(0, (int)Lane(ships[m].laneFrom, ships[m].laneTo).size() - 1);
+            } else ce.b = EV_LOST;
+            events.push_back(ce);
+            for (int16_t& k : campDistress) k = -1;
+            campSaveDue = true;
+        }
+    }
+    // something happens at sea
+    if (const char* e = getenv("BS_SEAEVENTS")) campEventT = fminf(campEventT, (float)atof(e));  // (tests, screenshots: this often)
+    if (campDocked < 0 && cap.alive && nearFoe > 1600.0f && campDistress[0] < 0) campEventT -= dt * (campFast ? 1.8f : 1.0f);
+    if (campEventT <= 0.0f) {
+        campEventT = 110.0f + RandF() * 120.0f;
+        if (const char* e = getenv("BS_SEAEVENTS")) campEventT = (float)atof(e);  // (tests)
+        SeaEvent(cap);
+    }
+}
+
+void World::SeaEvent(Ship& cap) {
+    using namespace campaign;
+    const Vector2 me = {cap.pos.x, cap.pos.z};
+    const int b = BiomeAt(me.x, me.y);
+    float portD = 1e9f;
+    for (const Harbour& hb : harbours) portD = fminf(portD, Vector2Distance({hb.x, hb.z}, me));
+    if (portD < portSafe * 0.7f) return;  // (too close to a port for anything to happen)
+    const Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, cap.rot);
+    const Vector2 fwd = Vector2Normalize({f.x, f.z});
+    auto ahead = [&](float dMin, float dMax, Vector2& out) {  // open water ahead of her, a little to one side
+        for (int tries = 0; tries < 30; ++tries) {
+            const float a = atan2f(fwd.x, fwd.y) + (RandF() - 0.5f) * 1.6f, d = dMin + (dMax - dMin) * RandF();
+            const Vector2 p = {me.x + sinf(a) * d, me.y + cosf(a) * d};
+            if (fmaxf(fabsf(p.x), fabsf(p.y)) < edge - 600.0f && RocksHeight(rocks, p.x, p.y) < -30.0f) { out = p; return true; }
+        }
+        return false;
+    };
+    // what: by the region (the wilder, the more dangerous), and what's possible now
+    const bool dreadReady = campDread < 0 && (campDreadAt[b] == 0.0f || campClock - campDreadAt[b] > 3.0f * dayLength) && campClock > 240.0f;
+    const bool monsterReady = !monsters[MON_KRAKEN].active && !monsters[MON_MEGALODON].active;
+    float w[5] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 10.0f + 8.0f * Danger((uint8_t)b) : 0.0f, 0.0f};
+    if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one)
+        const int k = atoi(e) - 1;
+        for (int i = 0; i < 5; ++i) w[i] = i == k ? 1.0f : 0.0f;
+    }
+    float sum = 0.0f;
+    for (float x : w) sum += x;
+    if (sum <= 0.0f) return;
+    float u = RandF() * sum;
+    int kind = 0;
+    while (kind < 4 && u > w[kind]) u -= w[kind++];
+    GameEvent ce{EventType::CampEvent};
+    Vector2 at;
+    switch (kind + 1) {
+        case EV_WRECK: {  // wreckage: chests and the odd power-up crate, floating where a ship went down
+            if (!ahead(550.0f, 900.0f, at)) return;
+            int n = 0;
+            const int want = 3 + (RandF() < 0.5f ? 1 : 0);
+            for (Crate& c : crates) {
+                if (c.active || n >= want) continue;
+                c.active = true;
+                c.type = (uint8_t)(n < 2 ? PU_COUNT : (int)(RandF() * PU_COUNT) % PU_COUNT);
+                c.x = at.x + (RandF() - 0.5f) * 80.0f;
+                c.z = at.y + (RandF() - 0.5f) * 80.0f;
+                c.timer = 240.0f;
+                ++n;
+            }
+            if (!n) return;
+            ce.b = EV_WRECK;
+            ce.pos = {at.x, 0.0f, at.y};
+            break;
+        }
+        case EV_DISTRESS: {  // a merchantman, pirates at her
+            if (!ahead(1000.0f, 1300.0f, at)) return;
+            const uint16_t seed = (uint16_t)(RandF() * 65535.0f);
+            const float hd = RandF() * 2.0f * PI;
+            const int m = SpawnNpc(NPC_DISTRESS, at, hd, SC_FRIGATE, neutral, true, 1.3f, "the " + MerchantName(seed));
+            if (m < 0) return;
+            campDistress[0] = (int16_t)m;
+            for (int k = 0; k < 2; ++k) {
+                const float a = hd + PI * (0.6f + 0.8f * k);
+                Vector2 p = {at.x + sinf(a) * 260.0f, at.y + cosf(a) * 260.0f};
+                if (RocksHeight(rocks, p.x, p.y) > -20.0f) p = {at.x - sinf(a) * 260.0f, at.y - cosf(a) * 260.0f};
+                SpawnRaider(p, atan2f(at.x - p.x, at.y - p.y), k ? SC_FRIGATE : SC_CUTTER);
+                for (int i = ShipCount() - 1; i >= 0; --i)
+                    if (ships[i].active && ships[i].raider && Vector2Distance({ships[i].pos.x, ships[i].pos.z}, p) < 1.0f) { campDistress[k + 1] = (int16_t)i; break; }
+            }
+            ce.a = (uint16_t)m;
+            ce.b = EV_DISTRESS;
+            ce.pos = ships[m].pos;
+            break;
+        }
+        case EV_MONSTER: {  // something big under her
+            const int k = b == TROPICS || (b == FOG && RandF() < 0.5f) ? MON_KRAKEN : RandF() < 0.6f ? MON_MEGALODON : MON_KRAKEN;
+            monsterAt[k] = 0.0f;  // (UpdateMonsters raises it under her, now)
+            ce.b = EV_MONSTER;
+            ce.flags = (uint8_t)k;
+            ce.pos = cap.pos;
+            break;
+        }
+        case EV_DREAD: {  // the region's dread pirate, and two of her mates: hunting her
+            if (!ahead(1200.0f, 1500.0f, at)) return;
+            const float hd = atan2f(me.x - at.x, me.y - at.y);
+            const float hull = 2.6f * fmaxf(Danger((uint8_t)b), 0.8f);
+            const int d = SpawnNpc(NPC_DREAD, at, hd, SC_LINE, 1, false, hull, DreadName(b));
+            if (d < 0) return;
+            Ship& s = ships[d];
+            static const uint8_t kPerks[BIOMES][2][2] = {  // her tricks: (upgrade, how many) twice
+                {{PK_CHAIN, 2}, {PK_RICOCHET, 1}}, {{PK_HOTSHOT, 2}, {PK_GRAPE, 1}}, {{PK_CHAIN, 3}, {PK_MORTAR, 1}},
+                {{PK_HOTSHOT, 3}, {PK_MORTAR, 1}}, {{PK_HOMING, 2}, {PK_SPECTRAL, 1}}};
+            for (const auto& pk : kPerks[b]) s.perks[pk[0]] = (uint8_t)std::min<int>(pk[1], kPerkMax[pk[0]]);
+            s.maxHp = s.hp = MaxHpOf(s) * hull;
+            campDread = (int16_t)d;
+            for (int k = 0; k < 2; ++k) {
+                const Vector2 p = {at.x + (k ? 90.0f : -90.0f), at.y - 70.0f};
+                if (RocksHeight(rocks, p.x, p.y) < -20.0f) SpawnNpc(NPC_DREADMATE, p, hd, SC_FRIGATE, 1, false, 1.1f, TextFormat("%s's mate", DreadName(b)));
+            }
+            ce.a = (uint16_t)d;
+            ce.b = EV_DREAD;
+            ce.flags = (uint8_t)b;
+            ce.pos = s.pos;
+            break;
+        }
+        default: return;
+    }
+    events.push_back(ce);
 }
 
 // The save: a few lines of text beside the game
@@ -5591,7 +5949,7 @@ void World::UpdateMonsters(float dt) {
     for (int k = 0; k < MON_TYPES; ++k) {  // turning up
         Monster& m = monsters[k];
         if (m.active || monsterAt[k] < 0.0f || voyageBest < monsterAt[k] * L) continue;
-        Ship* prey = PickPrey(ships, -1, {0, 0, 0}, 1e9f, RandF(), side);
+        Ship* prey = mode == MODE_CAMPAIGN ? CampCaptain() : PickPrey(ships, -1, {0, 0, 0}, 1e9f, RandF(), side);  // (the campaign's: it's come for her)
         if (!prey || inPort(prey->pos)) continue;
         monsterAt[k] = -1.0f;  // (once a voyage)
         m = Monster{};
