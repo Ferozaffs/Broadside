@@ -1454,6 +1454,92 @@ static int FleetTest() {
 // sea doesn't change for her: she does.
 // The Frozen North's floes: there are plenty of them, a frigate run at one fetches up against it (and is hurt by a hard
 // knock) instead of sailing through, and a bot steers round them
+// Progression: she starts in a cutter; the tavern's quests near home pay frigate parts (never a ship of the line's),
+// and now and then a ship for her fleet; a quest done puts its part in her hold; three parts and the labour build her
+// a frigate; a part she has already sells; the frigate is hers to switch back to
+static int ProgressTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        printf("   %-62s %s\n", what.c_str(), ok ? "ok" : "PROBLEM");
+        if (!ok) ++problems;
+    };
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    const int me = g.AddShip("captain", false, -1);
+    for (int i = 0; i < 30; ++i) g.Step();
+    check(g.ships[me].cls == SC_CUTTER, TextFormat("a new campaign starts her in a %s", ClassOf(g.ships[me].cls).name));
+    // the home port's tavern, thirty days of it
+    int partDays = 0, lineParts = 0, shipDays = 0, frigateShips = 0, offers = 0;
+    for (int day = 0; day < 30; ++day) {
+        g.campClock = day * dayLength + 1.0f;
+        g.TestOffers(homePort);
+        bool part = false, ship = false;
+        for (const Quest& q : g.campOffers) {
+            ++offers;
+            part |= q.part >= 0;
+            lineParts += q.part >= PT_FRAMES;
+            ship |= q.ship >= 0;
+            frigateShips += q.ship == SC_FRIGATE && ZoneLevel(q.x, q.z) < 5.0f;  // (a frigate only for work out in the wild)
+            if (q.part >= 0 && q.ship >= 0) { printf("      an offer with both a part and a ship\n"); ++problems; }
+        }
+        partDays += part;
+        shipDays += ship;
+    }
+    printf("      in 30 days at home: %d offers, a part on %d days, a ship on %d days\n", offers, partDays, shipDays);
+    check(partDays >= 6 && partDays <= 22, TextFormat("a frigate's part on some days (%d of 30)", partDays));
+    check(lineParts == 0, "no ship of the line's parts near home");
+    check(shipDays >= 2 && frigateShips == 0, TextFormat("a ship for the fleet now and then (%d days), no frigates in gentle waters", shipDays));
+    // a quest with a part, done: into her hold
+    Quest q{};
+    for (int day = 30; day < 90 && q.part < 0; ++day) {
+        g.campClock = day * dayLength + 1.0f;
+        g.TestOffers(homePort);
+        for (const Quest& o : g.campOffers)
+            if (o.part >= 0) { q = o; break; }
+    }
+    check(q.part >= 0, "found an offer paying a part");
+    q.state = QS_ACTIVE;
+    g.campQuests[0] = q;
+    const int gold0 = g.campGold;
+    g.TestEndQuest(0, true);
+    check(((g.campParts >> q.part) & 1) && g.campGold == gold0 + q.reward, TextFormat("done: %s in her hold, %d gold", kPartNames[q.part], q.reward));
+    // the same part again: the shipwrights buy it
+    const int gold1 = g.campGold;
+    g.GivePart(q.part, g.ships[me].pos);
+    check(g.campGold == gold1 + partValue, "a part she has already: sold for its worth");
+    // the frigate: not without all three, then built
+    g.campDocked = (int8_t)homePort;
+    g.campGold = 5000;
+    check(!g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE), "no frigate with one part");
+    for (int p = PT_KEEL; p < PT_FRAMES; ++p) g.GivePart(p, g.ships[me].pos);
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE) && g.ships[me].cls == SC_FRIGATE && g.campGold == 5000 + partValue - BuildCost(SC_FRIGATE),  // (one of the three she had: sold)
+          "the frigate built: her three parts and the labour");
+    check(g.campParts == 0 && ((g.campHulls >> SC_FRIGATE) & 1), "the parts used up, the frigate hers");
+    // back to the cutter and out again: both hers, as sound as she left them
+    g.ships[me].hp = g.ships[me].maxHp * 0.5f;
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_CUTTER) && g.ships[me].cls == SC_CUTTER, "back in her cutter, free");
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE) && fabsf(g.ships[me].hp / g.ships[me].maxHp - 0.5f) < 0.02f, "the frigate again, still half-mended");
+    check(!g.CampaignAct(me, ACT_FLAGSHIP, SC_LINE), "no ship of the line without her parts");
+    // a quest paying a ship: she joins the fleet
+    Quest s{};
+    for (int day = 90; day < 200 && s.ship < 0; ++day) {
+        g.campClock = day * dayLength + 1.0f;
+        g.TestOffers(homePort);
+        for (const Quest& o : g.campOffers)
+            if (o.ship >= 0) { s = o; break; }
+    }
+    check(s.ship >= 0, "found an offer paying a ship");
+    s.state = QS_ACTIVE;
+    g.campQuests[1] = s;
+    g.TestEndQuest(1, true);
+    check(g.campFleet.size() == 1 && g.campFleet[0].cls == s.ship, TextFormat("done: a %s joins her fleet", ClassOf(s.ship).name));
+    check(!g.CampaignAct(me, ACT_BUY_ESCORT, SC_CUTTER), "and none for sale");
+    printf("progression: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 static int FloeTest() {
     using namespace campaign;
     const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
@@ -1619,6 +1705,7 @@ static int ZoneTest() {
 }
 
 int RunSimTest() {
+    if (getenv("BS_PROGRESSTEST")) return ProgressTest();
     if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();
     if (getenv("BS_FLEETTEST")) return FleetTest();

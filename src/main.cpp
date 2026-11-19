@@ -2017,6 +2017,7 @@ void Game::UpdateSound(float dt, bool menu) {
                 }
         if (bossView.hasBoss && bossView.bossState != 2) mt = sfx::music::Boss;
         else if (GetTime() - combatAt < 14.0) mt = sfx::music::Battle;
+        else if (campaign && portOpen) mt = sfx::music::Port;  // (ashore: the tavern's songs)
     }
     sfx::music::Set(mt);
     sfx::music::SetDuck(a.underwater > 0.5f ? 0.45f : paused ? 0.6f : 1.0f);
@@ -8563,7 +8564,9 @@ void Game::DrawQuests(float W, float H) {
         Vector3 at;
         const bool where = QuestGoal(k, what, at);
         std::string dist = where ? TextFormat("   %s   %s %s", "\xC2\xB7", Km(Vector2Distance(me, {at.x, at.z})).c_str(), Compass(me, {at.x, at.z})) : "";
-        const std::string title = TextFormat("%d   %s", k + 1, QuestTitle(q).c_str());
+        std::string title = TextFormat("%d   %s", k + 1, QuestTitle(q).c_str());
+        if (q.part >= 0 && q.part < PARTS) title += TextFormat("   + %s", kPartShort[q.part]);  // (what it pays besides gold)
+        else if (q.ship >= 0 && q.ship < SC_COUNT) title += TextFormat("   + a %s", ClassOf(q.ship).name);
         const float w = fmaxf(Measure(title.c_str(), 15, true).x, Measure((what + dist).c_str(), 13).x) + 28.0f;
         Panel({18, y, w, 46}, A(kPanel, 0.82f), 8);
         const Color tc = q.state == QS_DONE ? kGreen : q.state == QS_FAILED ? kRed : q.chain ? kGold : kText;
@@ -8927,6 +8930,12 @@ void Game::DrawPort(float W, float H) {
         int told = 0;
         for (int k = 0; k < BIOMES; ++k) told += campChainC[k] > chainSteps;
         Label(TextFormat("STORIES TOLD %d OF %d", told, BIOMES), x0, y, 11, told ? kGold : kDim);
+        y += 24;
+        std::string hold;  // (the ship's parts she's won: the shipwright builds from them)
+        for (int p = 0; p < PARTS; ++p)
+            if ((campPartsC >> p) & 1) hold += (hold.empty() ? "" : "   \xC2\xB7   ") + std::string(TextToUpper(kPartShort[p]));
+        Label(hold.empty() ? "IN THE HOLD: NO SHIP'S PARTS YET (QUESTS, DREAD PIRATES AND LAIRS PAY THEM)" : ("IN THE HOLD: " + hold).c_str(), x0, y, 11,
+              hold.empty() ? kDim : kGold);
     } else if (portTab == 1) {  // the tavern: today's work, who's looking for a berth, her officers
         Label("TODAY'S WORK", x0, y, 12, kDim);
         y += 20;

@@ -5205,19 +5205,22 @@ void World::MakeOffers(int port) {
         if (BuildQuest(q, order[n], port, tb, h)) campOffers.push_back(q);
     }
     // a part for her next ship on one of today's (not every day): a frigate's anywhere, a ship of the line's only far out
-    if (R() < 0.45f && !campOffers.empty()) {
-        Quest& q = campOffers[(size_t)(R() * campOffers.size()) % campOffers.size()];
+    std::vector<int> plain;  // (the ordinary ones: a story pays its own way)
+    for (int k = 0; k < (int)campOffers.size(); ++k)
+        if (!campOffers[k].chain) plain.push_back(k);
+    if (R() < 0.45f && !plain.empty()) {
+        Quest& q = campOffers[plain[(size_t)(R() * plain.size()) % plain.size()]];
         const int part = NextPart(ZoneLevel(q.x, q.z), false);
-        if (part >= 0 && !q.chain) {
+        if (part >= 0) {
             q.part = (int8_t)part;
             q.reward = (int32_t)(roundf(q.reward * 0.6f / 10.0f) * 10.0f);
         }
     }
     // and now and then one brings a ship for her fleet (while she has a berth for one): a cutter or a gunboat near
     // home, a frigate perhaps far out
-    if ((int)campFleet.size() < fleetMax && R() < 0.3f && !campOffers.empty()) {
-        Quest& q = campOffers[(size_t)(R() * campOffers.size()) % campOffers.size()];
-        if (!q.chain && q.part < 0) {
+    if ((int)campFleet.size() < fleetMax && R() < 0.3f && !plain.empty()) {
+        Quest& q = campOffers[plain[(size_t)(R() * plain.size()) % plain.size()]];
+        if (q.part < 0) {
             const float lv = ZoneLevel(q.x, q.z);
             q.ship = (int8_t)(lv >= 5.0f && R() < 0.4f ? SC_FRIGATE : R() < 0.5f ? SC_GUNBOAT : SC_CUTTER);
             q.reward = (int32_t)(roundf(q.reward * 0.6f / 10.0f) * 10.0f);

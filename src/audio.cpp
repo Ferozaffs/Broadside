@@ -967,7 +967,7 @@ bool ExportAll(const char* dir) {
 // ---- music -----------------------------------------------------------------------------------
 namespace music {
 namespace {
-const char* const kTrackNames[Count] = {"menu", "sail", "battle", "boss", "victory", "defeat"};
+const char* const kTrackNames[Count] = {"menu", "sail", "battle", "boss", "victory", "defeat", "port"};
 std::vector<std::string> files[Count];
 struct Voice {
     Music m{};
@@ -980,7 +980,7 @@ Track want = None;     // the state the game is in
 Track acted = None;    // ...the one last acted on
 Track sounding = None; // the track playing after the fallbacks (what's fading in)
 float vol = 0.6f, duck = 1.0f, duckNow = 1.0f;
-int lastTake[Count] = {-1, -1, -1, -1, -1, -1};
+int lastTake[Count] = {-1, -1, -1, -1, -1, -1, -1};
 bool logOn = false;
 
 bool Stinger(Track t) { return t == Victory || t == Defeat; }
@@ -993,6 +993,7 @@ Track Resolve(Track t) {  // this state's music, or the one it borrows
             case Battle: t = Sail; break;
             case Victory: case Defeat: t = Sail; break;
             case Menu: t = Sail; break;
+            case Port: t = files[Menu].empty() ? Sail : Menu; break;  // (ashore: the menu's shanty, or the sea's)
             case Sail: t = files[Menu].empty() ? None : Menu; break;
             default: t = None; break;
         }

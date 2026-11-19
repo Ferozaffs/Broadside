@@ -69,7 +69,7 @@ Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed = 1);  // (the same
 // plays them in turn, one into the next. A state with no file borrows another's (boss -> battle -> sail,
 // menu <-> sail, victory / defeat -> sail); with no files at all the game is as it was, without music.
 namespace music {
-enum Track { None = -1, Menu = 0, Sail, Battle, Boss, Victory, Defeat, Count };
+enum Track { None = -1, Menu = 0, Sail, Battle, Boss, Victory, Defeat, Port, Count };  // (Port: ashore in the campaign)
 const char* Name(Track t);
 void Init(const char* dir);  // after sfx::Init; finds the files (opens none yet)
 void Shutdown();

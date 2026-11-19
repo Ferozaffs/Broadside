@@ -1220,6 +1220,8 @@ public:
     void TestKnockOut(Ship& s) { Damage(s, 1e6f, -1); }  // (tests)
     void TestDamage(Ship& s, float hp, int by) { Damage(s, hp, by); }  // (tests: a broadside from `by`)
     void TestSpawnRaider(Vector2 at, float heading, int cls) { SpawnRaider(at, heading, cls); }  // (tests)
+    void TestOffers(int port) { MakeOffers(port); }
+    void TestEndQuest(int slot, bool won) { EndQuest(slot, won); }
     void TestWinBoss() { voyageWinner = 0; bossState = 2; EndRound(true); }  // (tests: the boss beaten)
     void TestRoundPowers(Ship& s) { GiveRoundPowers(s); }
     void PerkFxAt(int kind, int a, int b, Vector3 pos, float value = 0.0f);
