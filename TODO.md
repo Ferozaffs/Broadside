@@ -880,8 +880,15 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   she strikes her colours, nobody fires on her; alongside 4 s, then home). MakeRoute works on the campaign's sea.
   Tavern on the port screen (accept / give up), the tracker (top left), marks on the sea and at the edge of the view,
   numbered marks on the chart, feed lines. Saved with the campaign. Test: BS_QUESTTEST (all seven), BS_TAKEQUESTS.
-- [ ] Phase 2b: mystery chains (a bottle, a wreck, a name, a lair) ending in each region's boss (a boss fight on the
-  campaign's sea, or the World switching to MODE_BOSS like the Odyssey and back), reputation, more quest kinds.
+- [x] Phase 2b: the regions' stories (2026-11-19). Each region: three story steps (quests of the ordinary kinds, its
+  own titles and tellings, kChainStep), then its lair (Q_LAIR: within 380 m of it). The lair switches the World to
+  MODE_BOSS on the Isles (CampaignBoss: the sea's ships put away, quests' ships to put to sea again), the region's
+  boss (Temperate: the Sea Fortress, Tropics: the Kraken Queen, Frozen: the Sea Serpent, Ember: the Ironclad, Fog: the
+  Flying Dutchman); 9 s of results, then CampaignBack to the last port (won: the reward, the story told; lost: a fifth
+  of the purse, the lair waits). The first step offered in the region's taverns until taken; each step done brings the
+  next. Saved (campChain, quests' chain/step). Tests: BS_CHAINTEST (Temperate + Ember through), BS_CAMPLAIR=biome.
+- [ ] Next: the Leviathan, the Armada and the Storm Caller (a last story across the regions?), reputation per port,
+  fleet and crew (phase 3), balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
 - [ ] Phase 3: fleet and crew, upgrades and ships at the shipwright.
 - [ ] Phase 4: each region's water, sky, fog and weather; palms, ice floes, ash; the Fog Banks' fog.
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

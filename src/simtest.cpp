@@ -1144,7 +1144,122 @@ static int QuestTest() {
     return problems ? 1 : 0;
 }
 
+// The regions' stories: the captain takes up a region's story in one of its ports and plays it through, step by step
+// (put where each step needs her), into the lair, the boss fight (won by the test), and back to the campaign's sea
+static int ChainTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    int problems = 0;
+    auto tick = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            if (g.ships[me].active) g.ships[me].hp = fmaxf(g.ships[me].hp, g.ships[me].maxHp * 0.6f);
+            g.Step();
+            g.events.clear();
+        }
+    };
+    auto put = [&](Vector2 p) {
+        Ship& c = g.ships[me];
+        c.pos = {p.x, g.ocean.Height(p.x, p.y) + 1.0f, p.y};
+        c.vel = {0, 0, 0};
+        c.angVel = {0, 0, 0};
+    };
+    auto hold = [&](Vector2 p, float secs) {
+        for (int i = 0; i < (int)(secs * 60); ++i) {
+            put(p);
+            tick(1);
+        }
+    };
+    auto dock = [&](int port) {
+        const Harbour& h = g.harbours[port];
+        hold({h.x - cosf(h.ang) * 30.0f, h.z - sinf(h.ang) * 30.0f}, 3.0f);
+    };
+    auto shipOf = [&](const Quest& q, int role) {
+        for (int16_t k : q.ships)
+            if (k >= 0 && k < g.ShipCount() && g.ships[k].active && g.ships[k].questRole == role) return (int)k;
+        return -1;
+    };
+    const int regions[2] = {TEMPERATE, EMBER};
+    for (int b : regions) {
+        int port = -1;
+        for (int p = 0; p < kPorts; ++p)
+            if (PortBiome(p) == b) { port = p; break; }
+        dock(port);
+        int idx = -1;
+        for (size_t k = 0; k < g.campOffers.size(); ++k)
+            if (g.campOffers[k].chain == b + 1) idx = (int)k;
+        if (idx < 0 || !g.CampaignAct(me, ACT_ACCEPT, idx)) { printf("   %s: no story offered at %s   <-- PROBLEM\n", kBiomeNames[b], PortName(port)); ++problems; continue; }
+        int slot = -1;
+        for (int k = 0; k < maxQuests; ++k)
+            if (g.campQuests[k].chain == b + 1) slot = k;
+        const int gold0 = g.campGold;
+        bool told = false;
+        for (int guard = 0; guard < 8 && !told; ++guard) {
+            Quest& q = g.campQuests[slot];
+            const int step = q.step, type = q.type;
+            const Vector2 spot = {q.x, q.z};
+            switch (type) {
+                case Q_TREASURE: hold(spot, 9.0f); break;
+                case Q_CASTAWAYS: hold(spot, 7.0f); dock(q.from); break;
+                case Q_BOUNTY: case Q_CAPTIVE: {
+                    hold(Vector2Add(spot, {900.0f, 0.0f}), 3.0f);
+                    const int role = type == Q_BOUNTY ? QR_TARGET : QR_CAPTOR;
+                    int t = shipOf(q, role);
+                    for (int i = 0; i < 20 && t >= 0 && !g.ships[t].struck && g.ships[t].alive; ++i) {
+                        g.TestDamage(g.ships[t], g.ships[t].maxHp * (type == Q_BOUNTY ? 0.5f : 0.15f), me);
+                        tick(30);
+                    }
+                    if (type == Q_CAPTIVE && t >= 0 && g.ships[t].active) {
+                        for (int i = 0; i < 60 * 6 && q.state == QS_ACTIVE; ++i) {
+                            put({g.ships[t].pos.x + 40.0f, g.ships[t].pos.z});
+                            tick(1);
+                        }
+                        dock(q.from);
+                    }
+                    break;
+                }
+                case Q_CONVOY:
+                    tick(60);
+                    for (int16_t k : q.ships)
+                        if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_MERCHANT) g.TestKnockOut(g.ships[k]);
+                    tick(60);
+                    break;
+                case Q_LAIR: {
+                    hold(spot, 1.0f);
+                    const bool inLair = g.mode == MODE_BOSS;
+                    tick(60 * 4);
+                    const bool boss = g.bossId >= 0;
+                    printf("      the lair: %s, %s\n", inLair ? "into a boss fight" : "NO FIGHT", boss ? BossName(g.bossKind) : "no boss came");
+                    if (!inLair || !boss) { ++problems; told = true; break; }
+                    g.TestWinBoss();
+                    tick(60 * 11);
+                    told = true;
+                    break;
+                }
+            }
+            if (told) break;
+            printf("      step %d (%s): %s\n", step + 1, type == Q_TREASURE ? "treasure" : type == Q_CASTAWAYS ? "castaways" : type == Q_BOUNTY ? "bounty"
+                                                       : type == Q_CAPTIVE ? "captive" : "convoy", q.state == QS_DONE ? "done" : "NOT DONE");
+            if (q.state != QS_DONE) { ++problems; break; }
+            tick(60 * 9);  // (the next step comes after a moment)
+            if (g.campQuests[slot].chain != b + 1 || g.campQuests[slot].step != step + 1) { printf("      no next step   <-- PROBLEM\n"); ++problems; break; }
+        }
+        const bool back = g.mode == MODE_CAMPAIGN && g.arena == ARENA_WORLD;
+        const bool done = g.campChain[b] == chainSteps + 1;
+        printf("   %s: %s, back on the campaign's sea: %s, gold %d -> %d (the boss: %d)%s\n", kBiomeNames[b], done ? "the story is told" : "NOT TOLD", back ? "yes" : "NO",
+               gold0, g.campGold, ChainReward(b), done && back ? "" : "   <-- PROBLEM");
+        problems += !(done && back);
+        for (int k = 0; k < maxQuests; ++k) g.ClearQuest(k);
+    }
+    printf("stories: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 int RunSimTest() {
+    if (getenv("BS_CHAINTEST")) return ChainTest();
     if (getenv("BS_QUESTTEST")) return QuestTest();
     if (getenv("BS_CAMPTEST")) return CampaignTest();
     if (getenv("BS_BOSSTEST")) return BossTest();

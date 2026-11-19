@@ -203,6 +203,7 @@ enum class Mode { Menu, Connecting, Playing, Shipyard };
 
 
 static std::string QuestTitle(const Quest& q);  // (the campaign's quests, as the captain reads them: below)
+static std::string CaptiveOf(const Quest& q);
 struct FeedLine {  // "<a><mid><b>" with a/b in their own colours (usually team colours)
     std::string a, mid, b;
     Color ca, cb;
@@ -384,6 +385,7 @@ public:
     int campBiome = -1;               // the region we're in, and when we came into it (its banner)
     double campBiomeAt = -10.0;
     bool chartOpen = false, portOpen = false;
+    bool campLair = false;            // the campaign: in a boss's lair (a boss fight in the bay, then back to the sea)
     bool campaignStart = false, campaignContinue = false;  // (the menu: StartSession hosts a campaign)
     double campNewArmed = -10.0;      // (the menu: "new campaign" pressed once over a save; again to start over)
     Texture2D chartTex{};
@@ -1878,7 +1880,7 @@ void Game::DrawResults(float W, float H) {
         Text(NameOf(aw.ship).c_str(), pa.x + 22, ry + 14, 20, aw.ship == myId ? kGold : kText, true, Left, false);
         Text(what, pa.x + colW - 22, ry + 16, 16, kDim, false, Right);
     }
-    Text(TextFormat("NEXT ROUND IN %d", (int)ceilf(fmaxf(matchClock, 0.0f))), W * 0.5f, H - 90, 22, kText, true, Center);
+    Text(TextFormat(campLair ? "BACK TO PORT IN %d" : "NEXT ROUND IN %d", (int)ceilf(fmaxf(matchClock, 0.0f))), W * 0.5f, H - 90, 22, kText, true, Center);
 }
 
 // The listener is the camera. Ambience: the sea always, wind by weather and by how fast we're going
@@ -3167,13 +3169,16 @@ void Game::PlayEvent(const GameEvent& e) {
                 Feed3("QUEST DONE", "  " + t, e.value > 0 ? TextFormat("  +%d gold", (int)e.value) : "", ui::kGreen, ui::kGold);
                 sfx::PlayFlat(sfx::Treasure, 0.9f, 1.0f);
             } else if (e.flags == 3) { Feed3("QUEST FAILED", "  " + t, "", ui::kRed, ui::kText); sfx::PlayFlat(sfx::Chime, 0.6f, 0.55f); }
-            else if (e.flags == 4) {
+            else if (e.flags == 5) {
+                Feed3("THE STORY GOES ON", "  " + t, "", ui::kGold, ui::kText);
+                sfx::PlayFlat(sfx::Chime, 0.7f, 0.7f);
+            } else if (e.flags == 4) {
                 if (q.type == campaign::Q_CASTAWAYS) Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
                 else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
                     Feed3(campaign::PirateName(q.seed), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
                 } else if (q.type == campaign::Q_CAPTIVE) {
-                    std::string c = campaign::CaptiveName(q.seed);
+                    std::string c = CaptiveOf(q);
                     c[0] = (char)toupper(c[0]);
                     Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
                 }
@@ -3268,6 +3273,34 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             break;
         case EventType::MatchStart:
+            if (e.value >= 1.5f) {  // the campaign: into a boss's lair (the world is a boss fight in the bay), or back to the sea
+                if (e.a < MODE_COUNT) {
+                    curMode = e.a;
+                    curArena = e.flags;
+                    bossView.hasBoss = false;
+                    fortressRock = false;
+                    SetOcean(oceanSeed, curWeather, curArena, curMode);
+                    predValid = false;
+                    history.clear();
+                }
+                campLair = curMode == MODE_BOSS;
+                chartOpen = false;
+                if (portOpen) { portOpen = false; DisableCursor(); }
+                if (campLair) {
+                    Notice(TextToUpper(BossName(e.b)), ui::kRed, 4.5f);
+                    Feed("The water goes still. Something huge is rising.", ui::kText);
+                } else {
+                    Notice(e.b ? "THE STORY IS TOLD" : "BACK IN PORT", e.b ? ui::kGold : ui::kText, 4.0f);
+                    if (!e.b) Feed("Beaten off. The lair will be there when you're ready again.", ui::kDim);
+                }
+                for (auto& hh : hullHits) hh.clear();
+                foamPatches.clear();
+                awards.clear();
+                camInit = false;
+                lowHpWarned = false;
+                sfx::PlayFlat(sfx::Chime, 0.6f, 0.6f);
+                break;
+            }
             if (e.value >= 1.0f) {  // the Odyssey: this round plays as another mode, maybe on another sea
                 static const char* const kKind[] = {"A SEA BATTLE", "A VOYAGE LEG", "A BOSS"};
                 const int kind = World::OdKindOf(e.b);
@@ -7828,6 +7861,45 @@ void Game::CampaignAct(int act, int arg) {
     Send(w.buf, true);
 }
 
+// ---- the regions' stories ---------------------------------------------------------------------------------------
+static const char* const kStoryName[campaign::BIOMES] = {"The Guns of the Grey Isle", "The Queen Beneath the Reef", "The Coil in the Ice",
+                                                         "The Iron Beast", "The Ship Without a Crew"};
+struct StoryStep { const char* title; const char* brief; const char* captive; };
+// {where}: how far and which way; {region}; {pirate}: the step's pirate captain; {a} / {b}: a convoy's ports
+static const StoryStep kStory[campaign::BIOMES][campaign::chainSteps + 1] = {
+    {{"The Wreck of the Merryweather", "A navy brig, the Merryweather, drove ashore in {region} and nobody came home. Her survivors may still be on the beach, {where} of here. Take them off.", nullptr},
+     {"The Purser's Tale", "The survivors say pirates took the brig's purser, the only one who saw who fired on her. He's aboard {pirate}'s ship, {where} of here. Cripple it, free him, bring him back.", "the purser"},
+     {"The Powder Runner", "The purser swears the guns were on an island no chart shows, kept in powder by {pirate}'s ship. Sink it, {where} of here, and take its charts.", nullptr},
+     {"The Guns of the Grey Isle", "The charts mark an island of stone and cannon, {where} of here. Something has made a fortress of it. Sail into its guns.", nullptr}},
+    {{"The Pearl Diver's Map", "A diver's map marks pearl beds off a beach {where} of here, where the divers stopped coming back. Search the shore.", nullptr},
+     {"The Last of the Dolphin", "In the oyster shells, a carved message: the Dolphin's crew are stranded {where} of here, their ship dragged under by arms as long as masts. Take them off.", nullptr},
+     {"The Kraken's Keeper", "The survivors name {pirate}, who feeds ships to the thing in the deep and keeps the plunder. Sink that ship, last seen {where} of here.", nullptr},
+     {"The Queen Beneath the Reef", "With its keeper gone the beast will come up hungry. Its deep lies {where} of here. Go and meet it.", nullptr}},
+    {{"The Frozen Whalers", "A whaling crew is stranded on the ice {where} of here, their ship crushed. Take them off before the cold does.", nullptr},
+     {"The Whaler's Log", "The whalers hid their log ashore {where} of here. It tells of a serpent longer than a convoy. Find it.", nullptr},
+     {"The Ice Pirate", "{pirate} hunts the serpent's leavings and knows its waters. Sink the ship, last seen {where} of here, and take its soundings.", nullptr},
+     {"The Coil in the Ice", "The soundings mark the serpent's coil, {where} of here. Bring everything you have.", nullptr}},
+    {{"The Foundry Ledger", "Ash covers a burned-out foundry on an island {where} of here. Its ledger is buried by the shore: iron, steam, a ship that needs no wind.", nullptr},
+     {"The Engineer", "The ledger names an engineer, taken to keep the beast's fires lit, now aboard {pirate}'s ship {where} of here. Cripple it and free them.", "the engineer"},
+     {"Coal for the Furnace", "The engineer says it burns coal by the shipload. A coal convoy sails from {a} for {b}: sink it and starve the fires.", nullptr},
+     {"The Iron Beast", "Starved of coal, it has come out to hunt, {where} of here. Iron plate and steam: find a way through.", nullptr}},
+    {{"A Light in the Fog", "Lanterns have been seen on a beach {where} of here, where nobody lives. If anyone is there, take them off.", nullptr},
+     {"The Drowned Captain's Chest", "The castaways speak of a captain who made a bargain with the sea. His chest is buried {where} of here. Dig it up.", nullptr},
+     {"The Last of His Crew", "The chest's papers name the one man who left that ship alive, now held aboard {pirate}'s ship {where} of here. Free him.", "the last of his crew"},
+     {"The Ship Without a Crew", "He knows where it comes through the fog: {where} of here. It sails through shot like mist; strike when it's solid.", nullptr}},
+};
+static const StoryStep* StoryOf(const Quest& q) {
+    if (q.chain < 1 || q.chain > campaign::BIOMES || q.step > campaign::chainSteps) return nullptr;
+    return &kStory[q.chain - 1][q.step];
+}
+static void ReplaceAll(std::string& s, const std::string& a, const std::string& b) {
+    for (size_t p = s.find(a); p != std::string::npos; p = s.find(a, p + b.size())) s.replace(p, a.size(), b);
+}
+static std::string CaptiveOf(const Quest& q) {
+    const StoryStep* st = StoryOf(q);
+    return st && st->captive ? st->captive : campaign::CaptiveName(q.seed);
+}
+
 // ---- the campaign's quests, as the captain reads them ----------------------------------------------------
 static const char* Compass(Vector2 from, Vector2 to) {  // (on the chart: +z north, -x east)
     const float a = atan2f(-(to.x - from.x), to.y - from.y);
@@ -7839,6 +7911,7 @@ static std::string Km(float d) { return d >= 1000.0f ? TextFormat("%.1f km", d /
 
 static std::string QuestTitle(const Quest& q) {
     using namespace campaign;
+    if (const StoryStep* st = StoryOf(q)) return st->title;
     switch (q.type) {
         case Q_TREASURE: return "Buried treasure";
         case Q_BOUNTY: return "A bounty on " + PirateName(q.seed);
@@ -7847,6 +7920,7 @@ static std::string QuestTitle(const Quest& q) {
         case Q_CARGO: return std::string("A hold of ") + GoodsName(q.seed) + " for " + PortName(q.to);
         case Q_CASTAWAYS: return "Smoke on the shore";
         case Q_CAPTIVE: { std::string c = CaptiveName(q.seed); c[0] = (char)toupper(c[0]); return c + ", taken"; }
+        case Q_LAIR: return "The lair";
     }
     return "A quest";
 }
@@ -7858,6 +7932,15 @@ static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) {
     const Vector2 here = {hs[q.from].x, hs[q.from].z}, spot = {q.x, q.z};
     const std::string where = TextFormat("%s %s", Km(Vector2Distance(here, spot)).c_str(), Compass(here, spot));
     const char* region = kBiomeNames[q.biome < BIOMES ? q.biome : 0];
+    if (const StoryStep* st = StoryOf(q)) {  // a region's story: its own telling
+        std::string t = st->brief;
+        ReplaceAll(t, "{where}", where);
+        ReplaceAll(t, "{region}", region);
+        ReplaceAll(t, "{pirate}", PirateName(q.seed));
+        ReplaceAll(t, "{a}", PortName(q.seed & 0x3F));
+        ReplaceAll(t, "{b}", PortName(q.to));
+        return t;
+    }
     switch (q.type) {
         case Q_TREASURE: return TextFormat("An old chart marks a beach in %s, %s of here. Heave to off it and search the shore.", region, where.c_str());
         case Q_BOUNTY: return TextFormat("%s has been raiding in %s, last seen %s of here. Find the ship and sink it.", PirateName(q.seed).c_str(), region, where.c_str());
@@ -7960,6 +8043,10 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
             what = d > 650.0f ? TextFormat("The %s waits for you", MerchantName(q.seed).c_str()) : TextFormat("See the %s into %s", MerchantName(q.seed).c_str(), PortName(q.to));
             return true;
         }
+        case Q_LAIR:
+            what = TextFormat("Sail into the lair of %s", BossName(ChainBoss(q.chain - 1)));
+            at = {q.x, 10.0f, q.z};
+            return true;
         case Q_CONVOY: {
             int nearest = -1;
             float best = 1e9f;
@@ -7994,7 +8081,7 @@ void Game::DrawQuests(float W, float H) {
         const std::string title = TextFormat("%d   %s", k + 1, QuestTitle(q).c_str());
         const float w = fmaxf(Measure(title.c_str(), 15, true).x, Measure((what + dist).c_str(), 13).x) + 28.0f;
         Panel({18, y, w, 46}, A(kPanel, 0.82f), 8);
-        const Color tc = q.state == QS_DONE ? kGreen : q.state == QS_FAILED ? kRed : kGold;
+        const Color tc = q.state == QS_DONE ? kGreen : q.state == QS_FAILED ? kRed : q.chain ? kGold : kText;
         Text(title.c_str(), 30, y + 5, 15, tc, true);
         Text((what + dist).c_str(), 30, y + 25, 13, q.state == QS_FAILED ? kRed : kText, false);
         y += 52.0f;
@@ -8188,7 +8275,11 @@ void Game::DrawPort(float W, float H) {
     if (campOffers.empty()) { Text("Nothing more today. Come back tomorrow.", r.x + 30, y + 4, 16, kDim, false); y += 30; }
     for (size_t k = 0; k < campOffers.size(); ++k) {
         const Quest& q = campOffers[k];
-        Text(QuestTitle(q).c_str(), r.x + 30, y, 18, kText, true);
+        if (q.chain) {
+            Label(TextFormat("A STORY OF %s   %s   PART %d OF %d", TextToUpper(campaign::kBiomeNames[q.chain - 1]), "\xC2\xB7", q.step + 1, campaign::chainSteps + 1), r.x + 30, y - 2, 10, kGold);
+            y += 14;
+        }
+        Text(QuestTitle(q).c_str(), r.x + 30, y, 18, q.chain ? kGold : kText, true);
         Text(TextFormat("%s gold", Thousands(q.reward).c_str()), r.x + pw - 170, y + 1, 16, kGold, true, Right);
         const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 14, pw - 220);
         for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), r.x + 30, y + 24 + l * 17.0f, 14, kDim, false);

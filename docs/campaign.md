@@ -32,8 +32,16 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
 - **Cargo run**: carry goods to a port before a deadline (the hold slows the ship a little).
 - **Rescue**: castaways on an island (sail close, send the boat); a captive held aboard a pirate ship (cripple it,
   board it).
-- **Chains**: a mystery in steps (a message in a bottle -> a wreck -> a name -> a lair), each biome's chain ending in
-  its boss (the Kraken, the Leviathan, the Storm Caller, the Dutchman, the Sea Fortress / the Armada).
+- **Stories**: each region's mystery in three steps and a lair, ending in its boss (built):
+  - the Temperate Isles, *The Guns of the Grey Isle*: a wrecked brig's survivors, her purser freed, a powder runner
+    sunk -> the Sea Fortress.
+  - the Tropics, *The Queen Beneath the Reef*: a pearl diver's map, a dragged-under crew, the beast's keeper -> the
+    Kraken Queen.
+  - the Frozen North, *The Coil in the Ice*: stranded whalers, their log, an ice pirate's soundings -> the Sea Serpent.
+  - the Ember Reach, *The Iron Beast*: a foundry's ledger, a kidnapped engineer, a coal convoy -> the Ironclad.
+  - the Fog Banks, *The Ship Without a Crew*: lanterns on an empty beach, a drowned captain's chest, the last of his
+    crew -> the Flying Dutchman.
+  The lair turns the sea into the boss's arena for the fight, then back to the last port.
 
 ## Fleet and crew
 - **Fleet**: up to 3 escort ships, recruited in port or captured, following you (the existing escort AI), each with

@@ -99,6 +99,7 @@ inline void PutQuest(ByteWriter& w, const Quest& q) {
     w.Put(q.seed); w.Put(q.biome); w.Put(q.flags); w.Put(q.count); w.Put(q.sunk); w.Put(q.gone);
     w.Put((uint8_t)(q.t < 0.0f ? 0.0f : q.t > 12.0f ? 240.0f : q.t * 20.0f));
     for (int16_t k : q.ships) w.Put(k);
+    w.Put(q.chain); w.Put(q.step);
 }
 inline Quest GetQuest(ByteReader& r) {
     Quest q;
@@ -106,6 +107,7 @@ inline Quest GetQuest(ByteReader& r) {
     q.reward = r.Get<int32_t>(); q.deadline = r.Get<float>(); q.seed = r.Get<uint16_t>(); q.biome = r.Get<uint8_t>(); q.flags = r.Get<uint8_t>();
     q.count = r.Get<uint8_t>(); q.sunk = r.Get<uint8_t>(); q.gone = r.Get<uint8_t>(); q.t = r.Get<uint8_t>() / 20.0f;
     for (int16_t& k : q.ships) k = r.Get<int16_t>();
+    q.chain = r.Get<uint8_t>(); q.step = r.Get<uint8_t>();
     return q;
 }
 
@@ -271,6 +273,7 @@ struct Snapshot {
     uint16_t campSunk = 0;
     Quest campQuests[campaign::maxQuests];  // under way
     std::vector<Quest> campOffers;          // the tavern's (in port)
+    uint8_t campChain[campaign::BIOMES] = {};
     bool odyssey = false;                 // the Odyssey: the run
     uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
@@ -481,6 +484,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0)));
         w.Put((uint16_t)world.campSunk);
         for (const Quest& q : world.campQuests) PutQuest(w, q);
+        for (uint8_t c : world.campChain) w.Put(c);
         const bool offers = world.campDocked >= 0 && world.campOffersPort == world.campDocked;
         w.Put((uint8_t)(offers ? world.campOffers.size() : 0));
         if (offers)
@@ -689,6 +693,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.campWantFast = (f & 2) != 0;
         s.campSunk = r.Get<uint16_t>();
         for (Quest& q : s.campQuests) q = GetQuest(r);
+        for (uint8_t& c : s.campChain) c = r.Get<uint8_t>();
         const uint8_t no = r.Get<uint8_t>();
         s.campOffers.clear();
         for (int k = 0; k < no && r.ok && k < 8; ++k) s.campOffers.push_back(GetQuest(r));

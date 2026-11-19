@@ -492,7 +492,19 @@ constexpr float repairPerHp = 1.5f;   // gold
 constexpr float lossOnSinking = 0.2f; // of the purse, to the salvors
 enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCEPT = 3, ACT_ABANDON = 4 };  // (accept: arg = the offer; abandon: arg = the slot)
 // Quests: taken in a port's tavern, three at once at most
-enum QuestType : uint8_t { Q_TREASURE = 0, Q_BOUNTY, Q_CONVOY, Q_ESCORT, Q_CARGO, Q_CASTAWAYS, Q_CAPTIVE, Q_TYPES };
+enum QuestType : uint8_t { Q_TREASURE = 0, Q_BOUNTY, Q_CONVOY, Q_ESCORT, Q_CARGO, Q_CASTAWAYS, Q_CAPTIVE, Q_TYPES,
+                           Q_LAIR = Q_TYPES };  // (a chain's end: sail into the boss's waters; never offered on its own)
+// Each region's story: three steps (quests of the kinds above), then its boss's lair
+constexpr int chainSteps = 3;
+inline constexpr uint8_t kChainStep[BIOMES][chainSteps] = {
+    {Q_CASTAWAYS, Q_CAPTIVE, Q_BOUNTY},   // the Temperate Isles: the Sea Fortress
+    {Q_TREASURE, Q_CASTAWAYS, Q_BOUNTY},  // the Tropics: the Kraken Queen
+    {Q_CASTAWAYS, Q_TREASURE, Q_BOUNTY},  // the Frozen North: the Sea Serpent
+    {Q_TREASURE, Q_CAPTIVE, Q_CONVOY},    // the Ember Reach: the Ironclad
+    {Q_CASTAWAYS, Q_TREASURE, Q_CAPTIVE}, // the Fog Banks: the Flying Dutchman
+};
+uint8_t ChainBoss(int biome);  // (BossKind)
+int ChainReward(int biome);    // gold for its boss
 enum QuestState : uint8_t { QS_NONE = 0, QS_OFFER, QS_ACTIVE, QS_RETURN, QS_DONE, QS_FAILED };  // (return: the castaways / the captive aboard, for port)
 enum QuestRole : uint8_t { QR_NONE = 0, QR_TARGET, QR_MERCHANT, QR_GUARD, QR_CAPTOR, QR_ESCORTED };  // (a quest's ships)
 enum QuestFlag : uint8_t { QF_SPAWNED = 1, QF_GUARDS = 2, QF_BAND1 = 4, QF_BAND2 = 8, QF_STRUCK = 16 };
@@ -518,6 +530,8 @@ struct Quest {
     uint8_t count = 0, sunk = 0, gone = 0;  // the convoy: its ships, how many sunk, how many made port
     float t = 0.0f;                // progress (searching the shore, alongside), or s since it was done / failed
     int16_t ships[campaign::questShips] = {-1, -1, -1, -1};
+    uint8_t chain = 0;             // a region's story: its biome + 1 (0: an ordinary quest), and which step of it
+    uint8_t step = 0;
 };
 
 namespace strait {
@@ -1018,6 +1032,8 @@ public:
     int8_t campOffersPort = -1;              // (which port, which day they're for)
     int campOffersDay = -1;
     bool campCargo = false;                  // a hold full (a cargo quest under way): she's a little slower
+    uint8_t campChain[campaign::BIOMES] = {};  // each region's story: steps done (chainSteps + 1: its boss beaten)
+    int8_t campBossSlot = -1;                // the lair's quest while its boss is fought (the world is in MODE_BOSS on the Isles)
     int CampaignRepairCost(const Ship& s) const;  // gold to make good her hull
     bool SaveCampaign() const;
     bool LoadCampaign();                          // after Init (the seed comes from CampaignSeed first)
@@ -1095,6 +1111,7 @@ public:
     void UseCombo(int c) { if (c >= 0 && c < CB_COUNT) comboUse[c]++; }
     void TestKnockOut(Ship& s) { Damage(s, 1e6f, -1); }  // (tests)
     void TestDamage(Ship& s, float hp, int by) { Damage(s, hp, by); }  // (tests: a broadside from `by`)
+    void TestWinBoss() { voyageWinner = 0; bossState = 2; EndRound(true); }  // (tests: the boss beaten)
     void TestRoundPowers(Ship& s) { GiveRoundPowers(s); }
     void PerkFxAt(int kind, int a, int b, Vector3 pos, float value = 0.0f);
     void GiveRoundPowers(Ship& s);  // Quartermaster (and Arsenal): a power-up or two to start the round with
@@ -1187,6 +1204,10 @@ private:
     void UpdateCampaign(float dt);
     void UpdateQuests(float dt, Ship& cap);
     void MakeOffers(int port);
+    bool BuildQuest(Quest& q, int type, int port, int biome, uint32_t& h);  // where, how much (false: nowhere fit)
+    bool ChainQuest(Quest& q, int biome, int step, int port, uint32_t& h);  // the region's story, this step
+    void CampaignBoss(int slot);   // into the lair: the boss fight
+    void CampaignBack(bool won);   // ...and back to the campaign's sea
     bool ShoreSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const;  // off an island's beach
     bool OpenSpot(uint32_t& h, int biome, Vector2 from, float dMin, float dMax, Vector2& out) const;   // open water
     int SpawnQuestShip(int slot, int role, Vector2 at, float heading, int cls, int team, bool merchant, float hullMul, const std::string& name);
