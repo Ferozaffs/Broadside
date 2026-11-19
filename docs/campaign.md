@@ -75,5 +75,7 @@ where you are. Saved on putting into port and on leaving the game.
    roaming pirates to fight.
 2. **Quests**: the templates above, the quest log, rewards; the first chain and boss.
 3. **Fleet and crew**: recruiting, officers, upgrades, ships for sale.
-4. **Biome looks**: the water, sky and fog of each region, palms / ice / ash, its own weather.
+4. **Biome looks**: the water, sky and fog of each region, palms / ice / ash, its own weather. Done: solid ice floes
+   in the north, wrecks and ghost lights in the Fog Banks, each region's squalls (blizzards, thunder squalls, ash
+   storms), and the day turning with the campaign's clock (dawn, day, dusk, night).
 5. **Music and polish**: region music, the map's art, balancing.

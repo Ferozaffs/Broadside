@@ -1447,6 +1447,70 @@ static int FleetTest() {
 // meets there): how many pirates find her, how hard they hit her (hull a minute), how many she sinks - a frigate fresh
 // from the shipwright at levels 1.5, 4, 7 and 9.5, then a ship of the line with every upgrade and a fleet at 7. The
 // sea doesn't change for her: she does.
+// The Frozen North's floes: there are plenty of them, a frigate run at one fetches up against it (and is hurt by a hard
+// knock) instead of sailing through, and a bot steers round them
+static int FloeTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    World probe;
+    probe.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    std::vector<Floe> floes;
+    const int n = (int)(half / floeCell) + 1;
+    for (int j = -n; j <= n; ++j)
+        for (int i = -n; i <= n; ++i) {
+            Floe f;
+            if (FloeAt(probe.rocks, i, j, f)) floes.push_back(f);
+        }
+    printf("  floes in the Frozen North: %d\n", (int)floes.size());
+    if (floes.size() < 200) { printf("  PROBLEM: too few floes\n"); ++problems; }
+    // a floe with open water round it (no other floe or rock within 150 m)
+    std::vector<Floe> lone;
+    for (const Floe& f : floes) {
+        bool ok = RocksHeight(probe.rocks, f.x, f.z) < -30.0f;
+        for (const Floe& o : floes) ok &= (&o == &f) || Vector2Distance({o.x, o.z}, {f.x, f.z}) > 160.0f;
+        for (float a = 0; a < 6.28f && ok; a += 0.5f) ok &= RocksHeight(probe.rocks, f.x + cosf(a) * 150.0f, f.z + sinf(a) * 150.0f) < -15.0f;
+        if (ok) lone.push_back(f);
+        if (lone.size() >= 4) break;
+    }
+    for (size_t k = 0; k < lone.size(); ++k) {
+        const Floe& f = lone[k];
+        const float R = FloeRadius(f.size);
+        World g;
+        g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        const int me = g.AddShip("captain", false, SC_FRIGATE);
+        Ship& s = g.ships[me];
+        const float ang = k * 1.3f;
+        const Vector2 from = {f.x + cosf(ang) * 90.0f, f.z + sinf(ang) * 90.0f};
+        s.pos = {from.x, g.ocean.Height(from.x, from.y) + 0.5f, from.y};
+        const float yaw = atan2f(f.x - from.x, f.z - from.y);
+        s.rot = QuaternionFromAxisAngle({0, 1, 0}, yaw);
+        s.vel = {sinf(yaw) * 10.0f, 0.0f, cosf(yaw) * 10.0f};
+        const float hp0 = s.hp;
+        float closest = 1e9f, peak = 0.0f;
+        for (int i = 0; i < 60 * 25; ++i) {
+            g.ships[me].input.sail = 1.0f;
+            g.ships[me].input.rudder = 0.0f;
+            g.Step();
+            const Ship& c = g.ships[me];
+            closest = fminf(closest, Vector2Distance({c.pos.x, c.pos.z}, {f.x, f.z}));
+            peak = fmaxf(peak, Vector2Length({c.vel.x, c.vel.z}));
+            if (getenv("BS_FLOEDEBUG") && i % 30 == 0)
+                printf("    t %.1f: %.1f m off, speed %.1f, y %.1f (sea %.1f), active %d alive %d\n", i / 60.0f, Vector2Distance({c.pos.x, c.pos.z}, {f.x, f.z}),
+                       Vector2Length({c.vel.x, c.vel.z}), c.pos.y, g.ocean.Height(c.pos.x, c.pos.z), c.active, c.alive);
+        }
+        const Ship& c = g.ships[me];
+        const float lost = hp0 - c.hp;
+        printf("  floe %d (radius %.1f m): closest her middle came %.1f m, hull lost %.1f (top speed %.1f m/s)\n", (int)k, R, closest, lost, peak);
+        if (closest < R + 2.0f) {  /* (her half-beam is 4 m) */ printf("  PROBLEM: she sailed into the floe\n"); ++problems; }
+        if (lost <= 0.0f) { printf("  PROBLEM: no damage from a 10 m/s knock\n"); ++problems; }
+        if (lost > c.maxHp * 0.4f) { printf("  PROBLEM: a floe did 40%% of her hull\n"); ++problems; }
+    }
+    if (lone.size() < 2) { printf("  PROBLEM: no lone floes to test against\n"); ++problems; }
+    printf("floes: %d problems\n", problems);
+    return problems ? 1 : 0;
+}
+
 static int ZoneTest() {
     using namespace campaign;
     const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
@@ -1549,6 +1613,7 @@ static int ZoneTest() {
 }
 
 int RunSimTest() {
+    if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();
     if (getenv("BS_FLEETTEST")) return FleetTest();
     if (getenv("BS_SEALIFETEST")) return SeaLifeTest();

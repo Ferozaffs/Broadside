@@ -29,6 +29,11 @@ struct Atmos {
 };
 
 inline Vector3 V3Lerp(Vector3 a, Vector3 b, float t) { return Vector3Lerp(a, b, t); }
+// light levels blend by ratio, not by difference (noon to night is a factor of a hundred): halfway is the geometric mean
+inline Vector3 V3LerpLog(Vector3 a, Vector3 b, float t) {
+    auto one = [&](float x, float y) { return expf(logf(fmaxf(x, 1e-5f)) * (1.0f - t) + logf(fmaxf(y, 1e-5f)) * t); };
+    return {one(a.x, b.x), one(a.y, b.y), one(a.z, b.z)};
+}
 
 inline Atmos MakeAtmos(int tod, int weather, Vector2 windDir) {
     Atmos a;
@@ -104,4 +109,25 @@ inline Atmos MakeAtmos(int tod, int weather, Vector2 windDir) {
             break;
     }
     return a;
+}
+
+// Between two skies (the campaign's day turning): the light by ratio, everything else straight
+inline Atmos LerpAtmos(const Atmos& a, const Atmos& b, float t) {
+    Atmos o = a;
+    o.sunDir = Vector3Normalize(Vector3Lerp(a.sunDir, b.sunDir, t));
+    o.sunColor = V3LerpLog(a.sunColor, b.sunColor, t);
+    o.zenith = V3LerpLog(a.zenith, b.zenith, t);
+    o.horizon = V3LerpLog(a.horizon, b.horizon, t);
+    o.fogColor = V3LerpLog(a.fogColor, b.fogColor, t);
+    o.ambient = V3LerpLog(a.ambient, b.ambient, t);
+    o.smokeSun = V3LerpLog(a.smokeSun, b.smokeSun, t);
+    auto f = [&](float x, float y) { return x + (y - x) * t; };
+    o.fogDensity = f(a.fogDensity, b.fogDensity);
+    o.haze = f(a.haze, b.haze);
+    o.cloud = f(a.cloud, b.cloud);
+    o.night = f(a.night, b.night);
+    o.exposure = f(a.exposure, b.exposure);
+    o.rain = f(a.rain, b.rain);
+    o.lanterns = f(a.lanterns, b.lanterns);
+    return o;
 }

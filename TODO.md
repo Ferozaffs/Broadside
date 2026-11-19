@@ -928,6 +928,17 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   Tropics' islands (curved trunks, drooping fronds); ice floes drifting in the north (visual only: ships pass through
   them); the Ember Reach's tall cones smoke (big slow plumes) and glow red at the crater, brightest at night.
   BS_LOOKLOG logs what's drawn.
-- [ ] Phase 4 next: floes ships can hit (or push aside), wrecks on the Fog Banks' beaches, the Fog Banks' ghost lights,
-  regional weather (storms in the Frozen North), time of day passing with the campaign's days.
+- [x] Phase 4, the rest (2026-11-19). The floes are solid: campaign::FloeAt (sim.h) lays them out the same for the
+  server and the clients (no drift now), World::FloeCollide pushes a hull off one like a rock (a knock over 6 m/s
+  stoves her in, at most 12% of her hull a knock), bots steer round them (FloeNear in the rock probe). The Fog Banks:
+  about every other island has an old wreck run up its beach (the ship models, heeled over, holed and grey: no embers,
+  Game::wreckDamage), and three pale green lights wander round each, coming and going, brightest at night. The day
+  turns: CampaignSky blends noon / sunset / night on the campaign's clock (dawn, a long day, dusk, two minutes of
+  night in a ten-minute day; the sun's arc east to west, stepped by a second for the island shadows; LerpAtmos blends
+  the light by ratio). The weather: RegionSquall gives each region its squalls on the clock (rain in the Isles, thunder
+  squalls in the Tropics, blizzards in the north - a white-out, the snow driven sideways - ash storms in the Ember
+  Reach, drizzle in the fog), weighted by the region round the camera; the HUD says the time of day and the weather;
+  the wind and sea sounds get up. A campaign is hosted at noon in clear weather now (the menu's choice was carried
+  over). Lightning needs rain over 0.6 (the normal storm is 1). Test: BS_FLOETEST; BS_CAMPCLOCK sets the clock for
+  screenshots.
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

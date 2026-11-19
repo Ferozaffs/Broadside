@@ -735,6 +735,16 @@ float RockCoast(const Rock& k, float ang);       // coastline radius at a bearin
 float RockHeight(const Rock& k, float x, float z);  // surface height (below 0 = seabed slope)
 float RocksHeight(const std::vector<Rock>& rocks, float x, float z);  // max over all rocks (-1e9 if none near)
 
+namespace campaign {
+// The Frozen North's ice floes: about one cell in four of a 170 m grid holds one, where the sea is the north's and open.
+// They're the same for the server and every client (they lie where they lie, bobbing), and ships fetch up against them.
+constexpr float floeCell = 170.0f;
+struct Floe { float x, z, yaw, size; };
+bool FloeAt(const std::vector<Rock>& rocks, int i, int j, Floe& f);  // the floe in cell (i, j), if there is one
+inline float FloeRadius(float size) { return 5.2f * size; }
+bool FloeNear(const std::vector<Rock>& rocks, float x, float z, float pad);  // within pad m of a floe's edge
+}  // namespace campaign
+
 struct PlayerInput {
     float sail = 0.0f;    // throttle: -1 full astern .. +1 full ahead
     float rudder = 0.0f;  // -1 port .. +1 starboard
@@ -1267,6 +1277,7 @@ private:
     void UpdateCrew(float dt);
     void Collisions();
     void RockCollide(Ship& s, bool authoritative);
+    void FloeCollide(Ship& s, bool authoritative);  // the campaign's Frozen North: ships against the ice floes
     void UpdateCrates(float dt);
     void PlaceCrate(Crate& c);
     void UpdateBalls(float dt);

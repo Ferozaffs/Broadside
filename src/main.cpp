@@ -541,6 +541,15 @@ public:
     void DrawFlakes(const Camera3D& cam, float dt);  // the campaign's snow and ash
     std::vector<Vector3> flakes;
     float regionW[campaign::BIOMES] = {1, 0, 0, 0, 0};  // the campaign: how much of each region is round the camera (smoothed)
+    float campSquall = 0.0f;  // the campaign's weather round us: 0 fair .. 1 the worst it gets
+    int campSquallKind = 0;   // ...whose: the region most of it is coming from
+    float CampDayPhase() const { return fmodf(campClock / campaign::dayLength, 1.0f); }  // 0 dawn .. 1 the next dawn
+    // the Fog Banks: old wrecks run up on the beaches, and the pale lights that wander round them
+    struct BeachWreck { Vector3 pos; Quaternion rot; uint8_t cls; float seed, yaw; };
+    std::vector<BeachWreck> fogWrecks;
+    float wreckDamage = -1.0f;  // (DrawShip: an old wreck's weathering, holed and grey but long cold; -1 as she is)
+    size_t fogWrecksFor = 0;
+    void BuildFogWrecks();
     void DrawLanternHalos(bool menu);  // lantern brightness: low at noon, full at night and in fog
     float aimZoom = 0;
     float aimRange = -1, aimElevDeg = 0;
@@ -966,7 +975,7 @@ void Game::StartSession(bool host, int bots, bool open) {
         const bool camp = campaignStart || modeSel == MODE_CAMPAIGN;  // (the menu's buttons, or --mode campaign)
         if (modeSel == MODE_CAMPAIGN && !campaignStart) server.campaignContinue = getenv("BS_CAMPCONTINUE") != nullptr;
         campaignStart = false;
-        if (!server.Start(opt.port, camp ? 0 : bots, seed, todSel, weatherSel, camp ? MODE_CAMPAIGN : modeSel, camp ? false : fleetSel != 0,
+        if (!server.Start(opt.port, camp ? 0 : bots, seed, camp ? (int)TOD_NOON : todSel, camp ? (int)WEATHER_CLEAR : weatherSel, camp ? MODE_CAMPAIGN : modeSel, camp ? false : fleetSel != 0,
                           camp ? (uint8_t)SC_ALL : (uint8_t)allowSel, camp ? false : viewSel != 0, camp ? true : skillSel != 0, camp ? ARENA_WORLD : arena,
                           handlingSel != 0, camp ? true : ffSel != 0, camp ? voyage::NORMAL : diffSel, bossSel)) {
             status = TextFormat("Could not host on port %u", opt.port);
@@ -1936,7 +1945,11 @@ void Game::UpdateSound(float dt, bool menu) {
     sfx::Ambience a;
     a.sea = w == 1 ? 0.85f : (w == 2 ? 0.45f : 0.55f);
     a.wind = w == 1 ? 0.75f : (w == 2 ? 0.08f : 0.2f);
-    a.rain = renderer.atm.rain > 0.0f ? 0.8f : 0.0f;
+    a.rain = fminf(0.8f, renderer.atm.rain);
+    if (!menu && campaign && campSquall > 0.01f) {  // (the campaign's squalls: the wind gets up, the sea with it)
+        a.sea = fmaxf(a.sea, 0.55f + 0.3f * campSquall);
+        a.wind = fmaxf(a.wind, 0.2f + 0.6f * campSquall);
+    }
     a.underwater = rv.pos.y < Ocean().Height(rv.pos.x, rv.pos.z) ? 1.0f : 0.0f;
     if ((menu ? arenaSel : curArena) == ARENA_MAELSTROM) {  // the maelstrom roars, louder the closer we are
         float d = Vector3Length({rv.pos.x, rv.pos.y + 30.0f, rv.pos.z});
@@ -4064,7 +4077,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
             Vector3 w = HullToWorld(pos, rot, h.local, scale);
             hits[n++] = {w.x, w.y, w.z, h.radius * scale};
         }
-    renderer.SetDamage(alive ? 1.0f - hpFrac : 1.0f, hits, n);
+    renderer.SetDamage(wreckDamage >= 0.0f ? wreckDamage : alive ? 1.0f - hpFrac : 1.0f, hits, n);
     ShipModel& model = ModelOf(cls);
     // the captain's paint; in teams (and for the pirate) the sails still show whose side she's on
     const LiveryGpu* liv = id == -2 ? &yard.gpu : id == -3 ? (myLiveryGpu.on ? &myLiveryGpu : nullptr) : LiveryFor(id);  // (-3: ours, in the menu)
@@ -4136,9 +4149,49 @@ void Game::ShipDamageFx(int id, const NetShip& s, float dt) {
     }
 }
 
+// The campaign's weather: each region's squalls come and go on the campaign's clock (the same after a load, the same
+// for the whole region). 0 = fair, up to the worst it gets there: the Frozen North's blizzards, the Tropics' squalls.
+static float RegionSquall(int b, float clock) {
+    static const float kPeriod[campaign::BIOMES] = {1100.0f, 860.0f, 760.0f, 940.0f, 1250.0f};
+    static const float kPhase[campaign::BIOMES] = {4.4f, 2.1f, 3.6f, 1.2f, 5.3f};  // (the Isles fair when a campaign begins)
+    static const float kOften[campaign::BIOMES] = {0.7f, 0.62f, 0.56f, 0.64f, 0.66f};  // (lower: more often)
+    static const float kMost[campaign::BIOMES] = {0.65f, 1.0f, 1.0f, 0.8f, 0.5f};
+    const float t = clock / kPeriod[b] * 2.0f * PI + kPhase[b];
+    const float v = 0.5f + 0.32f * sinf(t) + 0.18f * sinf(t * 2.37f + 1.7f);
+    const float k = Clamp((v - kOften[b]) / 0.16f, 0.0f, 1.0f);
+    return kMost[b] * k * k * (3.0f - 2.0f * k);
+}
+
+// The campaign's sky: the day turning on the campaign's clock. Dawn, a long day, dusk, a short night; the sun climbing
+// out of the east and going down in the west, the moon up at night.
+static Atmos CampaignSky(float phase, Vector2 windDir) {
+    const Atmos noon = MakeAtmos(TOD_NOON, WEATHER_CLEAR, windDir), dusk = MakeAtmos(TOD_SUNSET, WEATHER_CLEAR, windDir),
+                night = MakeAtmos(TOD_NIGHT, WEATHER_CLEAR, windDir);
+    const float p = phase;
+    auto ease = [](float x) { x = Clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); };
+    Atmos a = noon;
+    if (p < 0.06f) a = LerpAtmos(dusk, noon, ease(p / 0.06f));                  // dawn into the day
+    else if (p < 0.56f) a = noon;
+    else if (p < 0.64f) a = LerpAtmos(noon, dusk, ease((p - 0.56f) / 0.08f));  // the afternoon going gold
+    else if (p < 0.72f) a = LerpAtmos(dusk, night, ease((p - 0.64f) / 0.08f)); // dusk
+    else if (p < 0.92f) a = night;
+    else a = LerpAtmos(night, dusk, ease((p - 0.92f) / 0.08f));                // first light
+    // the sun's arc: up a little before 0, down a little after 0.70 (stepped by a second of the day: the islands'
+    // shadows are redrawn whenever it moves)
+    const float ps = floorf(p * 600.0f) / 600.0f;
+    float u = (ps < 0.5f ? ps + 0.04f : ps - 0.96f) / 0.74f;
+    u = Clamp(u, 0.0f, 1.0f);
+    const float az = atan2f(windDir.y, windDir.x) + 2.4f + (u - 0.5f) * 2.6f, elev = fmaxf(0.04f, sinf(u * PI) * 1.05f);
+    const Vector3 sun = Vector3Normalize({cosf(az) * cosf(elev), sinf(elev), sinf(az) * cosf(elev)});
+    const Vector3 moon = night.sunDir;
+    a.sunDir = Vector3Normalize(Vector3Lerp(sun, moon, Clamp(a.night, 0.0f, 1.0f)));
+    return a;
+}
+
 void Game::UpdateAtmosphere(float dt, bool menu) {
     int tod = menu ? todSel : curTod, w = menu ? weatherSel : curWeather;
     Atmos a = MakeAtmos(tod, w, pred.oceanParams.windDir);
+    if (!menu && campaign) a = CampaignSky(CampDayPhase(), pred.oceanParams.windDir);  // (the campaign: its own day; boss lairs too)
     if (!menu && curMode == MODE_CAMPAIGN && pred.arena == ARENA_WORLD) {  // the campaign: the region round us, blended across its borders
         float want[campaign::BIOMES] = {};
         const float rr = 650.0f;
@@ -4188,8 +4241,46 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
         a.snow = m.snow;
         a.ash = m.ash;
         a.lanterns = fmaxf(a.lanterns, Clamp((m.fog - 1.5f) * 0.18f, 0.0f, 0.7f));  // (in the fog the lanterns matter)
+        // and the weather blowing through: rain in the Isles and the Tropics (thunder in the Tropics' squalls), blizzards
+        // in the north, ash storms in the Ember Reach, a thin drizzle in the fog
+        static const float kRain[campaign::BIOMES] = {0.85f, 1.0f, 0.0f, 0.0f, 0.5f};
+        float g = 0.0f, rain = 0.0f, snow = 0.0f, ash = 0.0f, best = 0.0f, fogUp = 0.0f;
+        Vector3 tint = {0, 0, 0};
+        static const Vector3 kTint[campaign::BIOMES] = {{0.95f, 1.0f, 1.08f}, {0.9f, 1.0f, 1.05f}, {1.1f, 1.12f, 1.18f}, {1.15f, 0.8f, 0.6f}, {0.85f, 0.95f, 0.92f}};
+        for (int b = 0; b < campaign::BIOMES; ++b) {
+            const float s = RegionSquall(b, campClock) * regionW[b];
+            g += s;
+            rain += s * kRain[b];
+            if (b == campaign::FROZEN) snow += s * 1.1f, fogUp += s * 2.2f;  // (a white-out)
+            if (b == campaign::EMBER) ash += s * 1.0f, fogUp += s * 1.6f;
+            fogUp += s * 0.8f;
+            tint = Vector3Add(tint, Vector3Scale(kTint[b], s));
+            if (s > best) { best = s; campSquallKind = b; }
+        }
+        campSquall += (g - campSquall) * fminf(1.0f, dt * 0.5f);
+        if (g > 0.001f) {
+            tint = Vector3Scale(tint, 1.0f / g);
+            const float k = Clamp(g, 0.0f, 1.0f);
+            auto grey = [&](Vector3 c, float dim) {  // (greyed and darkened towards the storm's own colour, by day or night)
+                const float l = (c.x + c.y + c.z) / 3.0f * dim;
+                return Vector3Lerp(c, Vector3Multiply({l, l, l}, tint), 0.8f);
+            };
+            a.cloud = Lerp(a.cloud, 0.95f, k);
+            a.fogColor = Vector3Lerp(a.fogColor, grey(a.fogColor, 0.8f), k);
+            a.horizon = Vector3Lerp(a.horizon, grey(a.horizon, 0.7f), k);
+            a.zenith = Vector3Lerp(a.zenith, grey(a.zenith, 0.45f), k);
+            a.fogDensity *= 1.0f + fogUp;
+            a.haze = Lerp(a.haze, 0.65f, k);
+            a.sunColor = Vector3Scale(a.sunColor, 1.0f - 0.68f * k);
+            a.ambient = Vector3Scale(a.ambient, 1.0f - 0.35f * k);
+            a.smokeSun = Vector3Scale(a.smokeSun, 1.0f - 0.55f * k);
+            a.rain = fmaxf(a.rain, rain);
+            a.snow += snow;
+            a.ash += ash;
+            a.lanterns = fmaxf(a.lanterns, 0.65f * k);
+        }
     }
-    if (a.rain > 0.0f) {
+    if (a.rain > 0.6f) {
         lightningTimer -= dt;
         if (lightningTimer <= 0.0f) {
             lightning = 1.0f;
@@ -4248,18 +4339,19 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
 void Game::DrawFlakes(const Camera3D& cam, float dt) {
     const float B = 40.0f, top = 30.0f, bottom = -10.0f;
     if (flakes.empty())
-        for (int i = 0; i < 1400; ++i) flakes.push_back({Rnd(-B, B), Rnd(bottom, top), Rnd(-B, B)});
+        for (int i = 0; i < 2800; ++i) flakes.push_back({Rnd(-B, B), Rnd(bottom, top), Rnd(-B, B)});
     const float waterAtCam = Ocean().Height(cam.position.x, cam.position.z);
     if (cam.position.y < waterAtCam) return;
     const Atmos& a = renderer.atm;
     const float amount = fmaxf(a.snow, a.ash);
     const bool snow = a.snow >= a.ash;
-    const int n = (int)(flakes.size() * Clamp(amount, 0.0f, 1.0f));
+    const int n = (int)(flakes.size() * 0.5f * Clamp(amount, 0.0f, 2.0f));
+    const float gust = 1.0f + 3.0f * Clamp(amount - 0.8f, 0.0f, 1.0f);  // (a blizzard: driven sideways)
     const float lum = Clamp(Vector3Length(a.ambient) * 0.8f, 0.15f, 1.0f);
     const Color c = snow ? Color{(unsigned char)(235 * lum), (unsigned char)(240 * lum), (unsigned char)(250 * lum), 200}
                          : Color{(unsigned char)(110 * lum), (unsigned char)(100 * lum), (unsigned char)(95 * lum), 190};
     const float t = (float)GetTime();
-    const Vector3 v = {wind.x * (snow ? 1.2f : 1.8f), snow ? -2.2f : -1.4f, wind.z * (snow ? 1.2f : 1.8f)};
+    const Vector3 v = {wind.x * (snow ? 1.2f : 1.8f) * gust, snow ? -2.2f : -1.4f, wind.z * (snow ? 1.2f : 1.8f) * gust};
     rlDrawRenderBatchActive();
     for (int i = 0; i < n; ++i) {
         Vector3& f = flakes[i];
@@ -4283,7 +4375,9 @@ void Game::DrawRain(const Camera3D& cam, float dt) {
     Vector3 v = {wind.x * 3.0f, -32.0f, wind.z * 3.0f};
     float lum = Clamp(Vector3Length(renderer.atm.ambient) * 0.9f + renderer.atm.lightning, 0.12f, 1.0f);
     Color c = {(unsigned char)(200 * lum), (unsigned char)(210 * lum), (unsigned char)(225 * lum), 80};
-    for (Vector3& r : rain) {
+    const int heavy = (int)(rain.size() * Clamp(renderer.atm.rain, 0.0f, 1.0f));
+    for (int i = 0; i < heavy; ++i) {
+        Vector3& r = rain[i];
         r = Vector3Add(r, Vector3Scale(v, dt));
         if (r.y < bottom) r.y += top - bottom;
         if (r.x < -B) r.x += 2 * B;
@@ -4496,6 +4590,55 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
         }
         if (!shadow)
             for (const NetBall& b : viewBalls) shipModel.DrawBall(renderer, b.pos);
+        if (campaign && pred.arena == ARENA_WORLD && regionW[campaign::FOG] > 0.05f) {  // the Fog Banks' wrecks on the beaches (the nearest few)
+            if (fogWrecksFor != pred.rocks.size()) BuildFogWrecks();
+            int drawn = 0;
+            for (const BeachWreck& wk : fogWrecks) {
+                if (drawn >= 4) break;
+                if (shadow ? !inShadowBox(wk.pos) : Vector2Distance({wk.pos.x, wk.pos.z}, {rv.pos.x, rv.pos.z}) > 2200.0f) continue;
+                if (!shadow && Vector3DotProduct(Vector3Subtract(wk.pos, rv.pos), look) < -80.0f) continue;
+                const float sc = ClassOf(wk.cls).scale;
+                wreckDamage = 0.5f;  // (under the embers' threshold)
+                DrawShip(wk.cls, -1, ShipModelMatrix(wk.pos, wk.rot, sc), nullptr, 0.0f, {70, 72, 70, 255}, 0.0f, 0.0f, false, wk.pos, wk.rot, wk.seed, sc);
+                wreckDamage = -1.0f;
+                ++drawn;
+            }
+        }
+    }
+}
+
+// The Fog Banks' wrecks: about every other island of theirs has an old ship run up on its beach, bow on, heeled over,
+// rotting (the same ones for everyone: from the islands themselves)
+void Game::BuildFogWrecks() {
+    fogWrecks.clear();
+    fogWrecksFor = pred.rocks.size();
+    for (const Rock& k : pred.rocks) {
+        if (k.biome != campaign::FOG || k.stack || k.r < 70.0f) continue;
+        uint32_t h = k.seed * 2654435761u + 0x9E37u;
+        if ((h >> 28) < 7) continue;  // (about half)
+        const float ang = (h & 1023) / 1023.0f * 2.0f * PI;
+        const Vector2 dir = {cosf(ang), sinf(ang)};
+        // walk out from the middle to where the beach runs into the shallows
+        float d = k.r * 0.4f, H = 0.0f;
+        bool found = false;
+        for (; d < k.r * 1.8f; d += 3.0f) {
+            H = RocksHeight(pred.rocks, k.x + dir.x * d, k.z + dir.y * d);
+            if (H < -1.2f) { found = true; break; }
+        }
+        if (!found) continue;
+        const Vector3 p = {k.x + dir.x * d, 0.0f, k.z + dir.y * d};
+        bool nearPort = false;
+        for (const Harbour& hb : pred.harbours) nearPort |= Vector2Distance({hb.x, hb.z}, {p.x, p.z}) < 700.0f;
+        if (nearPort) continue;
+        BeachWreck w;
+        w.cls = (h >> 12) % 3 == 0 ? SC_CUTTER : (h >> 12) % 3 == 1 ? SC_GUNBOAT : SC_FRIGATE;
+        w.seed = (h >> 8 & 255) / 255.0f * 10.0f;
+        const float yaw = atan2f(-dir.x, -dir.y);  // (bow towards the island)
+        const float roll = ((h >> 20) & 1 ? 1.0f : -1.0f) * (0.28f + ((h >> 21) & 7) / 7.0f * 0.12f), pitch = -0.1f;
+        w.yaw = yaw;
+        w.rot = QuaternionMultiply(QuaternionFromAxisAngle({0, 1, 0}, yaw), QuaternionMultiply(QuaternionFromAxisAngle({1, 0, 0}, pitch), QuaternionFromAxisAngle({0, 0, 1}, roll)));
+        w.pos = {p.x, -1.6f * ClassOf(w.cls).scale, p.z};
+        fogWrecks.push_back(w);
     }
 }
 
@@ -4588,27 +4731,47 @@ void Game::RenderWorld(float dt, bool menu) {
             int floesDrawn = 0;
             // the Frozen North: ice floes on the water round us (where the sea is the north's, and open)
             if (regionW[campaign::FROZEN] > 0.05f) {
-                const float cell = 170.0f;
+                const float cell = campaign::floeCell;
                 const int ci = (int)floorf(rv.pos.x / cell), cj = (int)floorf(rv.pos.z / cell);
+                campaign::Floe f;
                 for (int j = cj - 8; j <= cj + 8; ++j)
                     for (int i = ci - 8; i <= ci + 8; ++i) {
-                        uint32_t hh = (uint32_t)(i * 73856093) ^ (uint32_t)(j * 19349663);
-                        hh = hh * 1664525u + 1013904223u;
-                        if ((hh >> 24) > 70) continue;  // (about a cell in four)
-                        const float fx0 = (i + ((hh >> 8) & 255) / 255.0f) * cell, fz0 = (j + ((hh >> 16) & 255) / 255.0f) * cell;
-                        if (campaign::BiomeAt(fx0, fz0) != campaign::FROZEN || RocksHeight(pred.rocks, fx0, fz0) > -6.0f) continue;
-                        const float drift = (float)GetTime() * 0.4f;  // (they drift with the wind)
-                        const Vector3 p = {fx0 + wind.x * drift * 0.3f, 0.0f, fz0 + wind.z * drift * 0.3f};
-                        if (Vector2Distance({p.x, p.z}, {rv.pos.x, rv.pos.z}) > 1400.0f) continue;
-                        scenery.DrawFloe(renderer, Ocean(), p, (hh & 255) / 255.0f * 6.28f, 1.0f + ((hh >> 4) & 15) / 15.0f * 1.4f);
+                        if (!campaign::FloeAt(pred.rocks, i, j, f) || Vector2Distance({f.x, f.z}, {rv.pos.x, rv.pos.z}) > 1400.0f) continue;
+                        scenery.DrawFloe(renderer, Ocean(), {f.x, 0.0f, f.z}, f.yaw, f.size);
                         ++floesDrawn;
                     }
+            }
+            // the Fog Banks: the pale lights that wander round the old wrecks on the beaches, coming and going (seen
+            // best at night and in the fog)
+            if (regionW[campaign::FOG] > 0.05f) {
+                if (fogWrecksFor != pred.rocks.size()) BuildFogWrecks();
+                for (const BeachWreck& wk : fogWrecks) {
+                    const float d0 = Vector2Distance({wk.pos.x, wk.pos.z}, {rv.pos.x, rv.pos.z});
+                    if (d0 > 4000.0f) continue;
+                    for (int g = 0; g < 3; ++g) {
+                        const float s = wk.seed + g * 2.3f;
+                        const float on = Clamp(sinf(ft * 0.19f + s * 1.7f) * 1.6f + 0.2f, 0.0f, 1.0f);  // (now there, now gone)
+                        if (on <= 0.01f) continue;
+                        const float ang = ft * (0.05f + 0.02f * g) * (g & 1 ? -1.0f : 1.0f) + s, rad = 35.0f + 25.0f * sinf(ft * 0.11f + s);
+                        Vector3 L = {wk.pos.x + cosf(ang) * rad, 0.0f, wk.pos.z + sinf(ang) * rad};
+                        L.y = fmaxf(Ocean().Height(L.x, L.z), RocksHeight(pred.rocks, L.x, L.z)) + 2.5f + 1.2f * sinf(ft * 0.6f + s);
+                        const float d = Vector3Distance(rv.pos, L);
+                        const float fl = on * (0.75f + 0.25f * sinf(ft * 2.1f + s * 3.0f)) * (0.35f + 0.65f * lanternBoost);
+                        fx.Lantern(L, (12.0f + d * 0.012f) * (0.7f + 0.3f * fl), Fade({110, 255, 190, 255}, 0.6f * fl));
+                        fx.Lantern(L, 2.2f + d * 0.004f, Fade({225, 255, 240, 255}, fminf(1.0f, 1.2f * fl)));
+                    }
+                }
             }
             static double lookLogAt = 0.0;
             if (getenv("BS_LOOKLOG") && GetTime() - lookLogAt > 3.0) {
                 lookLogAt = GetTime();
                 printf("[look] cones lit %d, floes %d, snow %.2f ash %.2f, regions %.2f %.2f %.2f %.2f %.2f\n", lit, floesDrawn, renderer.atm.snow, renderer.atm.ash,
                        regionW[0], regionW[1], regionW[2], regionW[3], regionW[4]);
+                const BeachWreck* nw = nullptr;
+                for (const BeachWreck& wk : fogWrecks)
+                    if (!nw || Vector2Distance({wk.pos.x, wk.pos.z}, {rv.pos.x, rv.pos.z}) < Vector2Distance({nw->pos.x, nw->pos.z}, {rv.pos.x, rv.pos.z})) nw = &wk;
+                printf("[look] day %.3f, squall %.2f (%d), rain %.2f, wrecks %d%s\n", CampDayPhase(), campSquall, campSquallKind, renderer.atm.rain, (int)fogWrecks.size(),
+                       nw ? TextFormat(", the nearest at (%.0f, %.0f), seen from (%.0f,%.0f) heading %.2f", nw->pos.x, nw->pos.z, nw->pos.x - sinf(nw->yaw) * 230.0f, nw->pos.z - cosf(nw->yaw) * 230.0f, nw->yaw) : "");
                 fflush(stdout);
             }
         }
@@ -8370,7 +8533,11 @@ void Game::DrawCampaignHud(float W, float H) {
     }
     // the purse, the region, the day
     const int day = (int)(campClock / campaign::dayLength) + 1;
-    const std::string line = TextFormat("%s GOLD   \xC2\xB7   %s   \xC2\xB7   DAY %d", Thousands(campGold).c_str(), TextToUpper(campaign::kBiomeNames[b]), day);
+    const float ph = CampDayPhase();
+    const char* when = ph < 0.06f || ph >= 0.92f ? "DAWN" : ph < 0.3f ? "MORNING" : ph < 0.56f ? "AFTERNOON" : ph < 0.7f ? "DUSK" : "NIGHT";
+    static const char* const kSquall[campaign::BIOMES] = {"RAIN", "SQUALL", "BLIZZARD", "ASH STORM", "DRIZZLE"};
+    const std::string wx = campSquall > 0.3f ? TextFormat(", %s", kSquall[campSquallKind]) : "";
+    const std::string line = TextFormat("%s GOLD   \xC2\xB7   %s   \xC2\xB7   DAY %d, %s%s", Thousands(campGold).c_str(), TextToUpper(campaign::kBiomeNames[b]), day, when, wx.c_str());
     const Vector2 m = Measure(line.c_str(), 16, true);
     Rectangle r = {W * 0.5f - m.x * 0.5f - 18, 6, m.x + 36, 28};
     Panel(r, A(kPanel, 0.9f), 8);

@@ -1508,7 +1508,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campDocked = -1;
     campLastPort = (int8_t)campaign::homePort;
     campSeen = (uint16_t)(1u << campaign::homePort);
-    campClock = 0.0f;
+    campClock = getenv("BS_CAMPCLOCK") ? (float)atof(getenv("BS_CAMPCLOCK")) : 0.0f;  // (screenshots: a time of day, a squall)
     campSpawn = 75.0f;
     campWantFast = campFast = false;
     campSunk = 0;
@@ -2740,6 +2740,88 @@ void World::RockCollide(Ship& s, bool authoritative) {
     }
 }
 
+namespace campaign {
+bool FloeAt(const std::vector<Rock>& rocks, int i, int j, Floe& f) {
+    uint32_t hh = (uint32_t)(i * 73856093) ^ (uint32_t)(j * 19349663);
+    hh = hh * 1664525u + 1013904223u;
+    if ((hh >> 24) > 70) return false;  // (about a cell in four)
+    f.x = (i + ((hh >> 8) & 255) / 255.0f) * floeCell;
+    f.z = (j + ((hh >> 16) & 255) / 255.0f) * floeCell;
+    if (fmaxf(fabsf(f.x), fabsf(f.z)) > edge - 200.0f || BiomeAt(f.x, f.z) != FROZEN) return false;
+    f.size = 1.0f + ((hh >> 4) & 15) / 15.0f * 1.4f;
+    if (RocksHeight(rocks, f.x, f.z) > -6.0f - FloeRadius(f.size) * 0.3f) return false;  // (not on a shore)
+    f.yaw = (hh & 255) / 255.0f * 6.28f;
+    return true;
+}
+
+bool FloeNear(const std::vector<Rock>& rocks, float x, float z, float pad) {
+    const int ci = (int)floorf(x / floeCell), cj = (int)floorf(z / floeCell);
+    Floe f;
+    for (int j = cj - 1; j <= cj + 1; ++j)
+        for (int i = ci - 1; i <= ci + 1; ++i)
+            if (FloeAt(rocks, i, j, f) && Vector2Distance({x, z}, {f.x, f.z}) < FloeRadius(f.size) + pad) return true;
+    return false;
+}
+}  // namespace campaign
+
+// The Frozen North's floes: each is a round raft of ice, a few metres deep. A hull point inside one is pushed out
+// sideways; a hard knock stoves her planks in like a rock does, a gentle one just turns her off.
+void World::FloeCollide(Ship& s, bool authoritative) {
+    if (mode != MODE_CAMPAIGN || arena != ARENA_WORLD || !s.active) return;
+    if (campaign::BiomeAt(s.pos.x, s.pos.z) != campaign::FROZEN && campaign::BiomeAt(s.pos.x + 200.0f, s.pos.z) != campaign::FROZEN &&
+        campaign::BiomeAt(s.pos.x - 200.0f, s.pos.z) != campaign::FROZEN && campaign::BiomeAt(s.pos.x, s.pos.z + 200.0f) != campaign::FROZEN &&
+        campaign::BiomeAt(s.pos.x, s.pos.z - 200.0f) != campaign::FROZEN)
+        return;
+    const ShipPhys& P = Phys(s.cls);
+    const float S = ClassOf(s.cls).scale;
+    const int ci = (int)floorf(s.pos.x / campaign::floeCell), cj = (int)floorf(s.pos.z / campaign::floeCell);
+    campaign::Floe near[9];
+    int nn = 0;
+    for (int j = cj - 1; j <= cj + 1; ++j)
+        for (int i = ci - 1; i <= ci + 1; ++i) {
+            campaign::Floe f;
+            if (campaign::FloeAt(rocks, i, j, f) && Vector2Distance({s.pos.x, s.pos.z}, {f.x, f.z}) < campaign::FloeRadius(f.size) + 30.0f * S) near[nn++] = f;
+        }
+    if (!nn) return;
+    static const Vector3 pts[] = {{0, -1.0f, 16.5f}, {0, -1.0f, -15.5f}, {3.6f, -0.8f, -9}, {-3.6f, -0.8f, -9}, {4.3f, -0.8f, 1},
+                                  {-4.3f, -0.8f, 1}, {2.8f, -0.8f, 10},  {-2.8f, -0.8f, 10}};
+    float worst = 0.0f;
+    Vector3 worstAt{};
+    for (int k = 0; k < nn; ++k) {
+        const campaign::Floe& f = near[k];
+        const float R = campaign::FloeRadius(f.size);
+        const float top = ocean.Height(f.x, f.z) + 1.75f * f.size + 0.5f;  // (it rides the swell: the sea where it is, not where she is)
+        for (const Vector3& hp : pts) {
+            const Vector3 w = HullToWorld(s.pos, s.rot, hp, S);
+            const float dx = w.x - f.x, dz = w.z - f.z, d = sqrtf(dx * dx + dz * dz);
+            if (d >= R || d < 0.01f) continue;
+            if (w.y > top) continue;  // (over the top of it, on a crest)
+            const Vector3 n = {dx / d, 0.0f, dz / d};
+            const float pen = fminf(R - d, 2.0f);
+            s.pos = Vector3Add(s.pos, Vector3Scale(n, pen * 0.5f));
+            const Vector3 r = Vector3Subtract(w, s.pos);
+            const Vector3 pv = Vector3Add(s.vel, Vector3CrossProduct(s.angVel, r));
+            const float vn = Vector3DotProduct(pv, n);
+            if (vn < 0.0f) {
+                const Vector3 vt = Vector3Subtract(pv, Vector3Scale(n, vn));
+                ApplyImpulse(s, Vector3Scale(n, -1.1f * vn * P.mass * 0.45f), w);
+                ApplyImpulse(s, Vector3Scale(vt, -0.03f * P.mass), w);  // (ice is slippery: less scraping than rock)
+                if (-vn > worst) { worst = -vn; worstAt = w; }
+            }
+        }
+    }
+    if (authoritative && worst > 6.0f && s.alive) {
+        const float dmg = fminf((worst - 6.0f) * tune::rockDamage * 0.6f, s.maxHp * 0.12f);  // (fast-sail into one hurts, but doesn't sink her)
+        GameEvent ev{EventType::Ram};
+        ev.a = ev.b = s.id;
+        ev.flags = EF_ROCK;
+        ev.pos = worstAt;
+        ev.value = dmg;
+        events.push_back(ev);
+        Damage(s, dmg, -1);
+    }
+}
+
 void World::PlaceCrate(Crate& c) {
     for (int tries = 0; tries < 40; ++tries) {
         // Most crates float in the middle, between where the ships spawn (220-420 m out): racing for them brings
@@ -3715,6 +3797,8 @@ void World::BotThink(Ship& s, float dt) {
     Vector3 probe = Vector3Add(s.pos, Vector3Scale(fwd, harbourRun && goalDist < 200.0f ? 35.0f : 90.0f));  // shorter look near the harbour
     Vector3 close = Vector3Add(s.pos, Vector3Scale(fwd, 40.0f));
     bool rockAhead = RocksHeight(rocks, probe.x, probe.z) > -6.0f || RocksHeight(rocks, close.x, close.z) > -6.0f;
+    if (!rockAhead && mode == MODE_CAMPAIGN && arena == ARENA_WORLD)  // (the north's floes: steer round them like rocks)
+        rockAhead = campaign::FloeNear(rocks, probe.x, probe.z, 14.0f) || campaign::FloeNear(rocks, close.x, close.z, 14.0f);
     if (BigSea() && !rockAhead && !(harbourRun && goalDist < 200.0f)) {
         // the voyage's islands come up fast at full speed: look further ahead the faster we go (and along the way we're
         // actually moving, which a broadside turn swings away from the bow)
@@ -4555,6 +4639,7 @@ void World::PredictStep(Ship& s) {
     ShipControls(s, dt, false);
     for (int i = 0; i < 2; ++i) StepShip(s, dt / 2);
     RockCollide(s, false);
+    FloeCollide(s, false);
     UpdateAirTime(s, dt, false);
     if (s.hooked >= 0) {  // the line reels in and gives out like on the server
         s.hookTimer -= dt;
@@ -4582,6 +4667,7 @@ void World::Step() {
         const int sub = 2;
         for (int i = 0; i < sub; ++i) StepShip(s, dt / sub);
         RockCollide(s, true);
+        FloeCollide(s, true);
         UpdateAirTime(s, dt, true);
         if (!s.alive) {
             s.deadTimer -= dt;
