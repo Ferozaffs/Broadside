@@ -941,4 +941,13 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   the wind and sea sounds get up. A campaign is hosted at noon in clear weather now (the menu's choice was carried
   over). Lightning needs rain over 0.6 (the normal storm is 1). Test: BS_FLOETEST; BS_CAMPCLOCK sets the clock for
   screenshots.
+- [x] The campaign's people (2026-11-19): every port's harbourmaster, tavern keeper and shipwright has a name, a
+  portrait and their own lines (src/people.h: three greetings, one a day, and a line for her state - a battered hull,
+  an empty board, an empty purse); the port screen puts them on the left, the panel on the right, the line typed out.
+  At sea: a merchantman under attack cries for help and thanks you after, the dread pirates taunt, a struck pirate
+  begs quarter, castaways and captives speak as they come aboard, passing traders and the navy hail (now and then,
+  never near an enemy). Portraits: data/portraits/<id>.png, rendered on ZWUUUP (Flux + the Amadmir LoRA, cast.json in
+  its PirateGame-ArtPipeline), picked in tools/portrait_picks.json, brought in by tools/import_portraits.py (trimmed,
+  820 px, 256 colours: ~90 KB each). BS_SAY=<id> shows a line at sea for screenshots.
+  The campaign's nights are moonlit now (the match modes' night lifted) and shorter (0.72-0.88 of the day).
 - [ ] Balance: the bot captain loses to two Ember Reach bands; pirates' hull / numbers by region.

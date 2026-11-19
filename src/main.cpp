@@ -20,6 +20,9 @@
 #include "scenery.h"
 #include "monsters.h"
 #include "sim.h"
+#include "people.h"
+#include <map>
+#include <set>
 
 #include <cstdio>
 #include <cstdlib>
@@ -406,6 +409,20 @@ public:
     uint8_t campChainC[campaign::BIOMES] = {};
     int16_t campPrizeC = -1;
     int portTab = 0;                 // the port screen: harbour, tavern, shipwright
+    // the campaign's people: their portraits (data/portraits/<id>.png, loaded when first wanted) and who's talking
+    std::map<std::string, Texture2D> portraits;
+    const Texture2D* Portrait(const std::string& id);
+    int talkKey = -1;                // the port screen: the port and shop of whoever's talking (a new one: the line's typed out again)
+    double talkAt = 0.0;
+    struct SeaSay { std::string id, name, title, line; double at = -100.0; };
+    SeaSay seaSay;                   // someone at sea saying something (a few seconds)
+    double hailAt = -1000.0;         // the last hail from a passing trader or the navy
+    std::set<int> hailed;            // (ships that have hailed us already)
+    void Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line);
+    void DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
+                  float age, float alpha);
+    void DrawSeaSay(float W, float H);
+    void UpdateHails();
     float CampRating() const {       // how strong her ship and fleet are, on the zones' scale (1-10): for the HUD only, nothing adapts to it
         float p = 0.0f;
         for (uint8_t u : campUpgC) p += u;
@@ -3226,15 +3243,20 @@ void Game::PlayEvent(const GameEvent& e) {
                     Feed3("WRECKAGE", TextFormat("  %s: sea-chests in the water", BearingFrom(e.pos).c_str()), "", Scenery::PowerColor(PU_COUNT), ui::kText);
                     sfx::PlayFlat(sfx::Chime, 0.5f, 1.2f);
                     break;
-                case EV_DISTRESS:
+                case EV_DISTRESS: {
+                    const people::SeaVoice& v = people::kSea[people::ST_DISTRESS];
+                    Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]);
+                }
                     seaDistress = e.a;
                     Feed3("A MERCHANTMAN", TextFormat("  under attack, %s", BearingFrom(e.pos).c_str()), "", ui::kGold, ui::kText);
                     Notice("A MERCHANTMAN UNDER ATTACK", ui::kGold, 3.0f);
                     sfx::PlayFlat(sfx::Chime, 0.7f, 0.6f);
                     break;
-                case EV_SAVED: Feed3("SAVED", "  the merchantman sends her thanks", gold, ui::kGreen, ui::kGold); seaDistress = -1; sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
+                case EV_SAVED: { const people::SeaVoice& v = people::kSea[people::ST_SAVED]; Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]); }
+                    Feed3("SAVED", "  the merchantman sends her thanks", gold, ui::kGreen, ui::kGold); seaDistress = -1; sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
                 case EV_LOST: Feed3("LOST", "  the merchantman went down", "", ui::kRed, ui::kText); seaDistress = -1; break;
                 case EV_DREAD:
+                    Say(people::kDread[e.flags % BIOMES].id, DreadName(e.flags), TextFormat("Dread pirate of %s", kBiomeNames[e.flags % BIOMES]), people::kDread[e.flags % BIOMES].line);
                     Notice(TextFormat("THE DREAD PIRATE %s", TextToUpper(DreadName(e.flags))), ui::kRed, 4.5f);
                     Feed3(DreadName(e.flags), "  hunts these waters, and she's found you", "", ui::kRed, ui::kText);
                     sfx::PlayFlat(sfx::Thunder, 0.6f, 0.7f);
@@ -3244,6 +3266,10 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_MAP: Feed3("A CHART", "  in the sea-chest: a treasure to dig up", "", ui::kGold, ui::kText); break;
                 case EV_MONSTERSLAIN: Feed3("SLAIN", "  the sea gives up its reward", gold, ui::kGreen, ui::kGold); break;
                 case EV_STRUCK:
+                    if (myId >= 0 && myId < NumShips() && Vector3Distance(e.pos, view[myId].s.pos) < 1500.0f) {
+                        const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
+                        Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]);
+                    }
                     Feed3(NameOf(e.a), "  has struck her colours: come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
                     break;
@@ -3268,13 +3294,20 @@ void Game::PlayEvent(const GameEvent& e) {
                 Feed3("THE STORY GOES ON", "  " + t, "", ui::kGold, ui::kText);
                 sfx::PlayFlat(sfx::Chime, 0.7f, 0.7f);
             } else if (e.flags == 4) {
-                if (q.type == campaign::Q_CASTAWAYS) Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
-                else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
+                if (q.type == campaign::Q_CASTAWAYS) {
+                    Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
+                    const people::SeaVoice& v = people::kSea[people::ST_CASTAWAY];
+                    Say(v.id, v.name, v.title, v.lines[GetRandomValue(0, 2)]);
+                } else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
+                    const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
+                    Say(v.id, campaign::PirateName(q.seed), v.title, v.lines[GetRandomValue(0, 2)]);
                     Feed3(campaign::PirateName(q.seed), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
                 } else if (q.type == campaign::Q_CAPTIVE) {
                     std::string c = CaptiveOf(q);
+                    const people::SeaVoice& v = people::kSea[people::CaptiveIsWoman(c) ? people::ST_CAPTIVE_F : people::ST_CAPTIVE_M];
                     c[0] = (char)toupper(c[0]);
+                    Say(v.id, c, v.title, v.lines[GetRandomValue(0, 2)]);
                     Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
                 }
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
@@ -4165,8 +4198,15 @@ static float RegionSquall(int b, float clock) {
 // The campaign's sky: the day turning on the campaign's clock. Dawn, a long day, dusk, a short night; the sun climbing
 // out of the east and going down in the west, the moon up at night.
 static Atmos CampaignSky(float phase, Vector2 windDir) {
-    const Atmos noon = MakeAtmos(TOD_NOON, WEATHER_CLEAR, windDir), dusk = MakeAtmos(TOD_SUNSET, WEATHER_CLEAR, windDir),
-                night = MakeAtmos(TOD_NIGHT, WEATHER_CLEAR, windDir);
+    const Atmos noon = MakeAtmos(TOD_NOON, WEATHER_CLEAR, windDir), dusk = MakeAtmos(TOD_SUNSET, WEATHER_CLEAR, windDir);
+    Atmos night = MakeAtmos(TOD_NIGHT, WEATHER_CLEAR, windDir);
+    // (the campaign's nights have a moon to sail by: the match modes' pitch-black night, lifted)
+    night.sunColor = Vector3Scale(night.sunColor, 6.0f);
+    night.zenith = Vector3Scale(night.zenith, 4.0f);
+    night.horizon = Vector3Scale(night.horizon, 4.0f);
+    night.fogColor = Vector3Scale(night.fogColor, 4.0f);
+    night.ambient = Vector3Scale(night.ambient, 3.5f);
+    night.smokeSun = Vector3Scale(night.smokeSun, 3.0f);
     const float p = phase;
     auto ease = [](float x) { x = Clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); };
     Atmos a = noon;
@@ -4174,8 +4214,9 @@ static Atmos CampaignSky(float phase, Vector2 windDir) {
     else if (p < 0.56f) a = noon;
     else if (p < 0.64f) a = LerpAtmos(noon, dusk, ease((p - 0.56f) / 0.08f));  // the afternoon going gold
     else if (p < 0.72f) a = LerpAtmos(dusk, night, ease((p - 0.64f) / 0.08f)); // dusk
-    else if (p < 0.92f) a = night;
-    else a = LerpAtmos(night, dusk, ease((p - 0.92f) / 0.08f));                // first light
+    else if (p < 0.88f) a = night;
+    else if (p < 0.96f) a = LerpAtmos(night, dusk, ease((p - 0.88f) / 0.08f)); // first light
+    else a = dusk;
     // the sun's arc: up a little before 0, down a little after 0.70 (stepped by a second of the day: the islands'
     // shadows are redrawn whenever it moves)
     const float ps = floorf(p * 600.0f) / 600.0f;
@@ -5441,6 +5482,10 @@ void Game::DrawHUD() {
         DrawCampaignHud(W, H);
         DrawQuests(W, H);
         DrawSeaLife(W, H);
+        if (!portOpen && !chartOpen) {
+            UpdateHails();
+            DrawSeaSay(W, H);
+        }
     }
     else if (matchClock > 0.0f && matchState == 0 && curMode != MODE_RACE && !PassageMode(curMode) && curMode != MODE_BOSS) {
         int secs = (int)ceilf(matchClock);
@@ -8534,7 +8579,7 @@ void Game::DrawCampaignHud(float W, float H) {
     // the purse, the region, the day
     const int day = (int)(campClock / campaign::dayLength) + 1;
     const float ph = CampDayPhase();
-    const char* when = ph < 0.06f || ph >= 0.92f ? "DAWN" : ph < 0.3f ? "MORNING" : ph < 0.56f ? "AFTERNOON" : ph < 0.7f ? "DUSK" : "NIGHT";
+    const char* when = ph < 0.06f || ph >= 0.88f ? "DAWN" : ph < 0.3f ? "MORNING" : ph < 0.56f ? "AFTERNOON" : ph < 0.7f ? "DUSK" : "NIGHT";
     static const char* const kSquall[campaign::BIOMES] = {"RAIN", "SQUALL", "BLIZZARD", "ASH STORM", "DRIZZLE"};
     const std::string wx = campSquall > 0.3f ? TextFormat(", %s", kSquall[campSquallKind]) : "";
     const std::string line = TextFormat("%s GOLD   \xC2\xB7   %s   \xC2\xB7   DAY %d, %s%s", Thousands(campGold).c_str(), TextToUpper(campaign::kBiomeNames[b]), day, when, wx.c_str());
@@ -8673,6 +8718,105 @@ void Game::DrawChart(float W, float H) {
     Label(TextFormat("PORTS PUT INTO %d OF %d   \xC2\xB7   %d PIRATES SUNK   \xC2\xB7   TAB: CLOSE", seenN, kPorts, campSunk), W * 0.5f, y0 + S + 22, 12, kDim, Center);
 }
 
+const Texture2D* Game::Portrait(const std::string& id) {
+    auto it = portraits.find(id);
+    if (it == portraits.end()) {
+        Texture2D t{};
+        const std::string p = std::string(GetApplicationDirectory()) + "data/portraits/" + id + ".png";
+        if (FileExists(p.c_str())) {
+            t = LoadTexture(p.c_str());
+            if (t.id) {
+                GenTextureMipmaps(&t);
+                SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
+            }
+        }
+        it = portraits.emplace(id, t).first;
+    }
+    return it->second.id ? &it->second : nullptr;
+}
+
+// Someone talking: their portrait standing in pb (bottom-aligned, if there is one), and in front of it a box with
+// their name on a plate and their line, typed out as they say it
+void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
+                    float age, float alpha) {
+    using namespace ui;
+    if (tex)
+        DrawTexturePro(*tex, {0, 0, (float)tex->width, (float)tex->height}, pb, {0, 0}, 0.0f, Fade(WHITE, alpha));
+    const float ts = boxW < 460.0f ? 16.0f : 18.0f, lh = ts * 1.35f;
+    const std::vector<std::string> lines = Wrap(line, ts, boxW - 44.0f);
+    const float boxH = 30.0f + lh * lines.size() + 18.0f;
+    const Rectangle box = {boxX, boxBottom - boxH, boxW, boxH};
+    Panel(box, A({10, 14, 22, 236}, alpha), 10);
+    DrawRectangleRec({box.x + 14, box.y, box.width - 28, 2}, A(kGold, 0.75f * alpha));
+    const std::string up = TextToUpper(title);
+    const Vector2 nm = Measure(name, 20, true), tm = MeasureLabel(up.c_str(), 9);
+    const Rectangle np = {box.x + 18, box.y - 24, fmaxf(nm.x, tm.x) + 30, 46};
+    Panel(np, A({30, 24, 16, 252}, alpha), 8);
+    DrawRectangleRoundedLinesEx(np, 16.0f / np.height, 8, 1.5f, A(kGold, 0.6f * alpha));
+    Text(name, np.x + 15, np.y + 4, 20, A(kGold, alpha), true);
+    Label(up.c_str(), np.x + 15, np.y + 28, 9, A(kDim, alpha));
+    int left = (int)(age * 75.0f) + 1;  // (typed out)
+    float y = np.y + np.height + 8.0f;
+    for (const std::string& l : lines) {
+        if (left <= 0) break;
+        const std::string part = l.substr(0, (size_t)std::min<int>((int)l.size(), left));
+        left -= (int)l.size() + 1;
+        Text(part.c_str(), box.x + 22, y, ts, A(kText, alpha), false);
+        y += lh;
+    }
+}
+
+void Game::Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line) {
+    seaSay = {id, name, title, line, GetTime()};
+}
+
+// At sea, whoever's talking: low on the left, over the sea, for a few seconds
+void Game::DrawSeaSay(float W, float H) {
+    const float age = (float)(GetTime() - seaSay.at), life = 4.0f + seaSay.line.size() * 0.035f;
+    if (age > life || seaSay.line.empty()) return;
+    const float alpha = Clamp(age / 0.25f, 0.0f, 1.0f) * Clamp((life - age) / 0.6f, 0.0f, 1.0f);
+    const Texture2D* tex = Portrait(seaSay.id);
+    const float bottom = H * 0.8f, h = H * 0.36f;
+    Rectangle pb{};
+    float bx = 16.0f;
+    if (tex) {
+        const float w = h * tex->width / tex->height;
+        pb = {6.0f, bottom - h, w, h};
+        bx = 6.0f + w * 0.72f;
+    }
+    DrawTalk(tex, pb, bx, fminf(520.0f, W * 0.42f), bottom, seaSay.name.c_str(), seaSay.title.c_str(), seaSay.line.c_str(), age, alpha);
+}
+
+// A trader or the navy passing close hails us (one at a time, now and then, never in a fight)
+void Game::UpdateHails() {
+    static bool sayTest = getenv("BS_SAY") != nullptr;  // (screenshots: someone at sea says something, BS_SAY=<portrait id>)
+    if (sayTest && GetTime() > 3.0) {
+        sayTest = false;
+        Say(getenv("BS_SAY"), "Gentleman Corwin", "Dread pirate of The Temperate Isles", people::kDread[0].line);
+    }
+    if (GetTime() - hailAt < 120.0 || GetTime() - seaSay.at < 12.0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
+    const NetShip& me = view[myId].s;
+    if (!(me.flags & SF_ALIVE) || campDocked >= 0) return;
+    int who = -1;
+    bool navy = false;
+    for (int id = 0; id < NumShips(); ++id) {
+        if (id == myId || !view[id].present || !(view[id].s.flags & SF_ALIVE)) continue;
+        const NetShip& s = view[id].s;
+        const float d = Vector3Distance(s.pos, me.pos);
+        const bool trader = s.team == campaign::neutral, friendly = s.team == me.team;
+        if (!trader && !friendly && d < 900.0f) return;  // (an enemy about: no time for pleasantries)
+        if (d > 260.0f || hailed.count(id)) continue;
+        bool mine = false;
+        for (const Snapshot::CampFleet& f : campFleetC) mine |= f.ship == id;
+        if (trader || (friendly && !mine)) { who = id; navy = !trader; }
+    }
+    if (who < 0) return;
+    hailed.insert(who);
+    hailAt = GetTime();
+    const people::SeaVoice& v = people::kSea[navy ? people::ST_NAVY : people::ST_HAIL];
+    Say(v.id, navy ? v.name : NameOf(who), navy ? NameOf(who) : v.title, v.lines[GetRandomValue(0, 2)]);
+}
+
 void Game::DrawPort(float W, float H) {
     using namespace ui;
     using namespace campaign;
@@ -8680,7 +8824,28 @@ void Game::DrawPort(float W, float H) {
     const NetShip& me = view[myId].s;
     DrawRectangle(0, 0, (int)W, (int)H, {4, 8, 14, 150});
     const float pw = 760, ph = fminf(H - 50.0f, 680.0f);
-    Rectangle r = {W * 0.5f - pw * 0.5f, H * 0.5f - ph * 0.5f, pw, ph};
+    // the panel sits to the right: on the left, whoever keeps this shop (their portrait, and what they have to say)
+    Rectangle r = {W - pw - fmaxf(24.0f, (W - pw) * 0.1f), H * 0.5f - ph * 0.5f, pw, ph};
+    {
+        const people::Person& who = people::kPort[campDocked % kPorts][portTab % people::SHOPS];
+        const int key = campDocked * people::SHOPS + portTab;
+        if (key != talkKey) { talkKey = key; talkAt = GetTime(); }
+        bool sore = me.maxHp > 0.0f && me.hp < me.maxHp * 0.6f;
+        for (const Snapshot::CampFleet& f : campFleetC) sore |= f.hull < 0.6f;
+        const bool special = portTab == 0 ? sore : portTab == 1 ? campOffers.empty() : campGold < 150;
+        const int day = (int)(campClock / dayLength);
+        const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 3];
+        const Texture2D* tex = Portrait(who.id);
+        const float room = r.x - 12.0f;  // (left of the panel)
+        DrawRectangleGradientH(0, 0, (int)(room + 12.0f), (int)H, {2, 4, 8, 190}, {2, 4, 8, 40});  // (the HUD behind them, dimmed)
+        Rectangle pb{};
+        if (tex) {
+            const float aspect = (float)tex->width / tex->height, h = fminf(H * 0.94f, room / aspect);
+            pb = {fmaxf(0.0f, (room - h * aspect) * 0.5f), H - h, h * aspect, h};
+        }
+        const float bx = 16.0f, bw = fminf(room - 16.0f, 600.0f);
+        DrawTalk(tex, pb, bx, bw, H - 20.0f, who.name, who.title, line, (float)(GetTime() - talkAt), 1.0f);
+    }
     Panel(r, A(kPanel, 0.97f), 14);
     const int b = PortBiome(campDocked);
     Text(PortName(campDocked), r.x + 28, r.y + 20, 34, kText, true);
