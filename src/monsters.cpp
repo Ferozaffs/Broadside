@@ -46,6 +46,11 @@ Vector3 Spline(const std::vector<Vector3>& c, float u) {
 }
 const Color kSkin = {86, 30, 38, 255}, kSkinDark = {30, 10, 18, 255}, kSkinPale = {150, 98, 92, 255}, kSucker = {222, 172, 158, 255};
 constexpr int kArmRings = 44, kArmSides = 10;
+// the suckers: two staggered rows of cups down the underside, a rim of kCupSides round a hollow middle
+constexpr int kCupFirst = 3, kCupLast = kArmRings - 4, kCupSides = 7;
+constexpr int kCups = ((kCupLast - kCupFirst) / 2 + 1) * 2;
+constexpr int kArmVerts = kArmRings * kArmSides + kCups * (kCupSides * 2 + 1);
+constexpr int kArmTris = (kArmRings - 1) * kArmSides * 2 + kCups * kCupSides * 3;
 constexpr int kSharkRings = 34, kSharkSides = 16, kSharkFinVerts = 96, kSharkFinTris = 48;
 constexpr int kSerpRings = 90, kSerpSides = 12, kSerpFins = 14;
 }  // namespace
@@ -118,6 +123,45 @@ void MonsterArt::Tube(Dyn& d, const std::vector<Vector3>& pts, const std::vector
                 unsigned short c = (unsigned short)(a + kArmSides), e = (unsigned short)(b + kArmSides);
                 I.insert(I.end(), {a, b, c, b, e, c});
             }
+    // the suckers: real cups standing off the underside in two staggered rows, big near the body, tiny at the tip; a
+    // pale raised rim (an outer and an inner ring) round a dark hollow (folded away inside the arm when there are none)
+    Vector3 tN = {0, 1, 0};
+    for (int i = kCupFirst; i <= kCupLast; i += 2)
+        for (int row = 0; row < 2; ++row) {
+            const int r = std::min(i + row, kArmRings - 2);
+            const Vector3 t = Vector3Normalize(Vector3Subtract(pts[r + 1], pts[r - 1]));
+            Vector3 toIn = Vector3Subtract(inner, pts[r]);
+            toIn = Vector3Subtract(toIn, Vector3Scale(t, Vector3DotProduct(toIn, t)));
+            toIn = Vector3Length(toIn) > 1e-3f ? Vector3Normalize(toIn) : tN;
+            tN = toIn;
+            const Vector3 side = Vector3CrossProduct(toIn, t);
+            const float sa = row ? 0.42f : -0.42f;
+            const Vector3 nrm = Vector3Normalize(Vector3Add(Vector3Scale(toIn, cosf(sa)), Vector3Scale(side, sinf(sa))));
+            const Vector3 s2 = Vector3CrossProduct(nrm, t);
+            const float along = (float)(r - kCupFirst) / (kCupLast - kCupFirst);
+            const float cup = suckers > 0.0f ? radius[r] * (0.34f - 0.12f * along) : 0.0f;
+            const Vector3 base = Vector3Add(pts[r], Vector3Scale(nrm, radius[r] * (suckers > 0.0f ? 0.93f : 0.5f)));
+            const unsigned short o = (unsigned short)P.size();
+            P.push_back(Vector3Add(base, Vector3Scale(nrm, -cup * 0.25f)));  // the hollow
+            N.push_back(nrm);
+            C.push_back(kSkinDark);
+            for (int k = 0; k < kCupSides; ++k) {
+                const float a = 2.0f * PI * k / kCupSides;
+                const Vector3 rad = Vector3Add(Vector3Scale(t, cosf(a)), Vector3Scale(s2, sinf(a)));
+                P.push_back(Vector3Add(base, Vector3Add(Vector3Scale(rad, cup), Vector3Scale(nrm, -cup * 0.05f))));          // the rim's outside edge (down in the skin)
+                N.push_back(Vector3Normalize(Vector3Add(nrm, Vector3Scale(rad, 0.8f))));
+                C.push_back(Mix(kSkinPale, kSucker, 0.5f));
+                P.push_back(Vector3Add(base, Vector3Add(Vector3Scale(rad, cup * 0.62f), Vector3Scale(nrm, cup * 0.22f))));  // its lip
+                N.push_back(Vector3Normalize(Vector3Subtract(nrm, Vector3Scale(rad, 0.4f))));
+                C.push_back(kSucker);
+            }
+            if (!d.ready)
+                for (int k = 0; k < kCupSides; ++k) {
+                    const unsigned short oa = (unsigned short)(o + 1 + 2 * k), la = (unsigned short)(oa + 1);
+                    const unsigned short ob = (unsigned short)(o + 1 + 2 * ((k + 1) % kCupSides)), lb = (unsigned short)(ob + 1);
+                    I.insert(I.end(), {oa, ob, la, ob, lb, la, o, la, lb});  // (the rim's slope, then down into the hollow)
+                }
+        }
     Upload(d, P, N, C, I);
 }
 
@@ -182,8 +226,8 @@ void MonsterArt::Init(Shader lit) {
     tooth = GenMeshCone(0.5f, 1.0f, 6);
     cube = GenMeshCube(1.0f, 1.0f, 1.0f);
     cyl = GenMeshCylinder(1.0f, 1.0f, 20);
-    for (Dyn& d : arms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
-    for (Dyn& d : queenArms) MakeDyn(d, kArmRings * kArmSides, (kArmRings - 1) * kArmSides * 2);
+    for (Dyn& d : arms) MakeDyn(d, kArmVerts, kArmTris);
+    for (Dyn& d : queenArms) MakeDyn(d, kArmVerts, kArmTris);
     MakeDyn(serpent, kSerpRings * kSerpSides + 1 + kSerpFins * 6, (kSerpRings - 1) * kSerpSides * 2 + kSerpSides + kSerpFins * 2);
     MakeDyn(shark, kSharkRings * kSharkSides + 1 + kSharkFinVerts, (kSharkRings - 1) * kSharkSides * 2 + kSharkSides + kSharkFinTris);
     ready = true;
