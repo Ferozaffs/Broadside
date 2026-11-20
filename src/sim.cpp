@@ -1686,6 +1686,13 @@ int World::AddShip(const std::string& name, bool bot, int cls) {
         if (mode == MODE_CAMPAIGN && !bot) {
             ships[i].hp = ships[i].maxHp * Clamp(campLoadHull, 0.15f, 1.0f);  // (as she was left)
             campLoadHull = 1.0f;
+            if (const char* pn = getenv("BS_CAMPPORT"); pn && atoi(pn) >= 0 && atoi(pn) < (int)harbours.size()) {  // (film: lying in this port)
+                const Harbour& hb = harbours[atoi(pn)];
+                ships[i].pos = {hb.x, ocean.Height(hb.x, hb.z) + 1.0f, hb.z};
+                ships[i].rot = QuaternionFromAxisAngle({0, 1, 0}, atan2f(-cosf(hb.ang), -sinf(hb.ang)));
+                ships[i].vel = {};
+                campLastPort = (int8_t)atoi(pn);
+            }
             if (const char* at = getenv("BS_CAMPAT")) {  // (tests, screenshots: start out at sea here, "x,z")
                 float x = 0.0f, z = 0.0f;
                 if (sscanf(at, "%f,%f", &x, &z) == 2) {
@@ -1908,6 +1915,12 @@ void World::Damage(Ship& v, float amount, int attacker) {
             if (v.smokeT <= 0.0f) UsePerk(PK_SMOKE);
             v.smokeT = fmaxf(v.smokeT, 3.0f + 1.5f * v.perks[PK_SMOKE]);
         }
+    }
+    if (mode == MODE_CAMPAIGN && campBotCaptain && campBotAssist != 1.0f && !v.raider && !v.npc && !v.merchant && v.leader < 0 && v.isBot)
+        amount *= campBotAssist;  // (tests: the career bot's stand-in for a player's skill)
+    if (mode == MODE_CAMPAIGN && v.questRole == campaign::QR_CAPTOR) {  // (the captive aboard: one broadside too many and she strikes, she
+        if (v.struck) amount = 0.0f;                                      //  doesn't go down; struck, she's surrendered - the shot still in
+        else if (amount >= v.hp) amount = fmaxf(0.0f, v.hp - v.maxHp * 0.05f);  //  the air, the fleet's, do her no more harm)
     }
     v.hp -= amount;
     if (attacker >= 0 && attacker != v.id) v.lastAttacker = attacker;
@@ -3599,6 +3612,12 @@ void World::BotThink(Ship& s, float dt) {
                         dc = fminf(dc, Vector2Distance({o.pos.x, o.pos.z}, {s.pos.x, s.pos.z}));
                 if (dc > 650.0f) in.sail = 0.12f;
             }
+        } else if ((s.questRole == campaign::QR_TARGET || s.questRole == campaign::QR_CAPTOR) && !s.struck &&
+                   Vector2Distance({s.pos.x, s.pos.z}, {q.x, q.z}) > 1800.0f && (!target || best > 350.0f)) {
+            // a quest's pirate keeps to her own waters: a running fight doesn't drag the captain out of her depth
+            goal = {q.x, 0.0f, q.z};
+            haveGoal = true;
+            fight = false;
         } else if (s.questRole == campaign::QR_GUARD && (!target || best > 900.0f)) {  // nothing near: back to the convoy
             for (int16_t k : q.ships)
                 if (k >= 0 && k < ShipCount() && ships[k].active && ships[k].merchant && ships[k].questSlot == s.questSlot) {
@@ -3609,6 +3628,16 @@ void World::BotThink(Ship& s, float dt) {
                     break;
                 }
         }
+    }
+    if (mode == MODE_CAMPAIGN && campBotCaptain && !campBotPath.empty() && !s.raider && !s.merchant && !s.npc && s.leader < 0 &&
+        (!target || best > campBotEngage || campBotFlee)) {  // (tests: a career played by a bot - her way to the work, nothing near)
+        while (campBotWp + 1 < (int)campBotPath.size() && Vector2Distance({s.pos.x, s.pos.z}, campBotPath[campBotWp]) < 110.0f) campBotWp++;
+        const Vector2 g = campBotPath[std::min<int>(campBotWp, (int)campBotPath.size() - 1)];
+        goal = {g.x, 0.0f, g.y};
+        haveGoal = true;
+        fight = false;
+        const bool last = campBotWp + 1 >= (int)campBotPath.size();
+        in.sail = last && campBotStop ? Clamp((Vector2Distance({s.pos.x, s.pos.z}, g) - 20.0f) / 160.0f, 0.0f, 1.0f) : 1.0f;
     }
     float goalDist = 1e9f;
     if (haveGoal) {
@@ -5671,7 +5700,7 @@ void World::UpdateQuests(float dt, Ship& cap) {
                     }
                     const float hull = q.type == Q_BOUNTY ? 1.5f : 1.15f;  // (on top of the zone's: SpawnRaider)
                     const float ql = ZoneLevel(at.x, at.y);  // (as big as the waters she's in: a cutter near home)
-                    const int cls = ql < 2.5f ? (q.type == Q_BOUNTY && q.seed % 3 == 0 ? SC_FRIGATE : SC_CUTTER)
+                    const int cls = ql < 2.5f ? (q.type == Q_BOUNTY && q.seed % 3 == 0 ? SC_FRIGATE : SC_CUTTER)  // (a captor too: she starts in a cutter)
                                   : ql < 5.0f || q.type == Q_CAPTIVE ? SC_FRIGATE : q.seed % 3 == 0 ? SC_LINE : SC_FRIGATE;
                     SpawnQuestShip(slot, role, at, atan2f(me.x - at.x, me.y - at.y), cls, 1, false, hull, PirateName(q.seed));
                     if (q.type == Q_BOUNTY) {
@@ -5786,6 +5815,8 @@ Ship* World::CampCaptain() {
         if (s.active && (!s.isBot || (campBotCaptain && !s.raider && !s.merchant && !s.npc)) && s.leader < 0) return &s;
     return nullptr;
 }
+
+std::vector<Vector2> World::CampRoute(Vector2 from, Vector2 to) const { return MakeRoute(rocks, from, to, false); }
 
 const std::vector<Vector2>& World::Lane(int from, int to) {
     static const std::vector<Vector2> none;
@@ -5957,7 +5988,7 @@ void World::SeaEvent(Ship& cap) {
     };
     // what: by the region (the wilder, the more dangerous), and what's possible now
     const bool dreadReady = campDread < 0 && (campDreadAt[b] == 0.0f || campClock - campDreadAt[b] > 3.0f * dayLength) && campClock > 240.0f;
-    const bool monsterReady = !monsters[MON_KRAKEN].active && !monsters[MON_MEGALODON].active;
+    const bool monsterReady = !monsters[MON_KRAKEN].active && !monsters[MON_MEGALODON].active && ZoneLevel(me.x, me.y) >= 2.5f;  // (not in the gentlest waters)
     float w[5] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 8.0f + 2.0f * ZoneLevel(me.x, me.y) : 0.0f, 0.0f};
     if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one)
         const int k = atoi(e) - 1;
@@ -6021,8 +6052,9 @@ void World::SeaEvent(Ship& cap) {
         case EV_DREAD: {  // the region's dread pirate, and two of her mates: hunting her
             if (!ahead(1200.0f, 1500.0f, at)) return;
             const float hd = atan2f(me.x - at.x, me.y - at.y);
-            const float hull = 2.6f * PirateHull(ZoneLevel(at.x, at.y));
-            const int d = SpawnNpc(NPC_DREAD, at, hd, SC_LINE, 1, false, hull, DreadName(b));
+            const bool gentle = ZoneLevel(me.x, me.y) < 3.0f;  // (where she is: near home, a match for a cutter with some upgrades)
+            const float hull = (gentle ? 1.6f : 2.6f) * PirateHull(ZoneLevel(at.x, at.y));
+            const int d = SpawnNpc(NPC_DREAD, at, hd, gentle ? SC_FRIGATE : SC_LINE, 1, false, hull, DreadName(b));  // (near home: a frigate)
             if (d < 0) return;
             Ship& s = ships[d];
             static const uint8_t kPerks[BIOMES][2][2] = {  // her tricks: (upgrade, how many) twice

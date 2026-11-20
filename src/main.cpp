@@ -4936,7 +4936,7 @@ void Game::RenderWorld(float dt, bool menu) {
         DrawSearchlight(cam);
         DrawStormGeometry(cam);
     }
-    if (!menu) DrawFleetRings();
+    if (!menu && !getenv("BS_NOHUD")) DrawFleetRings();  // (film: none)
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
     if (!menu && myId >= 0 && view[myId].present && OwnShipLate()) {
         const NetShip& s = view[myId].s;
@@ -4983,8 +4983,9 @@ void Game::RenderWorld(float dt, bool menu) {
     }
     if (renderer.atm.rain > 0.0f) DrawRain(cam, dt);
     if (renderer.atm.snow > 0.01f || renderer.atm.ash > 0.01f) DrawFlakes(cam, dt);
-    if (!menu) DrawTrajectory();
-    if (!menu) DrawFiringArcs();
+    static const bool film = getenv("BS_NOHUD") != nullptr;  // (clean shots for film: no aiming lines either)
+    if (!menu && !film) DrawTrajectory();
+    if (!menu && !film) DrawFiringArcs();
     rlDrawRenderBatchActive();
     rlEnableDepthMask();
 
@@ -7355,6 +7356,20 @@ void Game::Frame() {
             rlDrawRenderBatchActive();
             rlPopMatrix();
             SetMouseScale(1.0f, 1.0f);
+            rv.uiScale = 1.0f;
+        } else if (campaign && getenv("BS_FILMTALK") && !portOpen) {  // (film: no HUD, but the people still talk - the barks, the hails)
+            const float s = HudScale();
+            rlDrawRenderBatchActive();
+            rlPushMatrix();
+            rlScalef(s, s, 1.0f);
+            rv.uiScale = s;
+            const float W = GetScreenWidth() / s, H = GetScreenHeight() / s;
+            UpdateHails();
+            UpdateBarks();
+            DrawSeaSay(W, H);
+            DrawBarks(W, H);
+            rlDrawRenderBatchActive();
+            rlPopMatrix();
             rv.uiScale = 1.0f;
         }
         if (prof) {

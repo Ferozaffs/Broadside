@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include <map>
 
 static constexpr int MAX_SHIPS = 256;  // (the tests size their tables by this; the game itself has no limit)
 
@@ -1553,6 +1554,362 @@ static int ProgressTest() {
     return problems ? 1 : 0;
 }
 
+// A whole career played by a bot captain, start to finish: in port she mends, spends (the cheapest upgrade first,
+// officers, a new ship when her parts are in) and takes the tavern's work (the story first, nothing far out of her
+// depth); at sea she sails to it (CampRoute; fast-sail when clear) and the bot AI fights whatever comes. Reports how
+// long each story takes, what she was offered, did, and met at sea, and with several seeds how alike the careers are.
+//   BS_CAREERTEST=1 [BS_CAREERSEEDS=7,8,9] [BS_CAREERHOURS=16] [BS_CAREERLOG=1]
+struct Career {
+    uint32_t seed = 0;
+    float hours = 0.0f;
+    bool finished = false;
+    float storyAt[campaign::CHAINS][campaign::chainSteps + 1] = {};  // h each step was done (0: not)
+    float frigateAt = 0, lineAt = 0;
+    int taken[campaign::Q_TYPES + 1] = {}, done[campaign::Q_TYPES + 1] = {}, failed[campaign::Q_TYPES + 1] = {};
+    int offered[campaign::Q_TYPES + 1] = {};
+    std::map<std::string, int> names;     // the names on her quests (pirates, merchantmen, captives, goods): how often
+    std::map<std::string, int> offerKeys; // the offers she saw (type + name), for comparing careers
+    std::vector<std::string> firstWork;   // her first twenty quests, in order
+    int events[32] = {};                  // campaign::SeaEvent counts
+    int sunk = 0, deaths = 0, partsGot = 0, shipsJoined = 0, stuck = 0, bosses = 0, bossesLost = 0;
+    int portsVisited = 0;
+    std::vector<int> portOrder;           // the ports in the order she first put in
+    long goldEarned = 0;
+    int repTier[campaign::kPorts] = {};
+    float rating = 0.0f;
+};
+
+static float CareerRating(const World& g, int cls) {  // (as the HUD's YOUR SHIP)
+    float p = 0.0f;
+    for (uint8_t u : g.campUpg) p += u;
+    for (uint8_t o : g.campOfficer) p += 1.5f * o;
+    p += cls == SC_LINE ? 4.0f : cls == SC_FRIGATE ? 2.0f : 0.0f;
+    for (const World::FleetShip& f : g.campFleet) p += f.cls == SC_LINE ? 4.0f : f.cls == SC_FRIGATE ? 2.5f : 1.5f;
+    return 1.0f + 9.0f * Clamp(p / 75.0f, 0.0f, 1.0f);
+}
+
+static std::string CareerName(const Quest& q) {
+    using namespace campaign;
+    switch (q.type) {
+        case Q_BOUNTY: return "pirate " + PirateName(q.seed);
+        case Q_CAPTIVE: return std::string("captive ") + CaptiveName(q.seed);
+        case Q_CONVOY: case Q_ESCORT: return "merchantman " + MerchantName(q.seed);
+        case Q_CARGO: return std::string("goods ") + GoodsName(q.seed);
+        default: return "";
+    }
+}
+
+static Career PlayCareer(uint32_t seed, float hours, bool log) {
+    using namespace campaign;
+    static const char* const kType[Q_TYPES + 1] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair"};
+    Career c;
+    c.seed = seed;
+    World g;
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    g.campBotAssist = getenv("BS_CAREERASSIST") ? (float)atof(getenv("BS_CAREERASSIST")) : 0.5f;  // (a bot fights worse than a player: half of every hit)
+    g.campBotEngage = getenv("BS_CAREERENGAGE") ? (float)atof(getenv("BS_CAREERENGAGE")) : 250.0f;  // (she keeps to her course, as a player would)
+    const int me = g.AddShip("captain", true, SC_CUTTER);
+    g.campWantFast = true;
+    const long steps = (long)(hours * 3600.0f * 60.0f);
+    bool inPort = false, portDone = false;
+    int objSlot = -2;          // (what she's sailing for: a quest slot, -1 a port)
+    Vector2 objAt{};
+    float objT = 0.0f, still = 0.0f, linger = 0.0f;
+    Vector2 lastPos{};
+    int lastGold = g.campGold, homeBack = 0;
+    uint8_t chainWas[CHAINS] = {};
+    uint16_t seen = 0;
+    auto H = [&](long i) { return i / 216000.0f; };
+    auto acceptable = [&](const Quest& q, float rating) {  // (the waters there, and on the way, no worse than she can stand)
+        const float most = rating + (q.chain ? 2.0f : 1.2f);
+        Vector2 to = {q.x, q.z};
+        if ((q.type == Q_CARGO || q.type == Q_ESCORT) && q.to >= 0 && q.to < (int)g.harbours.size()) to = {g.harbours[q.to].x, g.harbours[q.to].z};
+        if (ZoneLevel(to.x, to.y) > most) return false;
+        const Vector2 from = g.campDocked >= 0 ? Vector2{g.harbours[g.campDocked].x, g.harbours[g.campDocked].z} : Vector2{g.ships[me].pos.x, g.ships[me].pos.z};
+        const std::vector<Vector2> way = g.CampRoute(from, to);
+        for (size_t k = 0; k < way.size(); k += 4)
+            if (ZoneLevel(way[k].x, way[k].y) > most + 1.0f) return false;
+        return true;
+    };
+    int turnedBack[maxQuests] = {};
+    for (long i = 0; i < steps; ++i) {
+        g.Step();
+        for (const GameEvent& e : g.events) {
+            if (e.type == EventType::CampEvent && e.b < 32) {
+                c.events[e.b]++;
+                if (e.b == EV_PART && e.value <= 0.0f) c.partsGot++;
+                if (e.b == EV_PART && log) printf("      %5.2f h  PART %s%s (in her hold now: %02x)\n", H(i), kPartNames[e.flags % PARTS], e.value > 0.0f ? ", sold: she has one" : "", g.campParts);
+                if (e.b == EV_JOINED && e.value <= 0.0f) c.shipsJoined++;
+                if (e.b == EV_FINALE) c.finished = true;
+            }
+            if (e.type == EventType::Kill && e.b < g.ShipCount()) {
+                if (g.ships[e.b].raider) c.sunk++;
+                if ((int)e.b == me) {
+                    c.deaths++;
+                    if (log) {
+                        const Ship& k = g.ships[e.a < g.ShipCount() ? e.a : me];
+                        printf("      %5.2f h  SUNK by %s (%s%s) at danger %.1f, her %s rated %.1f\n", H(i), k.name.c_str(), ClassOf(k.cls).name,
+                               k.npc == NPC_DREAD ? ", the dread pirate" : k.questSlot >= 0 ? ", a quest's" : "", ZoneLevel(g.ships[me].pos.x, g.ships[me].pos.z),
+                               ClassOf(g.ships[me].cls).name, CareerRating(g, g.ships[me].cls));
+                    }
+                }
+            }
+            if (e.type == EventType::Quest && e.a < maxQuests && (e.flags == 2 || e.flags == 3)) {
+                const Quest& q = g.campQuests[e.a];
+                const int t = q.type <= Q_TYPES ? q.type : Q_TYPES;
+                (e.flags == 2 ? c.done : c.failed)[t]++;
+                if (log) printf("      %5.2f h  %s %s%s (%d gold)\n", H(i), e.flags == 2 ? "done  " : "FAILED", kType[t], q.chain ? " (a story's)" : "", q.reward);
+            }
+        }
+        g.events.clear();
+        if (g.campGold > lastGold) c.goldEarned += g.campGold - lastGold;
+        lastGold = g.campGold;
+        for (int b = 0; b < CHAINS; ++b) {
+            for (int s = chainWas[b]; s < g.campChain[b] && s <= chainSteps; ++s) {
+                c.storyAt[b][s] = H(i);
+                if (log) printf("      %5.2f h  STORY %s, step %d of %d\n", H(i), b < BIOMES ? kBiomeNames[b] : "the Last Voyage", s + 1, chainSteps + 1);
+            }
+            chainWas[b] = g.campChain[b];
+        }
+        if (g.campChain[FINAL] > chainSteps) c.finished = true;
+        if (c.finished) { c.hours = H(i); break; }
+        if (i % 30) continue;  // (she decides twice a second)
+        if (g.mode != MODE_CAMPAIGN) continue;  // (in a lair: the bot fights the boss)
+        Ship& cap = g.ships[me];
+        if (!cap.active || !cap.alive) continue;
+        if (((g.campHulls >> SC_FRIGATE) & 1) && !c.frigateAt) c.frigateAt = H(i);
+        if (((g.campHulls >> SC_LINE) & 1) && !c.lineAt) c.lineAt = H(i);
+        const Vector2 me2 = {cap.pos.x, cap.pos.z};
+        const float rating = CareerRating(g, cap.cls);
+        // ---- in port
+        if (g.campDocked >= 0) {
+            if (!((seen >> g.campDocked) & 1)) { seen |= (uint16_t)(1u << g.campDocked); c.portOrder.push_back(g.campDocked); }
+            static int dayWas = -1;
+            if (!inPort || g.campOffersDay != dayWas) { inPort = true; portDone = false; dayWas = g.campOffersDay; }  // (a new day ashore: new work)
+            if (!portDone && g.campOffersPort == g.campDocked) {
+                portDone = true;
+                g.CampaignAct(me, ACT_REPAIR);
+                for (int cls : {SC_LINE, SC_FRIGATE})  // (a better ship: build her, or go aboard one she has)
+                    if (cls > cap.cls || (cls == SC_FRIGATE && cap.cls == SC_CUTTER)) {
+                        if (((g.campHulls >> cls) & 1) || (g.campParts & PartsFor(cls)) == PartsFor(cls))
+                            if (g.CampaignAct(me, ACT_FLAGSHIP, cls)) break;
+                    }
+                const int tier = g.RepTierAt(g.campDocked);
+                for (int guard = 0; guard < 40; ++guard) {  // (the cheapest upgrade she can afford, keeping some back for repairs)
+                    int pick = -1, cost = 1 << 30;
+                    for (int u = 0; u < kUpgradeCount; ++u)
+                        if (g.campUpg[u] < kUpgrades[u].max) {
+                            const int p = RepPrice(UpgradeCost(u, g.campUpg[u]), tier) * (u < 5 ? 1 : 2);  // (hull, armour, speed, reload, shot first)
+                            if (p < cost) { cost = p; pick = u; }
+                        }
+                    if (pick < 0 || g.campGold - RepPrice(UpgradeCost(pick, g.campUpg[pick]), tier) < 250) break;
+                    if (!g.CampaignAct(me, ACT_UPGRADE, pick)) break;
+                }
+                for (int k = 0; k < (int)g.campRecruits.size(); ++k) {
+                    const Recruit& r = g.campRecruits[k];
+                    if (r.level > g.campOfficer[r.role] && r.cost < g.campGold / 2) { g.CampaignAct(me, ACT_HIRE, k); break; }
+                }
+                // the work: the story first, then what pays (a part, a ship), nothing far out of her depth
+                for (const Quest& o : g.campOffers) {
+                    c.offered[std::min<int>(o.type, Q_TYPES)]++, c.offerKeys[std::string(kType[std::min<int>(o.type, Q_TYPES)]) + " " + CareerName(o)]++;
+                    if (log && o.chain) printf("      %5.2f h  %s offers a story's step %d (%s, danger %.1f, her ship %.1f)%s\n", H(i), PortName(g.campDocked), o.step + 1,
+                                               kType[std::min<int>(o.type, Q_TYPES)], ZoneLevel(o.x, o.z), rating, acceptable(o, rating) ? "" : ": too far out for her");
+                }
+                for (int guard = 0; guard < 3; ++guard) {
+                    int active = 0;
+                    for (const Quest& q : g.campQuests) active += q.state == QS_ACTIVE || q.state == QS_RETURN;
+                    if (active >= maxQuests) break;
+                    int pick = -1;
+                    float score = -1e9f;
+                    for (int k = 0; k < (int)g.campOffers.size(); ++k) {
+                        const Quest& o = g.campOffers[k];
+                        if (!acceptable(o, rating)) continue;
+                        const float sc = (o.chain ? 1e6f : 0.0f) + (o.part >= 0 ? 2000.0f : 0.0f) + (o.ship >= 0 ? 1500.0f : 0.0f) + o.reward -
+                                         0.05f * Vector2Distance(me2, {o.x, o.z});
+                        if (sc > score) { score = sc; pick = k; }
+                    }
+                    if (pick < 0) break;
+                    const Quest o = g.campOffers[pick];
+                    if (!g.CampaignAct(me, ACT_ACCEPT, pick)) break;
+                    const int t = std::min<int>(o.type, Q_TYPES);
+                    c.taken[t]++;
+                    const std::string nm = CareerName(o);
+                    if (!nm.empty()) c.names[nm]++;
+                    if (c.firstWork.size() < 20) c.firstWork.push_back(std::string(kType[t]) + (o.chain ? "*" : "") + "@" + std::to_string(o.biome));
+                    if (log) printf("      %5.2f h  took %s%s in %s, %d gold (danger %.1f, her ship %.1f), in %s\n", H(i), kType[t], o.chain ? " (a story's)" : "",
+                                    kBiomeNames[o.biome % BIOMES], o.reward, ZoneLevel(o.x, o.z), rating, PortName(g.campDocked));
+                }
+                objSlot = -2;
+                linger = 0.0f;
+            }
+        } else inPort = false;
+        // ---- what she sails for: the nearest of her quests' places (a story's first), or a port
+        objT -= 0.5f;
+        int slot = -1;
+        Vector2 at{};
+        bool stop = true;
+        float bd = 1e9f;
+        for (int k = 0; k < maxQuests; ++k) {
+            const Quest& q = g.campQuests[k];
+            if (q.state != QS_ACTIVE && q.state != QS_RETURN) continue;
+            Vector2 p = {q.x, q.z};
+            bool st = true;
+            auto ship = [&](int role) -> const Ship* {
+                for (int16_t s : q.ships)
+                    if (s >= 0 && s < g.ShipCount() && g.ships[s].active && g.ships[s].alive && g.ships[s].questRole == role) return &g.ships[s];
+                return nullptr;
+            };
+            auto port = [&](int h) { if (h >= 0 && h < (int)g.harbours.size()) p = {g.harbours[h].x, g.harbours[h].z}; };
+            if (q.state == QS_RETURN) port(q.from >= 0 ? q.from : g.PortNear(me2.x, me2.y, 1e9f));
+            else if (q.type == Q_CARGO) port(q.to);
+            else if (q.type == Q_ESCORT) { if (const Ship* m = ship(QR_ESCORTED)) { p = {m->pos.x, m->pos.z}; st = false; } else port(q.to); }
+            else if (q.type == Q_CONVOY) { if (const Ship* m = ship(QR_MERCHANT)) { p = {m->pos.x, m->pos.z}; st = false; } }
+            else if (q.type == Q_BOUNTY) { if (const Ship* m = ship(QR_TARGET)) { p = {m->pos.x, m->pos.z}; st = false; } }
+            else if (q.type == Q_CAPTIVE) { if (const Ship* m = ship(QR_CAPTOR)) { p = {m->pos.x, m->pos.z}; st = m->struck; } }  // (struck: alongside)
+            const float d = Vector2Distance(me2, p) - (q.chain ? 4000.0f : 0.0f);
+            if (d < bd) { bd = d; slot = k; at = p; stop = st; }
+        }
+        // out of her depth (as the HUD would tell her, red): break off and run for the nearest port
+        const bool deep = ZoneLevel(me2.x, me2.y) > rating + 2.5f;
+        g.campBotFlee = deep || cap.hp < cap.maxHp * 0.3f;  // (or badly hurt: home to mend)
+        if (deep && slot >= 0 && ++turnedBack[slot] > 120) {  // (a minute out of her depth on the way to it, all told: she gives it up)
+            if (log) printf("      %5.2f h  gave up the %s: its way runs out of her depth\n", H(i), kType[std::min<int>(g.campQuests[slot].type, Q_TYPES)]);
+            g.CampaignAct(me, ACT_ABANDON, slot);
+            turnedBack[slot] = 0;
+        }
+        if (g.campBotFlee) {
+            slot = -1;
+            if (log && i % (60 * 30) == 0) printf("      %5.2f h  out of her depth (danger %.1f, her ship %.1f): running for port\n", H(i), ZoneLevel(me2.x, me2.y), rating);
+        }
+        if (slot < 0) {  // nothing under way: back to a port she's a match for (the nearest of them), where the work is
+            int h = -1;
+            float hs = 1e30f;
+            for (int p = 0; p < (int)g.harbours.size(); ++p) {
+                const float over = fmaxf(0.0f, ZoneLevel(g.harbours[p].x, g.harbours[p].z) - rating - 1.0f);
+                const float sc = Vector2Distance(me2, {g.harbours[p].x, g.harbours[p].z}) + over * 20000.0f;
+                if (sc < hs) { hs = sc; h = p; }
+            }
+            if (h >= 0) at = {g.harbours[h].x, g.harbours[h].z};
+            stop = true;
+            if (g.campDocked >= 0 && g.campDocked == h) {  // (in such a port with nothing she can take: wait for tomorrow's work)
+                linger += 0.5f;
+                g.campClock += 2.0f;   // (the day passes quicker ashore)
+                continue;
+            }
+        }
+        if (slot != objSlot || objT <= 0.0f || Vector2Distance(at, objAt) > 250.0f) {
+            g.campBotPath = g.CampRoute(me2, at);
+            if (g.campBotPath.empty()) g.campBotPath.push_back(at);
+            g.campBotPath.back() = at;
+            g.campBotWp = 0;
+            g.campBotStop = stop;
+            objSlot = slot;
+            objAt = at;
+            objT = stop ? 30.0f : 6.0f;
+        }
+        if (log && i % (60 * 60) == 0) {  // (where she is, what she's after, once a minute)
+            int foes = 0;
+            float nf = 1e9f;
+            for (const Ship& o : g.ships)
+                if (o.active && o.alive && o.raider && !o.struck) { ++foes; nf = fminf(nf, Vector2Distance(me2, {o.pos.x, o.pos.z})); }
+            printf("      %5.2f h  at (%.0f, %.0f) danger %.1f, speed %.1f, after slot %d %.0f m off (wp %d of %zu), %d pirates (nearest %.0f m), fast %d, docked %d\n", H(i),
+                   me2.x, me2.y, ZoneLevel(me2.x, me2.y), Vector3Length(cap.vel), slot, Vector2Distance(me2, at), g.campBotWp, g.campBotPath.size(), foes, nf, g.campFast, g.campDocked);
+        }
+        // stuck (on a shore, nothing near): a nudge back to open water along her way
+        if (Vector2Distance(me2, lastPos) < 1.0f && !(stop && Vector2Distance(me2, at) < 120.0f) && g.campDocked < 0) still += 0.5f;
+        else still = 0.0f;
+        lastPos = me2;
+        if (still > 45.0f) {
+            c.stuck++;
+            const Vector2 w = g.campBotPath[std::min<int>(g.campBotWp + 1, (int)g.campBotPath.size() - 1)];
+            const Vector2 dir = Vector2Normalize(Vector2Subtract(w, me2));
+            cap.pos.x += dir.x * 120.0f;
+            cap.pos.z += dir.y * 120.0f;
+            cap.vel = {};
+            still = 0.0f;
+            objT = 0.0f;
+        }
+        (void)homeBack;
+    }
+    if (!c.finished) c.hours = hours;
+    c.bosses = c.events[0];
+    for (int p = 0; p < kPorts; ++p) c.repTier[p] = g.RepTierAt(p);
+    c.portsVisited = (int)c.portOrder.size();
+    c.rating = CareerRating(g, g.ships[me].cls);
+    return c;
+}
+
+static int CareerTest() {
+    using namespace campaign;
+    static const char* const kType[Q_TYPES + 1] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair"};
+    static const char* const kEv[] = {"", "wreck", "distress", "monster", "dread", "saved", "dread sunk", "chest", "map", "lost", "monster slain", "struck",
+                                      "prize", "plunder", "escort lost", "officer lost", "part", "joined", "finale", "rep step", "help"};
+    std::vector<uint32_t> seeds;
+    {
+        const char* e = getenv("BS_CAREERSEEDS");
+        std::string s = e ? e : "7";
+        for (size_t p = 0; p < s.size();) {
+            const size_t q = s.find(',', p);
+            seeds.push_back((uint32_t)atoi(s.substr(p, q == std::string::npos ? std::string::npos : q - p).c_str()));
+            if (q == std::string::npos) break;
+            p = q + 1;
+        }
+    }
+    const float hours = getenv("BS_CAREERHOURS") ? (float)atof(getenv("BS_CAREERHOURS")) : 16.0f;
+    const bool log = getenv("BS_CAREERLOG") != nullptr;
+    std::vector<Career> runs;
+    for (uint32_t seed : seeds) {
+        printf("  career, seed %u (up to %.0f h)\n", seed, hours);
+        const auto t0 = std::chrono::steady_clock::now();
+        Career c = PlayCareer(seed, hours, log);
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        printf("    %s after %.1f h of play (%.0f s to run)\n", c.finished ? "THE LAST STORY TOLD" : "not finished", c.hours, wall);
+        for (int b = 0; b < CHAINS; ++b) {
+            printf("    %-22s", b < BIOMES ? kBiomeNames[b] : "The Last Voyage");
+            for (int s = 0; s <= chainSteps; ++s) printf(c.storyAt[b][s] > 0 ? "  %5.1f h" : "      -  ", c.storyAt[b][s]);
+            printf("\n");
+        }
+        printf("    frigate %s, ship of the line %s; her ship rated %.1f at the end; %d parts, %d ships joined\n",
+               c.frigateAt ? TextFormat("at %.1f h", c.frigateAt) : "never", c.lineAt ? TextFormat("at %.1f h", c.lineAt) : "never", c.rating, c.partsGot, c.shipsJoined);
+        printf("    quests (offered / taken / done / failed):");
+        for (int t = 0; t <= Q_TYPES; ++t) printf("  %s %d/%d/%d/%d", kType[t], c.offered[t], c.taken[t], c.done[t], c.failed[t]);
+        printf("\n    at sea:");
+        for (int e = 1; e <= 20; ++e) if (c.events[e]) printf("  %s %d", kEv[e], c.events[e]);
+        printf("\n    pirates sunk %d, sunk herself %d, stuck %d, gold earned %ld, ports %d (order", c.sunk, c.deaths, c.stuck, c.goldEarned, c.portsVisited);
+        for (int p : c.portOrder) printf(" %d", p);
+        printf(")\n    reputation:");
+        for (int p = 0; p < kPorts; ++p) printf(" %s", c.repTier[p] ? TextFormat("%s=%d", PortName(p), c.repTier[p]) : "");
+        int repeats = 0, uniq = 0, most = 0;
+        std::string mostName;
+        for (const auto& [n, k] : c.names) { ++uniq; repeats += k - 1; if (k > most) { most = k; mostName = n; } }
+        printf("\n    names on her work: %d different, %d repeats (most: %s x%d)\n", uniq, repeats, mostName.c_str(), most);
+        printf("    her first work:");
+        for (const std::string& w : c.firstWork) printf(" %s", w.c_str());
+        printf("\n");
+        fflush(stdout);
+        runs.push_back(c);
+    }
+    if (runs.size() > 1) {  // how alike are the careers: the offers seen, the order of her work, the stories' times
+        printf("  between careers:\n");
+        for (size_t a = 0; a < runs.size(); ++a)
+            for (size_t b = a + 1; b < runs.size(); ++b) {
+                int both = 0, either = 0;
+                std::set<std::string> keys;
+                for (const auto& [k, n] : runs[a].offerKeys) keys.insert(k);
+                for (const auto& [k, n] : runs[b].offerKeys) keys.insert(k);
+                for (const std::string& k : keys) { ++either; both += runs[a].offerKeys.count(k) && runs[b].offerKeys.count(k); }
+                int same = 0;
+                const size_t n = std::min(runs[a].firstWork.size(), runs[b].firstWork.size());
+                for (size_t k = 0; k < n; ++k) same += runs[a].firstWork[k] == runs[b].firstWork[k];
+                printf("    seeds %u and %u: offers in common %d of %d (%.0f%%), first work the same %d of %zu, ports in the same order %s\n", runs[a].seed, runs[b].seed,
+                       both, either, either ? 100.0 * both / either : 0.0, same, n, runs[a].portOrder == runs[b].portOrder ? "yes" : "no");
+            }
+    }
+    printf("career: done\n");
+    return 0;
+}
+
 // Port reputation: what a port offers her at each step, what moves it, its prices, the save, its warships coming out
 static int RepTest() {
     using namespace campaign;
@@ -1884,6 +2241,7 @@ static int ZoneTest() {
 int RunSimTest() {
     if (getenv("BS_PROGRESSTEST")) return ProgressTest();
     if (getenv("BS_REPTEST")) return RepTest();
+    if (getenv("BS_CAREERTEST")) return CareerTest();
     if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();
     if (getenv("BS_FLEETTEST")) return FleetTest();

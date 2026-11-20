@@ -1178,6 +1178,13 @@ public:
     bool LoadCampaign();                          // after Init (the seed comes from CampaignSeed first)
     static bool CampaignSeed(const std::string& path, uint32_t& seed);
     bool campBotCaptain = false;   // (tests: the first bot captain stands in for the player)
+    std::vector<Vector2> campBotPath;  // (tests: the bot captain's way - she sails it while no enemy is near; empty: she's a bot)
+    int campBotWp = 0;
+    bool campBotStop = false;      // (...and lies still at its end)
+    bool campBotFlee = false;      // (...even with enemies near: out of her depth, running for port)
+    float campBotEngage = 650.0f;  // (...turning to fight only what's this close: further off, she sails on, firing as she goes)
+    float campBotAssist = 1.0f;    // (...and takes this much of every hit: a stand-in for a player's skill)
+    std::vector<Vector2> CampRoute(Vector2 from, Vector2 to) const;  // a way round the islands (tests)
     int campLoadCls = -1;          // (the save's ship and how much of her hull, for the captain when she joins)
     float campLoadHull = 1.0f;
     // the Odyssey (MODE_ODYSSEY at Init): the run
