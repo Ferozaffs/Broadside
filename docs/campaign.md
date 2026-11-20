@@ -82,6 +82,26 @@ Each of the twelve ports thinks something of her, in five steps: **Stranger** (0
   ship of the line with two special shots and two mates, and a big bounty: Gentleman Corwin (chain and ricochet),
   Calypso Vane (fire and grape), Old Rime (chain and mortar), Cinder Kate (fire and mortar), the Grey Widow (homing,
   spectral).
+- **And more (v0.23, after three bot careers showed the sea one long running fight: pirates within 800 m 63% of the
+  time, 4 kinds of event)**: half as many pirate bands; a **rival captain** in a ship like hers with tricks of her own
+  (pays 4x her bounty and rep); **smugglers** running down the lanes (sink one for her contraband); **survivors
+  adrift** in a crippled boat (alongside, slowly, before they're lost); in the Fog Banks, mostly at night, **ghost
+  ships** rising close by (spectral shot; a chance of a ship's part). Every keeper and sea voice has six lines, every
+  dread pirate three hails; the name pools are two or three times bigger. Test: BS_SEAEVENTTEST.
+
+## Each region's own work and hazards (v0.23, built)
+Offered only in its own ports (most days), and a hazard of its own (test: BS_REGIONTEST):
+- **The Temperate Isles - smugglers**: she runs, she doesn't fight; cripple her, come alongside, seize the cargo.
+  **The law**: fire on a merchantman and you're wanted for five minutes - the navy hunts you (and the port thinks less of you).
+- **The Tropics - reef salvage**: lie still over a wreck on a reef while the divers work; a shark comes for the blood
+  in the water. **The hurricane**: a storm wandering the region on the clock - lightning on whatever's in it.
+- **The Frozen North - a whaler in the ice**: push through the floes, lie alongside, take her crew off, bring them in.
+  **Ice on the rigging**: at sea in the north it builds (ten minutes to the worst, -25% speed); port clears it.
+- **The Ember Reach - evacuate the island**: the villagers off the beach before the mountain blows (against the
+  clock), under the bombs. **Volcanic bombs**: round its islands, marked red on the water a moment before they land.
+- **The Fog Banks - the lost lighthouse keeper**: only a search area; his light shows within 350 m. **Out of the
+  fog**: pirates find you close, out of nowhere.
+- The taverns also tell where the next untold story is (a story is offered only in its own region's ports).
 
 ## Fleet and crew (built: see TODO.md, phase 3)
 - **Fleet**: up to 3 escort ships, won (prizes, quests, rescues), following you (the existing escort AI), each with

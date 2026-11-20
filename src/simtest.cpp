@@ -10,6 +10,7 @@
 #include <chrono>
 #include <set>
 #include <map>
+#include <functional>
 
 static constexpr int MAX_SHIPS = 256;  // (the tests size their tables by this; the game itself has no limit)
 
@@ -1124,7 +1125,12 @@ static int QuestTest() {
                 break;
             }
             case Q_CONVOY: {
-                put({-campaign::half + 1500.0f, campaign::half - 1500.0f});  // (far away: let it sail)
+                {  // (it waits in port until she's near: off its harbour a moment, then far away - let it sail)
+                    const Harbour& a = g.harbours[q.seed & 0x3F];
+                    put({a.x - cosf(a.ang) * 2500.0f, a.z - sinf(a.ang) * 2500.0f});
+                    for (int i = 0; i < 60; ++i) { g.Step(); g.events.clear(); }
+                }
+                put({-campaign::half + 1500.0f, campaign::half - 1500.0f});
                 for (int i = 0; i < 60 * 1800 && q.state == QS_ACTIVE; ++i) {
                     g.ships[me].hp = g.ships[me].maxHp;
                     g.Step();
@@ -1229,6 +1235,10 @@ static int ChainTest() {
                     break;
                 }
                 case Q_CONVOY:
+                    {  // (it waits in port until she's near)
+                        const Harbour& a = g.harbours[q.seed & 0x3F];
+                        put({a.x - cosf(a.ang) * 2500.0f, a.z - sinf(a.ang) * 2500.0f});
+                    }
                     tick(60);
                     for (int16_t k : q.ships)
                         if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_MERCHANT) g.TestKnockOut(g.ships[k]);
@@ -1565,8 +1575,8 @@ struct Career {
     bool finished = false;
     float storyAt[campaign::CHAINS][campaign::chainSteps + 1] = {};  // h each step was done (0: not)
     float frigateAt = 0, lineAt = 0;
-    int taken[campaign::Q_TYPES + 1] = {}, done[campaign::Q_TYPES + 1] = {}, failed[campaign::Q_TYPES + 1] = {};
-    int offered[campaign::Q_TYPES + 1] = {};
+    int taken[campaign::Q_KINDS] = {}, done[campaign::Q_KINDS] = {}, failed[campaign::Q_KINDS] = {};
+    int offered[campaign::Q_KINDS] = {};
     std::map<std::string, int> names;     // the names on her quests (pirates, merchantmen, captives, goods): how often
     std::map<std::string, int> offerKeys; // the offers she saw (type + name), for comparing careers
     std::vector<std::string> firstWork;   // her first twenty quests, in order
@@ -1601,7 +1611,7 @@ static std::string CareerName(const Quest& q) {
 
 static Career PlayCareer(uint32_t seed, float hours, bool log) {
     using namespace campaign;
-    static const char* const kType[Q_TYPES + 1] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair"};
+    static const char* const kType[Q_KINDS] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair", "reef", "icebound", "evacuate", "keeper", "smuggle"};
     Career c;
     c.seed = seed;
     World g;
@@ -1657,7 +1667,7 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
             }
             if (e.type == EventType::Quest && e.a < maxQuests && (e.flags == 2 || e.flags == 3)) {
                 const Quest& q = g.campQuests[e.a];
-                const int t = q.type <= Q_TYPES ? q.type : Q_TYPES;
+                const int t = q.type < Q_KINDS ? q.type : Q_KINDS - 1;
                 (e.flags == 2 ? c.done : c.failed)[t]++;
                 if (log) printf("      %5.2f h  %s %s%s (%d gold)\n", H(i), e.flags == 2 ? "done  " : "FAILED", kType[t], q.chain ? " (a story's)" : "", q.reward);
             }
@@ -1712,9 +1722,9 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
                 }
                 // the work: the story first, then what pays (a part, a ship), nothing far out of her depth
                 for (const Quest& o : g.campOffers) {
-                    c.offered[std::min<int>(o.type, Q_TYPES)]++, c.offerKeys[std::string(kType[std::min<int>(o.type, Q_TYPES)]) + " " + CareerName(o)]++;
+                    c.offered[std::min<int>(o.type, Q_KINDS - 1)]++, c.offerKeys[std::string(kType[std::min<int>(o.type, Q_KINDS - 1)]) + " " + CareerName(o)]++;
                     if (log && o.chain) printf("      %5.2f h  %s offers a story's step %d (%s, danger %.1f, her ship %.1f)%s\n", H(i), PortName(g.campDocked), o.step + 1,
-                                               kType[std::min<int>(o.type, Q_TYPES)], ZoneLevel(o.x, o.z), rating, acceptable(o, rating) ? "" : ": too far out for her");
+                                               kType[std::min<int>(o.type, Q_KINDS - 1)], ZoneLevel(o.x, o.z), rating, acceptable(o, rating) ? "" : ": too far out for her");
                 }
                 for (int guard = 0; guard < 3; ++guard) {
                     int active = 0;
@@ -1732,7 +1742,7 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
                     if (pick < 0) break;
                     const Quest o = g.campOffers[pick];
                     if (!g.CampaignAct(me, ACT_ACCEPT, pick)) break;
-                    const int t = std::min<int>(o.type, Q_TYPES);
+                    const int t = std::min<int>(o.type, Q_KINDS - 1);
                     c.taken[t]++;
                     const std::string nm = CareerName(o);
                     if (!nm.empty()) c.names[nm]++;
@@ -1766,7 +1776,8 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
             else if (q.type == Q_ESCORT) { if (const Ship* m = ship(QR_ESCORTED)) { p = {m->pos.x, m->pos.z}; st = false; } else port(q.to); }
             else if (q.type == Q_CONVOY) { if (const Ship* m = ship(QR_MERCHANT)) { p = {m->pos.x, m->pos.z}; st = false; } }
             else if (q.type == Q_BOUNTY) { if (const Ship* m = ship(QR_TARGET)) { p = {m->pos.x, m->pos.z}; st = false; } }
-            else if (q.type == Q_CAPTIVE) { if (const Ship* m = ship(QR_CAPTOR)) { p = {m->pos.x, m->pos.z}; st = m->struck; } }  // (struck: alongside)
+            else if (q.type == Q_CAPTIVE || q.type == Q_SMUGGLE) { if (const Ship* m = ship(QR_CAPTOR)) { p = {m->pos.x, m->pos.z}; st = m->struck; } }  // (struck: alongside)
+            else if (q.type == Q_ICEBOUND) { if (const Ship* m = ship(QR_ESCORTED)) p = {m->pos.x, m->pos.z}; }
             const float d = Vector2Distance(me2, p) - (q.chain ? 4000.0f : 0.0f);
             if (d < bd) { bd = d; slot = k; at = p; stop = st; }
         }
@@ -1774,7 +1785,7 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
         const bool deep = ZoneLevel(me2.x, me2.y) > rating + 2.5f;
         g.campBotFlee = deep || cap.hp < cap.maxHp * 0.3f;  // (or badly hurt: home to mend)
         if (deep && slot >= 0 && ++turnedBack[slot] > 120) {  // (a minute out of her depth on the way to it, all told: she gives it up)
-            if (log) printf("      %5.2f h  gave up the %s: its way runs out of her depth\n", H(i), kType[std::min<int>(g.campQuests[slot].type, Q_TYPES)]);
+            if (log) printf("      %5.2f h  gave up the %s: its way runs out of her depth\n", H(i), kType[std::min<int>(g.campQuests[slot].type, Q_KINDS - 1)]);
             g.CampaignAct(me, ACT_ABANDON, slot);
             turnedBack[slot] = 0;
         }
@@ -1844,7 +1855,7 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
 
 static int CareerTest() {
     using namespace campaign;
-    static const char* const kType[Q_TYPES + 1] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair"};
+    static const char* const kType[Q_KINDS] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair", "reef", "icebound", "evacuate", "keeper", "smuggle"};
     static const char* const kEv[] = {"", "wreck", "distress", "monster", "dread", "saved", "dread sunk", "chest", "map", "lost", "monster slain", "struck",
                                       "prize", "plunder", "escort lost", "officer lost", "part", "joined", "finale", "rep step", "help"};
     std::vector<uint32_t> seeds;
@@ -1875,7 +1886,7 @@ static int CareerTest() {
         printf("    frigate %s, ship of the line %s; her ship rated %.1f at the end; %d parts, %d ships joined\n",
                c.frigateAt ? TextFormat("at %.1f h", c.frigateAt) : "never", c.lineAt ? TextFormat("at %.1f h", c.lineAt) : "never", c.rating, c.partsGot, c.shipsJoined);
         printf("    quests (offered / taken / done / failed):");
-        for (int t = 0; t <= Q_TYPES; ++t) printf("  %s %d/%d/%d/%d", kType[t], c.offered[t], c.taken[t], c.done[t], c.failed[t]);
+        for (int t = 0; t < Q_KINDS; ++t) printf("  %s %d/%d/%d/%d", kType[t], c.offered[t], c.taken[t], c.done[t], c.failed[t]);
         printf("\n    at sea:");
         for (int e = 1; e <= 20; ++e) if (c.events[e]) printf("  %s %d", kEv[e], c.events[e]);
         printf("\n    pirates sunk %d, sunk herself %d, stuck %d, gold earned %ld, ports %d (order", c.sunk, c.deaths, c.stuck, c.goldEarned, c.portsVisited);
@@ -2004,6 +2015,209 @@ static int SeaEventTest() {
         check(paid && g.campGold > gold0, TextFormat("...sunk: the price on her, +%d gold", g.campGold - gold0));
     }
     printf("sea events: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
+// Each region's own work and hazards (v0.23): its taverns offer it, it plays as it should, its hazard bites
+static int RegionTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        printf("   %-70s %s\n", what.c_str(), ok ? "ok" : "PROBLEM");
+        if (!ok) ++problems;
+    };
+    static const char* const kName[5] = {"smugglers", "reef salvage", "a whaler in the ice", "evacuate the island", "the lighthouse keeper"};
+    for (int b = 0; b < BIOMES; ++b) {
+        World g;
+        g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        g.campBotCaptain = true;
+        const int me = g.AddShip("captain", true, SC_FRIGATE);
+        g.campSpawn = 1e9f;
+        g.campEventT = 1e9f;
+        int port = -1;
+        for (int p = 0; p < kPorts && port < 0; ++p) if (PortBiome(p) == b) port = p;
+        // the tavern: the region's own work, most days
+        int days = 0;
+        Quest q{};
+        for (int d = 0; d < 20; ++d) {
+            g.campClock = d * dayLength + 1.0f;
+            g.TestOffers(port);
+            bool has = false;
+            for (const Quest& o : g.campOffers) if (o.type == RegionQuest(b)) { has = true; if (q.type != RegionQuest(b)) q = o; }
+            days += has;
+        }
+        check(days >= 8 && q.type == RegionQuest(b), TextFormat("%s: %s offered on %d of 20 days in %s", kBiomeNames[b], kName[b], days, PortName(port)));
+        if (q.type != RegionQuest(b)) continue;
+        q.state = QS_ACTIVE;
+        q.deadline = q.deadline > 0.0f ? g.campClock + q.deadline : 0.0f;
+        g.campQuests[0] = q;
+        Ship& c = g.ships[me];
+        auto put = [&](Vector2 at) {
+            c.pos = {at.x, g.ocean.Height(at.x, at.y) + 1.0f, at.y};
+            c.vel = {};
+        };
+        auto run = [&](float secs, std::function<void()> each) {
+            for (int i = 0; i < (int)(secs * 60); ++i) {
+                c.vel = {};
+                c.hp = c.maxHp;
+                g.Step();
+                if (each) each();
+                g.events.clear();
+            }
+        };
+        const Vector2 spot = {q.x, q.z};
+        auto offshore = [&](Vector2 p) {  // (lying off a shore spot: the nearest open water within its reach)
+            for (float r = 0.0f; r < 80.0f; r += 10.0f)
+                for (float a = 0.0f; a < 6.28f; a += 0.4f) {
+                    const Vector2 t = {p.x + sinf(a) * r, p.y + cosf(a) * r};
+                    if (RocksHeight(g.rocks, t.x, t.y) < -6.0f) return t;
+                }
+            return p;
+        };
+        int state = -1;
+        switch (q.type) {
+            case Q_REEF: {
+                put(offshore(spot));
+                bool shark = false;
+                run(12.0f, [&]() { shark |= g.monsters[MON_MEGALODON].active; });
+                state = g.campQuests[0].state;
+                check(state == QS_DONE, TextFormat("...the wreck salvaged lying over it 10 s (state %d)%s", state, shark ? ", a shark came" : ""));
+                break;
+            }
+            case Q_ICEBOUND: {
+                put({spot.x + 1500.0f, spot.y});
+                if (RocksHeight(g.rocks, c.pos.x, c.pos.z) > -10.0f) put({spot.x, spot.y + 1500.0f});
+                run(1.0f, nullptr);
+                int w = -1;
+                for (int k : g.campQuests[0].ships) if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_ESCORTED) w = k;
+                check(w >= 0 && g.ships[w].struck, TextFormat("...the whaler found, fast in the ice (%s)", w >= 0 ? g.ships[w].name.c_str() : "-"));
+                if (w < 0) break;
+                const Vector3 wp = g.ships[w].pos;
+                put({wp.x + 45.0f, wp.z});
+                run(7.0f, nullptr);
+                check(g.campQuests[0].state == QS_RETURN, "...alongside her 6 s: her crew aboard");
+                break;
+            }
+            case Q_EVACUATE: case Q_KEEPER: {
+                int warns = 0, bombs = 0;
+                put(offshore(spot));
+                run(7.0f, [&]() { for (const GameEvent& e : g.events) if (e.type == EventType::CampEvent) { warns += e.b == EV_BOMBWARN; bombs += e.b == EV_BOMB; } });
+                state = g.campQuests[0].state;
+                if (q.type == Q_EVACUATE) check(warns > 0 && bombs > 0, TextFormat("...bombs falling round the beach (%d marked, %d landed)", warns, bombs));
+                else check(Vector2Distance(KeeperArea(q), spot) > 200.0f && Vector2Distance(KeeperArea(q), spot) < keeperArea, TextFormat("...the search area %.0f m off his light",
+                                                                                                                                 Vector2Distance(KeeperArea(q), spot)));
+                check(state == QS_RETURN, TextFormat("...%s aboard after 5 s off the beach", q.type == Q_EVACUATE ? "the villagers" : "the keeper"));
+                if (q.type == Q_EVACUATE) {  // (and too late: it blows without her)
+                    Quest late = q;
+                    late.state = QS_ACTIVE;
+                    late.deadline = g.campClock - 1.0f;
+                    g.campQuests[1] = late;
+                    run(0.5f, nullptr);
+                    check(g.campQuests[1].state == QS_FAILED, "...too late: it's blown");
+                }
+                break;
+            }
+            case Q_SMUGGLE: {
+                put({spot.x + 1600.0f, spot.y});
+                if (RocksHeight(g.rocks, c.pos.x, c.pos.z) > -10.0f) put({spot.x, spot.y + 1600.0f});
+                run(1.0f, nullptr);
+                int t = -1;
+                for (int k : g.campQuests[0].ships) if (k >= 0 && g.ships[k].active && g.ships[k].questRole == QR_CAPTOR) t = k;
+                check(t >= 0, "...the smuggler found");
+                if (t < 0) break;
+                const float d0 = Vector3Distance(g.ships[t].pos, c.pos);
+                put({g.ships[t].pos.x + 400.0f, g.ships[t].pos.z});
+                const float e0 = Vector3Distance(g.ships[t].pos, c.pos);
+                run(15.0f, nullptr);
+                const float e1 = Vector3Distance(g.ships[t].pos, c.pos);
+                check(e1 > e0 + 100.0f, TextFormat("...she runs (%.0f m -> %.0f m; found %.0f m off)", e0, e1, d0));
+                g.TestDamage(g.ships[t], g.ships[t].hp - g.ships[t].maxHp * 0.25f, me);
+                check(g.ships[t].struck, "...crippled: she strikes");
+                const Vector3 tp = g.ships[t].pos;
+                put({tp.x + 35.0f, tp.z});
+                run(5.0f, [&]() { const Vector3 p2 = g.ships[t].pos; c.pos = {p2.x + 35.0f, c.pos.y, p2.z}; });
+                check(g.campQuests[0].state == QS_DONE, "...alongside 4 s: the cargo seized");
+                break;
+            }
+        }
+    }
+    // the hazards
+    {
+        World g;
+        g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        g.campBotCaptain = true;
+        const int me = g.AddShip("captain", true, SC_FRIGATE);
+        g.campSpawn = 1e9f;
+        g.campEventT = 1e9f;
+        Ship& c = g.ships[me];
+        auto at = [&](int biome, Vector2& out) {
+            for (float r = 3000.0f; r < 10500.0f; r += 300.0f)
+                for (float a = 0.0f; a < 6.28f; a += 0.1f) {
+                    const Vector2 p = {sinf(a) * r, cosf(a) * r};
+                    if (BiomeAt(p.x, p.y) != biome || RocksHeight(g.rocks, p.x, p.y) > -40.0f) continue;
+                    bool far = true;
+                    for (const Harbour& h : g.harbours) far &= Vector2Distance({h.x, h.z}, p) > 2000.0f;
+                    if (far) { out = p; return true; }
+                }
+            return false;
+        };
+        Vector2 p;
+        // the Frozen North: ice on the rigging
+        if (at(FROZEN, p)) {
+            for (int i = 0; i < 60 * 300; ++i) { c.pos = {p.x, g.ocean.Height(p.x, p.y) + 1.0f, p.y}; c.vel = {}; c.hp = c.maxHp; g.Step(); g.events.clear(); }
+            check(g.campIce > 0.4f && g.campIce < 0.6f && fabsf(g.IceMul(c) - (1.0f - iceMax * g.campIce)) < 0.01f,
+                  TextFormat("the Frozen North: five minutes at sea, ice on the rigging %.0f%% (her speed x%.2f)", g.campIce * 100.0f, g.IceMul(c)));
+        }
+        // the Ember Reach: bombs round its islands
+        int warns = 0, bombs = 0;
+        bool near = false;
+        for (const Rock& r : g.rocks)
+            if (!r.stack && r.r > 60.0f && BiomeAt(r.x, r.z) == EMBER) {
+                for (float a = 0.0f; a < 6.28f && !near; a += 0.3f) {
+                    const Vector2 q = {r.x + sinf(a) * (r.r + 500.0f), r.z + cosf(a) * (r.r + 500.0f)};
+                    if (RocksHeight(g.rocks, q.x, q.y) < -30.0f) { p = q; near = true; }
+                }
+                if (near) break;
+            }
+        if (near) {
+            for (int i = 0; i < 60 * 40; ++i) {
+                c.pos = {p.x, g.ocean.Height(p.x, p.y) + 1.0f, p.y}; c.vel = {}; c.hp = c.maxHp; g.Step();
+                for (const GameEvent& e : g.events) if (e.type == EventType::CampEvent) { warns += e.b == EV_BOMBWARN; bombs += e.b == EV_BOMB; }
+                g.events.clear();
+            }
+            check(warns >= 3 && bombs >= 3, TextFormat("the Ember Reach: forty seconds off a volcano, %d bombs marked, %d landed", warns, bombs));
+        } else check(false, "the Ember Reach: an island to lie off");
+        // the Tropics: the hurricane's lightning
+        Vector2 hc;
+        float hr = 0.0f;
+        float clock = 0.0f;
+        for (; clock < 20000.0f; clock += 50.0f)
+            if (Hurricane(clock, hc, hr) && RocksHeight(g.rocks, hc.x, hc.y) < -40.0f) break;
+        g.campClock = clock;
+        int strikes = 0;
+        for (int i = 0; i < 60 * 40; ++i) {
+            c.pos = {hc.x, g.ocean.Height(hc.x, hc.y) + 1.0f, hc.y}; c.vel = {}; c.hp = c.maxHp; g.Step();
+            for (const GameEvent& e : g.events) strikes += e.type == EventType::BossSlam && e.flags == 4;
+            g.events.clear();
+        }
+        check(strikes >= 3, TextFormat("the Tropics: forty seconds in the hurricane (r %.0f m), %d lightning strikes", hr, strikes));
+        // the law: fire on a merchantman, and the navy's yours to fear
+        int trader = -1;
+        for (int i = 0; i < 60 * 30 && trader < 0; ++i) {
+            g.Step();
+            g.events.clear();
+            for (int k = 0; k < g.ShipCount(); ++k) if (g.ships[k].active && g.ships[k].npc == NPC_TRADER) trader = k;
+        }
+        if (trader >= 0) {
+            g.TestDamage(g.ships[trader], 5.0f, me);
+            g.Step();
+            int navyFoe = 0, navy = 0;
+            for (const Ship& s : g.ships) if (s.active && s.npc == NPC_NAVY) { ++navy; navyFoe += s.team == 1; }
+            check(g.campWanted > 250.0f && navyFoe == navy, TextFormat("the law: a merchantman fired on - wanted %.0f s, %d of %d navy ships after her", g.campWanted, navyFoe, navy));
+        } else check(false, "the law: a merchantman to fire on");
+    }
+    printf("regions: %d problem(s)\n", problems);
     return problems ? 1 : 0;
 }
 
@@ -2339,6 +2553,7 @@ int RunSimTest() {
     if (getenv("BS_PROGRESSTEST")) return ProgressTest();
     if (getenv("BS_REPTEST")) return RepTest();
     if (getenv("BS_SEAEVENTTEST")) return SeaEventTest();
+    if (getenv("BS_REGIONTEST")) return RegionTest();
     if (getenv("BS_CAREERTEST")) return CareerTest();
     if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();

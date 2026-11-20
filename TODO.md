@@ -924,7 +924,14 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   ships among its rewards; Trusted: parts; 5% a step on rewards and off prices; Friend: a fourth quest and its
   warships out to help in its waters (EV_HELP, the navy's bark; Hero: two). Port screen: the step, the discount and
   the next step; warm greetings (people.h kWarm). Feed: EV_REP past a step. Test: BS_REPTEST. docs/campaign.md.
-- [ ] Next: balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
+- [x] Variety pass (2026-11-20, after three 14 h bot careers, BS_CAREERTEST seeds 7-9 on this PC and ZWUUUP; the user:
+  "Do all 4"): each region its own quest and hazard (docs/campaign.md), half as many pirate bands and four new kinds of
+  sea event (rival, smuggler, survivors adrift, ghost ship), 6 lines a keeper and sea voice, bigger name pools, a
+  convoy that waits for her, the navy's help every 10 min at most, the tavern's word on the next story. Protocol 31.
+  Tests: BS_REGIONTEST, BS_SEAEVENTTEST. Careers found and fixed earlier: pirates dragging her out of her depth,
+  captors sunk with the captive, monsters at home, the home dread pirate.
+- [ ] Next: re-run the careers to see the repetition numbers move; balance (the Ember Reach's story pays ~7k), boss
+  fights at the region's time of day.
 - [x] Phase 3: fleet, officers, the shipwright (2026-11-19).
   - The port screen in three tabs: Harbour (repairs for the flagship and the fleet), Tavern (quests; officers looking
     for a berth, 1-2 a day; her officers), Shipwright (12 upgrades, each the Odyssey's upgrade at levels: timbers,

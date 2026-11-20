@@ -429,6 +429,14 @@ inline const Voice kVoices[] = {
     {"sea_captive", 225, 1.17f, 0.15f, 0.00f, 0}, {"sea_captive_m", 135, 1.03f, 0.15f, 0.05f, 0}, {"sea_pirate", 105, 0.95f, 0.15f, 0.35f, 2},
     {"dread_corwin", 120, 1.00f, 0.15f, 0.00f, 1}, {"dread_calypso", 195, 1.13f, 0.20f, 0.05f, 1}, {"dread_rime", 80, 0.90f, 0.40f, 0.45f, 3},
     {"dread_kate", 215, 1.15f, 0.12f, 0.20f, 1}, {"dread_widow", 185, 1.10f, 0.55f, 0.05f, 3},
+    {"merchant_1", 105, 0.94f, 0.15f, 0.30f, 1}, {"merchant_2", 200, 1.13f, 0.12f, 0.05f, 0}, {"merchant_3", 125, 1.00f, 0.10f, 0.05f, 0},
+    {"merchant_4", 210, 1.14f, 0.10f, 0.00f, 1}, {"navy_1", 110, 0.95f, 0.05f, 0.05f, 0}, {"navy_2", 225, 1.17f, 0.08f, 0.00f, 0},
+    {"navy_3", 85, 0.90f, 0.20f, 0.45f, 2}, {"castaway_1", 215, 1.15f, 0.30f, 0.10f, 1}, {"castaway_2", 90, 0.92f, 0.35f, 0.30f, 2},
+    {"castaway_3", 135, 1.02f, 0.20f, 0.10f, 1}, {"captive_f_1", 230, 1.18f, 0.10f, 0.00f, 0}, {"captive_f_2", 195, 1.12f, 0.15f, 0.00f, 2},
+    {"captive_f_3", 205, 1.12f, 0.12f, 0.15f, 1}, {"captive_m_1", 140, 1.03f, 0.10f, 0.00f, 0}, {"captive_m_2", 85, 0.90f, 0.10f, 0.40f, 2},
+    {"rival_1", 215, 1.15f, 0.12f, 0.05f, 1}, {"rival_2", 120, 0.98f, 0.10f, 0.15f, 1}, {"rival_3", 185, 1.10f, 0.15f, 0.10f, 0},
+    {"rival_4", 80, 0.88f, 0.15f, 0.45f, 1}, {"rival_5", 225, 1.16f, 0.12f, 0.05f, 1}, {"rival_6", 105, 0.94f, 0.10f, 0.10f, 0},
+    {"smuggler_1", 130, 1.00f, 0.25f, 0.15f, 1}, {"smuggler_2", 220, 1.16f, 0.12f, 0.00f, 1}, {"smuggler_3", 175, 1.08f, 0.30f, 0.30f, 2},
     {"fleet_1", 220, 1.17f, 0.10f, 0.00f, 1}, {"fleet_2", 105, 0.95f, 0.20f, 0.40f, 2}, {"fleet_3", 100, 0.94f, 0.08f, 0.05f, 0},
     {"fleet_4", 200, 1.13f, 0.15f, 0.00f, 0}, {"fleet_5", 90, 0.92f, 0.10f, 0.30f, 1}, {"fleet_6", 125, 1.00f, 0.20f, 0.20f, 0},
     {"pirate_1", 95, 0.93f, 0.15f, 0.40f, 2}, {"pirate_2", 215, 1.15f, 0.20f, 0.05f, 1}, {"pirate_3", 80, 0.88f, 0.10f, 0.45f, 2},
@@ -524,6 +532,31 @@ inline const char* const kPirateLines[PB_COUNT][6] = {
      "Keep firing, I need the practice!", "Your hull's leaking, Captain!", "Board her, lads! Board her!"},
     {"Curse you! Curse you to the depths!", "Abandon ship! Abandon ship!", "This isn't over! I'll be back!",
      "Davy Jones, here I come...", "My ship! My beautiful ship!", "You'll pay for this!"},
+};
+
+// The people at sea, more than one face each: whoever speaks for a merchantman, the navy, castaways and captives gets
+// one of these (by the ship's name, so the same ship keeps the same captain); name nullptr keeps the speaker's own
+struct FacePick { const char* id; const char* name; };
+inline const FacePick* FacePool(const std::string& base, int& n) {
+    static const FacePick merchant[] = {{"sea_merchant", nullptr}, {"merchant_1", nullptr}, {"merchant_2", nullptr}, {"merchant_3", nullptr}, {"merchant_4", nullptr}};
+    static const FacePick navy[] = {{"sea_navy", nullptr}, {"navy_1", "Captain Edmund Hale"}, {"navy_2", "Lieutenant Clara Vance"}, {"navy_3", "Admiral Sir Rufus Blackwood"}};
+    static const FacePick castaway[] = {{"sea_castaway", nullptr}, {"castaway_1", nullptr}, {"castaway_2", nullptr}, {"castaway_3", nullptr}};
+    static const FacePick woman[] = {{"sea_captive", nullptr}, {"captive_f_1", nullptr}, {"captive_f_2", nullptr}, {"captive_f_3", nullptr}};
+    static const FacePick man[] = {{"sea_captive_m", nullptr}, {"captive_m_1", nullptr}, {"captive_m_2", nullptr}};
+    static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr}, {"rival_5", nullptr}, {"rival_6", nullptr}};
+    static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}};
+    struct P { const char* base; const FacePick* f; int n; };
+    static const P k[] = {{"sea_merchant", merchant, 5}, {"sea_navy", navy, 4}, {"sea_castaway", castaway, 4}, {"sea_captive", woman, 4},
+                          {"sea_captive_m", man, 3}, {"rival", rival, 6}, {"smuggler", smuggler, 3}};
+    for (const P& p : k)
+        if (base == p.base) { n = p.n; return p.f; }
+    n = 0;
+    return nullptr;
+}
+inline const char* const kSmugglerLines[3] = {
+    "Nothing in the hold but fish, Captain! Smelly, honest fish!",
+    "Customs? Never heard of them. Good day to you!",
+    "You didn't see us. We didn't see you. Everyone's happy.",
 };
 
 // The sea's other people (campaign::SeaEvent): a rival captain's hail, survivors adrift calling, and their thanks

@@ -558,7 +558,19 @@ int UpgradeCost(int i, int level);  // the next level's price
 struct Recruit { uint8_t role = 0, level = 1; uint16_t seed = 0; int32_t cost = 0; };
 // Quests: taken in a port's tavern, three at once at most
 enum QuestType : uint8_t { Q_TREASURE = 0, Q_BOUNTY, Q_CONVOY, Q_ESCORT, Q_CARGO, Q_CASTAWAYS, Q_CAPTIVE, Q_TYPES,
-                           Q_LAIR = Q_TYPES };  // (a chain's end: sail into the boss's waters; never offered on its own)
+                           Q_LAIR = Q_TYPES,  // (a chain's end: sail into the boss's waters; never offered on its own)
+                           // each region's own work, offered only in its ports:
+                           Q_REEF,      // the Tropics: salvage off a reef - lie over the wreck while the divers work, and the sharks come
+                           Q_ICEBOUND,  // the Frozen North: a whaler fast in the ice - alongside, cut her free, her crew home
+                           Q_EVACUATE,  // the Ember Reach: an island about to blow - the villagers off the beach under the bombs, in time
+                           Q_KEEPER,    // the Fog Banks: the lost lighthouse keeper - only a search area; find the light yourself
+                           Q_SMUGGLE,   // the Temperate Isles: smugglers - she runs; cripple her, board her, seize the cargo
+                           Q_KINDS };
+inline int RegionQuest(int biome) {
+    static const uint8_t k[5] = {Q_SMUGGLE, Q_REEF, Q_ICEBOUND, Q_EVACUATE, Q_KEEPER};
+    return biome >= 0 && biome < 5 ? k[biome] : Q_TREASURE;
+}
+
 // Each region's story: three steps (quests of the kinds above), then its boss's lair
 constexpr int chainSteps = 3;
 inline constexpr uint8_t kChainStep[BIOMES][chainSteps] = {
@@ -600,7 +612,21 @@ enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SA
                           EV_ADRIFTSAVED,  // (...taken off: value = what they paid)
                           EV_ADRIFTLOST,   // (...lost)
                           EV_GHOST,        // (a ghost ship out of the fog: a = her ship)
-                          EV_PRICE };      // (a rival, a ghost or a smuggler sunk: value = the gold, flags = which (Npc))
+                          EV_PRICE,        // (a rival, a ghost or a smuggler sunk: value = the gold, flags = which (Npc))
+                          EV_BOMBWARN,     // (the Ember Reach: a volcanic bomb coming down here: value = s until it lands)
+                          EV_BOMB,         // (...landed)
+                          EV_WANTED };     // (she fired on a merchantman: the navy hunts her a while)
+// The Tropics' hurricane: a storm wandering the region on the campaign's clock (the same on every client): lightning
+// in it, the sea and sky wild. False when it has blown itself out (between storms)
+inline bool Hurricane(float clock, Vector2& c, float& r) {
+    const float t = clock / 700.0f;
+    const float life = 0.5f + 0.5f * sinf(clock / 2300.0f);  // (it comes and goes)
+    if (life < 0.25f) return false;
+    c = {sinf(t) * 5200.0f + sinf(t * 2.3f) * 1200.0f, -7600.0f + cosf(t * 0.7f) * 2100.0f};
+    r = 900.0f + 700.0f * life;
+    return true;
+}
+constexpr float iceMax = 0.25f;   // the Frozen North: ice on her rigging takes up to this much of her speed
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -637,6 +663,12 @@ struct Quest {
     int8_t part = -1;              // a ship's part it pays as well (campaign::Part), -1 none
     int8_t ship = -1;              // a ship for her fleet it pays as well (a class), -1 none
 };
+
+inline Vector2 KeeperArea(const Quest& q) {  // the Fog Banks' keeper: the search area's middle, up to 550 m off the true spot
+    const float a = (q.seed % 628) / 100.0f, r = 250.0f + (q.seed / 628 % 30) * 10.0f;
+    return {q.x + sinf(a) * r, q.z + cosf(a) * r};
+}
+constexpr float keeperArea = 800.0f;  // m: its radius (the light shows within 350 m)
 
 namespace strait {
 constexpr float startZ = -1000.0f;  // the start line (the grid lines up behind it)
@@ -1168,6 +1200,13 @@ public:
     float campHelpT = 0.0f;                  // s before a port's warships come out to help her again
     int16_t campAdrift = -1;                 // survivors adrift (their boat), how long they've waited, how long she's lain alongside
     float campAdriftT = 0.0f, campAdriftHold = 0.0f;
+    // the regions' own hazards
+    float campIce = 0.0f;                    // the Frozen North: ice on her rigging (0-1: campaign::iceMax of her speed)
+    float campWanted = 0.0f;                 // s she's wanted (fired on a merchantman): the navy hunts her
+    struct Bomb { Vector2 p; float t; };
+    std::vector<Bomb> campBombs;             // the Ember Reach: volcanic bombs coming down
+    float campBombT = 0.0f, campStormT = 0.0f;
+    float IceMul(const Ship& s) const;       // (her speed, the ice on her rigging)
     int NextPart(float level, bool line);  // the part a reward brings: a frigate's she lacks first (or a line's, line), -1 none
     void GivePart(int part, Vector3 at);         // into her hold (or its worth in gold, if she has it)
     void JoinFleet(int cls, Vector3 at);         // a ship comes to sail with her (a reward: there's no buying them; gold, if the fleet's full)

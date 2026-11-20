@@ -967,7 +967,9 @@ bool ExportAll(const char* dir) {
 // ---- music -----------------------------------------------------------------------------------
 namespace music {
 namespace {
-const char* const kTrackNames[Count] = {"menu", "sail", "battle", "boss", "victory", "defeat", "port"};
+const char* const kTrackNames[Count] = {"menu", "sail", "battle", "boss", "victory", "defeat", "port",
+                                        "sea_temperate", "sea_tropics", "sea_frozen", "sea_ember", "sea_fog",
+                                        "boss_fortress", "boss_kraken", "boss_serpent", "boss_ironclad", "boss_dutchman", "boss_final"};
 std::vector<std::string> files[Count];
 struct Voice {
     Music m{};
@@ -980,7 +982,7 @@ Track want = None;     // the state the game is in
 Track acted = None;    // ...the one last acted on
 Track sounding = None; // the track playing after the fallbacks (what's fading in)
 float vol = 0.6f, duck = 1.0f, duckNow = 1.0f;
-int lastTake[Count] = {-1, -1, -1, -1, -1, -1, -1};
+int lastTake[Count];  // (Init: -1)
 bool logOn = false;
 
 bool Stinger(Track t) { return t == Victory || t == Defeat; }
@@ -995,6 +997,8 @@ Track Resolve(Track t) {  // this state's music, or the one it borrows
             case Menu: t = Sail; break;
             case Port: t = files[Menu].empty() ? Sail : Menu; break;  // (ashore: the menu's shanty, or the sea's)
             case Sail: t = files[Menu].empty() ? None : Menu; break;
+            case SeaTemperate: case SeaTropics: case SeaFrozen: case SeaEmber: case SeaFog: t = Sail; break;
+            case BossFortress: case BossKraken: case BossSerpent: case BossIronclad: case BossDutchman: case BossFinal: t = Boss; break;
             default: t = None; break;
         }
     }
@@ -1042,6 +1046,17 @@ void Init(const char* dir) {
         }
         found += (int)files[t].size();
     }
+    for (int& k : lastTake) k = -1;
+    // a region's sea: its own takes, and those of the sea's that suit it (a boss: its own, and the bosses')
+    static const int kSail[5][4] = {{1, 2, 3, 4}, {3, 4, 1, 0}, {5, 6, 0, 0}, {5, 6, 0, 0}, {5, 6, 0, 0}};  // (sail takes, 1-based; 0: none)
+    for (int r = 0; r < 5; ++r) {
+        std::vector<std::string>& f = files[SeaTemperate + r];
+        if (f.empty()) continue;  // (none of its own: it borrows the sea's, all of them)
+        for (int k : kSail[r])
+            if (k > 0 && k <= (int)files[Sail].size()) f.push_back(files[Sail][k - 1]);
+    }
+    for (int b = BossFortress; b <= BossFinal; ++b)
+        if (!files[b].empty()) for (const std::string& s : files[Boss]) files[b].push_back(s);
     // stream buffers big enough to ride out a slow frame (a level loading) without a stutter
     SetAudioStreamBufferSizeDefault(8192);
     printf("[music] %d track%s in %s\n", found, found == 1 ? "" : "s", d.c_str());

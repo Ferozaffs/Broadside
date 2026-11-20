@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 30;  // 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 31;  // 31: the regions' own quests and hazards, the sea's new people; 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -285,6 +285,8 @@ struct Snapshot {
     uint8_t campParts = 0, campHulls = 1;  // her ship's parts, the flagships she owns (bits)
     float campHullFrac[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};
     int16_t campRep[campaign::kPorts] = {};  // what each port thinks of her
+    float campIce = 0.0f;    // the Frozen North: ice on her rigging (0-1)
+    float campWanted = 0.0f; // s she's wanted by the navy
     bool odyssey = false;                 // the Odyssey: the run
     uint16_t odRound = 1, odLast = 0, odBest = 0, odReached = 0;
     uint32_t odSeed = 1;
@@ -510,6 +512,8 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(world.campHulls);
         for (float h : world.campHullFrac) w.Put((uint8_t)(Clamp(h, 0.0f, 1.0f) * 255.0f));
         for (int16_t v : world.campRep) w.Put(v);
+        w.Put((uint8_t)(Clamp(world.campIce, 0.0f, 1.0f) * 255.0f));
+        w.Put((uint16_t)Clamp(world.campWanted, 0.0f, 65535.0f));
         const bool offers = world.campDocked >= 0 && world.campOffersPort == world.campDocked;
         w.Put((uint8_t)(offers ? world.campOffers.size() : 0));
         if (offers)
@@ -741,6 +745,8 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.campHulls = r.Get<uint8_t>();
         for (float& h : s.campHullFrac) h = r.Get<uint8_t>() / 255.0f;
         for (int16_t& v : s.campRep) v = r.Get<int16_t>();
+        s.campIce = r.Get<uint8_t>() / 255.0f;
+        s.campWanted = (float)r.Get<uint16_t>();
         const uint8_t no = r.Get<uint8_t>();
         s.campOffers.clear();
         for (int k = 0; k < no && r.ok && k < 8; ++k) s.campOffers.push_back(GetQuest(r));

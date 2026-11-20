@@ -403,6 +403,7 @@ public:
     int16_t campDread = -1;          // (the snapshot's: the dread pirate hunting us)
     uint8_t campPartsC = 0, campHullsC = 1;  // (the snapshot's: her ship's parts, the flagships she owns, how sound the laid-up ones are)
     int16_t campRepC[campaign::kPorts] = {};  // (the snapshot's: what each port thinks of her)
+    float campIceC = 0.0f, campWantedC = 0.0f; // (...the ice on her rigging, how long the navy hunts her)
     float campHullFracC[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};
     uint8_t campUpgC[campaign::kUpgradeCount] = {};  // (the snapshot's: her upgrades, officers, fleet, the tavern's recruits)
     uint8_t campOfficerC[campaign::OFFICERS] = {};
@@ -1339,6 +1340,9 @@ void Game::Interpolate() {
             campHullsC = sn.campHulls;
             for (int k = 0; k < SC_PLAYABLE; ++k) campHullFracC[k] = sn.campHullFrac[k];
             for (int k = 0; k < campaign::kPorts; ++k) campRepC[k] = sn.campRep[k];
+            campIceC = sn.campIce;
+            campWantedC = sn.campWanted;
+            pred.campIce = campIceC;  // (her speed, predicted as the server has it)
         }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
@@ -2030,6 +2034,21 @@ void Game::UpdateSound(float dt, bool menu) {
         if (bossView.hasBoss && bossView.bossState != 2) mt = sfx::music::Boss;
         else if (GetTime() - combatAt < 14.0) mt = sfx::music::Battle;
         else if (campaign && portOpen) mt = sfx::music::Port;  // (ashore: the tavern's songs)
+        if (campaign && mt == sfx::music::Sail && myId >= 0 && view[myId].present) {  // (each region's own sea)
+            const int b = campaign::BiomeAt(view[myId].s.pos.x, view[myId].s.pos.z);
+            mt = (sfx::music::Track)(sfx::music::SeaTemperate + std::clamp(b, 0, 4));
+        }
+        if (mt == sfx::music::Boss) {  // (each boss its own theme: the regions' bosses, and the last story's)
+            switch (bossView.bossKind) {
+                case BOSS_FORTRESS: mt = sfx::music::BossFortress; break;
+                case BOSS_KRAKEN: mt = sfx::music::BossKraken; break;
+                case BOSS_SERPENT: mt = sfx::music::BossSerpent; break;
+                case BOSS_IRONCLAD: mt = sfx::music::BossIronclad; break;
+                case BOSS_DUTCHMAN: mt = sfx::music::BossDutchman; break;
+                case BOSS_ARMADA: case BOSS_STORM: mt = sfx::music::BossFinal; break;
+                default: break;
+            }
+        }
     }
     sfx::music::Set(mt);
     sfx::music::SetDuck(a.underwater > 0.5f ? 0.45f : paused ? 0.6f : 1.0f);
@@ -3307,11 +3326,13 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_RIVAL:
                     Notice("A RIVAL CAPTAIN", ui::kRed, 3.0f);
                     Feed3(NameOf(e.a), "  has come looking for you", "", ui::kRed, ui::kText);
-                    Say(people::PirateFace(e.flags), NameOf(e.a), "A rival captain", people::kRivalLines[GetRandomValue(0, 5)]);
+                    Say(Portrait(TextFormat("rival_%d", e.flags % 6 + 1)) ? "rival" : people::PirateFace(e.flags), NameOf(e.a), "A rival captain",
+                        people::kRivalLines[GetRandomValue(0, 5)]);
                     break;
                 case EV_SMUGGLER:
                     Feed3(NameOf(e.a), "  runs for port, low in the water: contraband. Sink her for it", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 25, 0}), "A SMUGGLER", ui::kGold, 4.0f});
+                    if (Portrait("smuggler_1")) Say("smuggler", NameOf(e.a), "Running contraband", people::kSmugglerLines[GetRandomValue(0, 2)]);
                     break;
                 case EV_ADRIFT:
                     Feed3("SURVIVORS", "  adrift in a crippled boat: come alongside, slowly", "", ui::kGold, ui::kText);
@@ -3332,6 +3353,18 @@ void Game::PlayEvent(const GameEvent& e) {
                     Feed3(NameOf(e.a), e.flags == NPC_SMUGGLER ? "  sunk: her contraband" : e.flags == NPC_GHOST ? "  sunk: back to the deep" : "  sunk: the rivalry's over",
                           gold, ui::kGold, ui::kGold);
                     sfx::PlayFlat(sfx::Treasure, 0.9f, 0.9f);
+                    break;
+                case EV_BOMBWARN: mortarMarks.push_back({e.pos, GetTime(), e.value, 24.0f}); break;
+                case EV_BOMB: {
+                    fx.Explosion(e.pos, {0, 1, 0}, 1.8f);
+                    sfx::Play(sfx::Hit, e.pos, 1.0f, 0.7f);
+                    AddFoam(e.pos, 2.0f, 22.0f, 4.0f, 1.0f);
+                    if (myId >= 0 && myId < NumShips() && view[myId].present && Vector3Distance(view[myId].s.pos, e.pos) < 120.0f) shake = fmaxf(shake, 0.7f);
+                    break;
+                }
+                case EV_WANTED:
+                    Notice("WANTED: THE NAVY HUNTS YOU", ui::kRed, 4.0f);
+                    Feed3("WANTED", "  you fired on a merchantman: the navy hunts you for five minutes", "", ui::kRed, ui::kText);
                     break;
                 case EV_LOST: Feed3("LOST", "  the merchantman went down", "", ui::kRed, ui::kText); seaDistress = -1; break;
                 case EV_DREAD:
@@ -4392,7 +4425,15 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
         Vector3 tint = {0, 0, 0};
         static const Vector3 kTint[campaign::BIOMES] = {{0.95f, 1.0f, 1.08f}, {0.9f, 1.0f, 1.05f}, {1.1f, 1.12f, 1.18f}, {1.15f, 0.8f, 0.6f}, {0.85f, 0.95f, 0.92f}};
         for (int b = 0; b < campaign::BIOMES; ++b) {
-            const float s = RegionSquall(b, campClock) * regionW[b];
+            float s = RegionSquall(b, campClock) * regionW[b];
+            if (b == campaign::TROPICS) {  // (the hurricane: wild where it is)
+                Vector2 hc;
+                float hr;
+                if (campaign::Hurricane(campClock, hc, hr)) {
+                    const float d = Vector2Distance(hc, {rv.pos.x, rv.pos.z});
+                    s = fmaxf(s, Clamp((hr + 600.0f - d) / 900.0f, 0.0f, 1.0f) * regionW[b]);
+                }
+            }
             g += s;
             rain += s * kRain[b];
             if (b == campaign::FROZEN) snow += s * 1.1f, fogUp += s * 2.2f;  // (a white-out)
@@ -4964,6 +5005,10 @@ void Game::RenderWorld(float dt, bool menu) {
         DrawCurses();
         DrawGhostShip(dt);
         DrawSearchlight(cam);
+        DrawStormGeometry(cam);
+    }
+    if (!menu && curMode == MODE_CAMPAIGN) {  // (the Ember Reach's bombs marked on the water; the hurricane's lightning)
+        DrawMortarMarks();
         DrawStormGeometry(cam);
     }
     if (!menu && !getenv("BS_NOHUD")) DrawFleetRings();  // (film: none)
@@ -8519,6 +8564,11 @@ static std::string QuestTitle(const Quest& q) {
         case Q_CASTAWAYS: return "Smoke on the shore";
         case Q_CAPTIVE: { std::string c = CaptiveName(q.seed); c[0] = (char)toupper(c[0]); return c + ", taken"; }
         case Q_LAIR: return "The lair";
+        case Q_REEF: return "Salvage off the reef";
+        case Q_ICEBOUND: return "The whaler " + MerchantName(q.seed) + ", fast in the ice";
+        case Q_EVACUATE: return "Before the mountain blows";
+        case Q_KEEPER: return "The lost lighthouse keeper";
+        case Q_SMUGGLE: return "Smugglers: " + PirateName(q.seed);
     }
     return "A quest";
 }
@@ -8555,6 +8605,14 @@ static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) {
                                             region, where.c_str());
         case Q_CAPTIVE: return TextFormat("%s is held aboard %s's ship, last seen %s of here. Cripple it without sinking it, come alongside to free them, and bring them back here.",
                                           CaptiveName(q.seed), PirateName(q.seed).c_str(), where.c_str());
+        case Q_REEF: return TextFormat("A galleon tore her bottom out on a reef %s. Lie still over the wreck while the divers bring up her silver - and watch for sharks.", where.c_str());
+        case Q_ICEBOUND: return TextFormat("The whaler %s is fast in the ice %s, her crew starving. Push through the floes, lie alongside her and take them off, then bring them to any port.",
+                                           MerchantName(q.seed).c_str(), where.c_str());
+        case Q_EVACUATE: return TextFormat("The mountain on an island %s is waking. Take the villagers off the beach before it blows, %d minutes at most - the bombs are already falling.",
+                                           where.c_str(), (int)ceilf(q.deadline / 60.0f));
+        case Q_KEEPER: return TextFormat("The light on a rock somewhere %s went out three nights ago. Search the fog for it, find the keeper, and bring him to any port.", where.c_str());
+        case Q_SMUGGLE: return TextFormat("%s runs contraband past the customs men, last seen %s. She won't fight: she'll run. Cripple her, come alongside and seize the cargo.",
+                                          PirateName(q.seed).c_str(), where.c_str());
     }
     return "";
 }
@@ -8589,7 +8647,7 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
             if (k >= 0 && k < NumShips() && view[k].present && (view[k].s.flags & SF_ALIVE)) {
                 if (role == 0) return k;
                 if (q.type == Q_BOUNTY && role == QR_TARGET && view[k].s.cls != SC_CUTTER) return k;
-                if (q.type == Q_CAPTIVE || q.type == Q_ESCORT) return k;
+                if (q.type == Q_CAPTIVE || q.type == Q_ESCORT || q.type == Q_SMUGGLE || q.type == Q_ICEBOUND) return k;
             }
         return -1;
     };
@@ -8639,6 +8697,45 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
             at = Vector3Add(view[k].s.pos, {0, 30, 0});
             const float d = Vector3Distance(view[k].s.pos, rv.pos);
             what = d > 650.0f ? TextFormat("The %s waits for you", MerchantName(q.seed).c_str()) : TextFormat("See the %s into %s", MerchantName(q.seed).c_str(), PortName(q.to));
+            return true;
+        }
+        case Q_REEF: what = q.t > 0.05f ? TextFormat("The divers are down... %d s", (int)ceilf(fmaxf(0.0f, 10.0f - q.t))) : "Heave to over the wreck on the reef"; return true;
+        case Q_ICEBOUND: case Q_EVACUATE: case Q_KEEPER: {
+            if (q.state == QS_RETURN) {
+                float best = 1e9f;
+                for (int p = 0; p < (int)hs.size(); ++p) {
+                    const float d = Vector2Distance({hs[p].x, hs[p].z}, {rv.pos.x, rv.pos.z});
+                    if (d < best) { best = d; at = port(p); }
+                }
+                what = q.type == Q_ICEBOUND ? "Bring the whalers to any port" : q.type == Q_EVACUATE ? "Bring the villagers to any port" : "Bring the keeper to any port";
+                return true;
+            }
+            if (q.type == Q_KEEPER) {  // (only the search area, until she's near enough to see his light)
+                const Vector2 c = KeeperArea(q);
+                const bool seen = Vector2Distance({rv.pos.x, rv.pos.z}, {q.x, q.z}) < 350.0f;
+                at = seen ? Vector3{q.x, 6.0f, q.z} : Vector3{c.x, 6.0f, c.y};
+                what = seen ? (q.t > 0.05f ? TextFormat("Taking him off... %d s", (int)ceilf(fmaxf(0.0f, 5.0f - q.t))) : "There's his light: heave to off the rock")
+                            : "Search the fog for the light (somewhere about here)";
+                return true;
+            }
+            if (q.type == Q_EVACUATE) {
+                const float left = q.deadline - campClock;
+                what = q.t > 0.05f ? TextFormat("Taking them off... %d s", (int)ceilf(fmaxf(0.0f, 5.0f - q.t)))
+                                   : TextFormat("Heave to off the beach   %s   %d:%02d before it blows", "\xC2\xB7", (int)fmaxf(0.0f, left) / 60, (int)fmaxf(0.0f, left) % 60);
+                return true;
+            }
+            const int k = shipOf(QR_ESCORTED);
+            if (k >= 0) at = Vector3Add(view[k].s.pos, {0, 20, 0});
+            what = q.t > 0.05f ? TextFormat("Taking her crew off... %d s", (int)ceilf(fmaxf(0.0f, 6.0f - q.t))) : "Push through the ice: lie alongside the whaler";
+            return true;
+        }
+        case Q_SMUGGLE: {
+            const int k = shipOf(QR_CAPTOR);
+            if (k >= 0) {
+                at = Vector3Add(view[k].s.pos, {0, 30, 0});
+                what = (q.flags & QF_STRUCK) ? (q.t > 0.05f ? TextFormat("Seizing the cargo... %d s", (int)ceilf(fmaxf(0.0f, 4.0f - q.t))) : "She's struck: come alongside")
+                                             : "Run down " + PirateName(q.seed) + " and cripple her";
+            } else what = "Find " + PirateName(q.seed) + " (last seen here)";
             return true;
         }
         case Q_LAIR:
@@ -8787,6 +8884,11 @@ void Game::DrawCampaignHud(float W, float H) {
     else if (campFast) { sub = "FAST-SAIL   \xC2\xB7   F: OFF"; sc = kGreen; }
     else if (campWantFast) { sub = "FAST-SAIL: ENEMY NEAR"; sc = kRed; }
     else sub = "TAB: THE CHART   \xC2\xB7   F: FAST-SAIL";
+    if (campWantedC > 0.0f && campDocked < 0) {
+        sub = TextFormat("WANTED   \xC2\xB7   THE NAVY HUNTS YOU   %d:%02d", (int)campWantedC / 60, (int)campWantedC % 60);
+        sc = kRed;
+    }
+    if (campIceC > 0.04f) sub += TextFormat("   \xC2\xB7   ICE ON THE RIGGING  -%d%%", (int)roundf(campIceC * campaign::iceMax * 100.0f));
     const Vector2 ms = Measure(sub.c_str(), 13, true);
     Panel({W * 0.5f - ms.x * 0.5f - 12, r.y + r.height + 4, ms.x + 24, 20}, A(kPanel, 0.75f), 6);
     Text(sub.c_str(), W * 0.5f, r.y + r.height + 6, 13, sc, true, Center);
@@ -8948,8 +9050,23 @@ void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, 
 }
 
 void Game::Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line) {
-    seaSay = {id, name, title, line, GetTime()};
-    people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 10.0));
+    // (the people at sea have more than one face: one of the kind's, by the ship's name - the same ship, the same
+    // captain - and only one that's been imported; the voice goes with the face)
+    std::string face = id, who = name;
+    int n = 0;
+    if (const people::FacePick* pool = people::FacePool(id, n)) {
+        const uint32_t h = (uint32_t)std::hash<std::string>{}(name + "|" + title) * 2654435761u;
+        for (int k = 0; k < n; ++k) {
+            const people::FacePick& f = pool[(h + (uint32_t)k) % (uint32_t)n];
+            if (Portrait(f.id)) {
+                face = f.id;
+                if (f.name) who = f.name;
+                break;
+            }
+        }
+    }
+    seaSay = {face, who, title, line, GetTime()};
+    people::Voiced(face.c_str(), line.c_str(), (uint32_t)(GetTime() * 10.0));
 }
 
 // At sea, whoever's talking: low on the left, over the sea, for a few seconds
