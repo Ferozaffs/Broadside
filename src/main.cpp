@@ -402,6 +402,7 @@ public:
     void DrawSeaLife(float W, float H);
     int16_t campDread = -1;          // (the snapshot's: the dread pirate hunting us)
     uint8_t campPartsC = 0, campHullsC = 1;  // (the snapshot's: her ship's parts, the flagships she owns, how sound the laid-up ones are)
+    int16_t campRepC[campaign::kPorts] = {};  // (the snapshot's: what each port thinks of her)
     float campHullFracC[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};
     uint8_t campUpgC[campaign::kUpgradeCount] = {};  // (the snapshot's: her upgrades, officers, fleet, the tavern's recruits)
     uint8_t campOfficerC[campaign::OFFICERS] = {};
@@ -1337,6 +1338,7 @@ void Game::Interpolate() {
             campPartsC = sn.campParts;
             campHullsC = sn.campHulls;
             for (int k = 0; k < SC_PLAYABLE; ++k) campHullFracC[k] = sn.campHullFrac[k];
+            for (int k = 0; k < campaign::kPorts; ++k) campRepC[k] = sn.campRep[k];
         }
         odSeed = sn.odSeed;
         odKind = sn.odKind;
@@ -3283,6 +3285,25 @@ void Game::PlayEvent(const GameEvent& e) {
                     break;
                 case EV_SAVED: { const people::SeaVoice& v = people::kSea[people::ST_SAVED]; Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]); }
                     Feed3("SAVED", "  the merchantman sends her thanks", gold, ui::kGreen, ui::kGold); seaDistress = -1; sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
+                case EV_REP: {  // (a port thinks better of her, or worse, past a step)
+                    const int p = e.a % kPorts, t = e.flags % repTiers;
+                    const bool up = e.value > 0.0f;
+                    const std::string nm = t >= 3 ? std::string(t == 3 ? "a friend of " : "the hero of ") + PortName(p) : std::string(t == 0 ? "a stranger" : t == 1 ? "known" : "trusted");
+                    Feed3(PortName(p), up ? "  now counts you " + nm : "  thinks less of you: " + nm, "", up ? ui::kGreen : ui::kRed, ui::kText);
+                    if (up) {
+                        std::string n = t >= 3 ? nm : std::string(PortName(p)) + ": " + nm;
+                        for (char& c : n) c = (char)toupper((unsigned char)c);
+                        Notice(n, ui::kGreen, 3.5f);
+                        sfx::PlayFlat(sfx::Treasure, 0.8f, 1.2f);
+                    }
+                    break;
+                }
+                case EV_HELP: {  // (a port's warships come out to help her)
+                    const int p = e.flags % kPorts;
+                    Feed3(PortName(p), "  sends its warships out to help you", "", ui::kGreen, ui::kText);
+                    AddBark("sea_navy", NameOf(e.a), TextFormat("Compliments of %s, Captain! We'll see these villains off.", PortName(p)), ui::kGreen);
+                    break;
+                }
                 case EV_LOST: Feed3("LOST", "  the merchantman went down", "", ui::kRed, ui::kText); seaDistress = -1; break;
                 case EV_DREAD:
                     Say(people::kDread[e.flags % BIOMES].id, DreadName(e.flags), TextFormat("Dread pirate of %s", kBiomeNames[e.flags % BIOMES]), people::kDread[e.flags % BIOMES].line);
@@ -8935,36 +8956,35 @@ void Game::DrawBarks(float W, float H) {
     using namespace ui;
     const double now = GetTime();
     while (!barks.empty() && now - barks.front().at > 5.5) barks.pop_front();
-    float y = H * 0.3f;
-    const float bw = fminf(400.0f, W * 0.34f), x = W - bw - 16.0f;
+    // each: their head and shoulders at the screen's edge, cut out (no frame), and their words on a small plate beside
+    // them, only as big as the words
+    float y = H * 0.1f;  // (three fit above the controls card at the bottom right)
+    const float face = fminf(116.0f, H * 0.15f), wrapW = fminf(300.0f, W * 0.25f);
     for (const Bark& b : barks) {
         const float age = (float)(now - b.at), a = Clamp(age / 0.2f, 0.0f, 1.0f) * Clamp((5.5f - age) / 0.5f, 0.0f, 1.0f);
         const float slide = (1.0f - Clamp(age / 0.2f, 0.0f, 1.0f)) * 30.0f;
-        const std::vector<std::string> lines = Wrap(b.line, 13, bw - 96.0f);
-        const float h = fmaxf(66.0f, 30.0f + 17.0f * lines.size());
-        const Rectangle r = {x + slide, y, bw, h};
-        Panel(r, A({10, 14, 22, 230}, a), 8);
-        DrawRectangleRec({r.x, r.y + 8, 3, h - 16}, A(b.color, 0.9f * a));
-        // the face: the top of the portrait (her head and shoulders), in a frame
-        const Rectangle face = {r.x + 10, r.y + 7, 52, 52};
-        DrawRectangleRec(face, A({30, 34, 40, 255}, a));
+        const std::vector<std::string> lines = Wrap(b.line, 14, wrapW);
+        float tw = Measure(b.name.c_str(), 13, true).x;
+        for (const std::string& l : lines) tw = fmaxf(tw, Measure(l.c_str(), 14).x);
+        const float fx = W - 12.0f - face + slide;
         if (const Texture2D* tex = Portrait(b.id)) {
-            const float s = tex->width * 0.62f;
-            BeginScissorMode((int)(face.x * rv.uiScale), (int)(face.y * rv.uiScale), (int)(face.width * rv.uiScale), (int)(face.height * rv.uiScale));
-            DrawTexturePro(*tex, {tex->width * 0.19f, 0.0f, s, s}, face, {0, 0}, 0.0f, Fade(WHITE, a));
-            EndScissorMode();
-        }
-        DrawRectangleLinesEx(face, 1.0f, A(b.color, 0.6f * a));
-        Text(b.name.c_str(), r.x + 74, r.y + 7, 13, A(b.color, a), true);
+            const float s = tex->width * 0.64f;
+            DrawTexturePro(*tex, {tex->width * 0.18f, 0.0f, s, s}, {fx, y, face, face}, {0, 0}, 0.0f, Fade(WHITE, a));
+        } else DrawRectangleRec({fx + face * 0.2f, y + face * 0.2f, face * 0.6f, face * 0.6f}, A({30, 34, 40, 200}, a));
+        DrawRectangleRec({fx + face * 0.12f, y + face - 3.0f, face * 0.76f, 3.0f}, A(b.color, 0.85f * a));  // (whose side they're on)
+        const float th = 30.0f + 19.0f * lines.size(), bw = tw + 26.0f;
+        const float bx = fx - bw - 4.0f, by = fmaxf(y, y + face * 0.55f - th * 0.5f);
+        Panel({bx, by, bw, th}, A({8, 12, 20, 165}, a), 8);
+        Text(b.name.c_str(), bx + 13, by + 7, 13, A(b.color, a), true);
         int left = (int)(age * 80.0f) + 1;
-        float ty = r.y + 26;
+        float ty = by + 26;
         for (const std::string& l : lines) {
             if (left <= 0) break;
-            Text(l.substr(0, (size_t)std::min<int>((int)l.size(), left)).c_str(), r.x + 74, ty, 13, A(kText, a), false);
+            Text(l.substr(0, (size_t)std::min<int>((int)l.size(), left)).c_str(), bx + 13, ty, 14, A(kText, a), false);
             left -= (int)l.size() + 1;
-            ty += 17;
+            ty += 19;
         }
-        y += h + 8;
+        y += face + 4.0f;
     }
 }
 
@@ -9010,6 +9030,7 @@ void Game::DrawPort(float W, float H) {
     using namespace campaign;
     if (campDocked < 0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
+    const int repV = campRepC[campDocked % kPorts], repT = RepTier(repV);  // (what this port thinks of her: its prices, its greetings)
     DrawRectangle(0, 0, (int)W, (int)H, {3, 6, 11, 195});  // (the sea behind, dimmed evenly edge to edge)
     const float pw = 760, ph = fminf(H - 50.0f, 680.0f);
     // the panel sits to the right: on the left, whoever keeps this shop (their portrait, and what they have to say)
@@ -9023,6 +9044,13 @@ void Game::DrawPort(float W, float H) {
         const bool special = portTab == 0 ? sore : portTab == 1 ? campOffers.empty() : campGold < 150;
         const int day = (int)(campClock / dayLength);
         const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 3];
+        static std::string warm;
+        if (!special && repT >= 2 && (day + portTab) % 3 != 0) {  // (a port that thinks well of her: a warmer word, two days in three)
+            warm = people::kWarm[portTab % people::SHOPS][repT - 2][(day + campDocked * 5 + portTab) % 3];
+            const size_t at = warm.find("%s");
+            if (at != std::string::npos) warm.replace(at, 2, NameOf(myId));
+            line = warm.c_str();
+        }
         if (portTab == 1)  // (the last story on offer: the black sails are all the talk)
             for (const Quest& o : campOffers)
                 if (o.chain == FINAL + 1 && o.step == 0) line = people::kBlackSails[campDocked % kPorts];
@@ -9044,9 +9072,16 @@ void Game::DrawPort(float W, float H) {
     const int b = PortBiome(campDocked);
     Text(PortName(campDocked), r.x + 28, r.y + 20, 34, kText, true);
     Label(TextFormat("%s   \xC2\xB7   %s GOLD", TextToUpper(kBiomeNames[b]), Thousands(campGold).c_str()), r.x + 30, r.y + 62, 12, kGold);
+    {  // what this port thinks of her: its step, what that's worth, how far to the next
+        std::string s = repT >= 3 ? std::string(repT == 3 ? "Friend of " : "Hero of ") + PortName(campDocked) : std::string(kRepNames[repT]);
+        if (repT > 0) s += TextFormat("   \xC2\xB7   %d%% off", 5 * repT);
+        if (repT + 1 < repTiers) s += TextFormat("   \xC2\xB7   %d of %d to %s", std::max(0, (int)repV), kRepAt[repT + 1], repT + 1 >= 3 ? (repT + 1 == 3 ? "friend" : "hero") : kRepNames[repT + 1]);
+        for (char& c : s) c = (char)toupper((unsigned char)c);
+        Label(s.c_str(), r.x + 30, r.y + 79, 11, repT >= 2 ? kGreen : repT == 1 ? kText : kDim);
+    }
     static const char* const kTabs[3] = {"Harbour", "Tavern", "Shipwright"};
     Segmented({r.x + pw - 30 - 360, r.y + 24, 360, 36}, kTabs, 3, portTab);
-    float y = r.y + 96;
+    float y = r.y + 104;  // (below the port's name, its region and purse, and what it thinks of her)
     const float x0 = r.x + 30, w0 = pw - 60;
     auto shipLine = [&](const char* who, int cls, float frac, float yy) {
         Text(who, x0, yy, 16, kText, true);
@@ -9073,7 +9108,7 @@ void Game::DrawPort(float W, float H) {
             Text("No ships with you yet: take a struck pirate as a prize, or win one on a quest.", x0, y + 2, 13, kDim, false);
             y += 24;
         }
-        const int cost = (int)ceilf(missing * repairPerHp);
+        const int cost = (int)ceilf(missing * repairPerHp * RepCut(repT));
         const bool damaged = cost > 0;
         const char* rep = !damaged ? "Every hull is sound" : campGold >= cost ? TextFormat("Repair them all  \xC2\xB7  %s gold", Thousands(cost).c_str())
                                                           : TextFormat("Repair what %s gold buys", Thousands(campGold).c_str());
@@ -9115,7 +9150,7 @@ void Game::DrawPort(float W, float H) {
             } else if (q.ship >= 0 && q.ship < SC_COUNT) {  // (or a ship for her fleet)
                 Label(TextFormat("+ A %s", TextToUpper(ClassOf(q.ship).name)), x0 + w0 - 140, y + 20, 10, kGreen, Right);
             }
-            const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 13, w0 - 170);
+            const std::vector<std::string> lines = Wrap(QuestBrief(q, pred.harbours), 13, w0 - ((q.part >= 0 || q.ship >= 0) ? 240 : 170));  // (clear of a part's or a ship's tag)
             for (size_t l = 0; l < lines.size() && l < 3; ++l) Text(lines[l].c_str(), x0, y + 22 + l * 16.0f, 13, kDim, false);
             if (Button({x0 + w0 - 120, y - 2, 120, 38}, active >= maxQuests ? "Full" : "Accept", true, active < maxQuests)) {
                 CampaignAct(ACT_ACCEPT, (int)k);
@@ -9171,7 +9206,7 @@ void Game::DrawPort(float W, float H) {
             for (int k = 0; k < u.max; ++k) DrawRectangle((int)(cx + k * 12), (int)(cy + 20), 9, 5, k < lvl ? kGold : Color{255, 255, 255, 40});
             Text(u.line, cx + u.max * 12 + 6, cy + 17, 11, kDim, false);
             if (lvl < u.max) {
-                const int cost = UpgradeCost(i, lvl);
+                const int cost = RepPrice(UpgradeCost(i, lvl), repT);
                 if (Button({cx + cw - 110, cy - 2, 110, 32}, Thousands(cost).c_str(), false, campGold >= cost)) {
                     CampaignAct(ACT_UPGRADE, i);
                     sfx::PlayFlat(sfx::Confirm, 0.8f, 1.1f);
@@ -9188,8 +9223,8 @@ void Game::DrawPort(float W, float H) {
             const bool parts = (campPartsC & need) == need;
             const char* label = hers ? TextFormat("%s  \xC2\xB7  yours", ClassOf(c).name)
                               : owned ? TextFormat("%s  \xC2\xB7  sail her (%d%%)", ClassOf(c).name, (int)roundf(campHullFracC[c] * 100.0f))
-                                      : TextFormat("%s  \xC2\xB7  build %s", ClassOf(c).name, Thousands(BuildCost(c)).c_str());
-            if (Button({bx, y, bw, 40}, label, false, !hers && (owned || (parts && campGold >= BuildCost(c))))) {
+                                      : TextFormat("%s  \xC2\xB7  build %s", ClassOf(c).name, Thousands(RepPrice(BuildCost(c), repT)).c_str());
+            if (Button({bx, y, bw, 40}, label, false, !hers && (owned || (parts && campGold >= RepPrice(BuildCost(c), repT))))) {
                 CampaignAct(ACT_FLAGSHIP, c);
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.8f);
             }

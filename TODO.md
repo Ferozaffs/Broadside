@@ -918,8 +918,13 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   edge of the Ember Reach, 10). Each step is placed by danger (kFinalDanger), from its region's port; its lairs go on
   to the next step; the Leviathan ends it (EV_FINALE: a word from the Lamplighter, "the sea is yours"). It pays 1.5x,
   the finale 2.5x. Test: BS_CHAINTEST=1 BS_CHAINFINAL=1; BS_CAMPTOLD=1 for screenshots.
-- [ ] Next: reputation per port,
-  fleet and crew (phase 3), balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
+- [x] Port reputation (2026-11-20, the user: "Sounds good"): five steps a port (Stranger, Known 60, Trusted 200,
+  Friend of the port 500, Hero 1000), World::campRep (saved `rep`, protocol 30). Up: its quests done, pirates sunk in its
+  waters, merchantmen saved, the region's dread pirate; down: its quests failed or given up, merchantmen lost. Known:
+  ships among its rewards; Trusted: parts; 5% a step on rewards and off prices; Friend: a fourth quest and its
+  warships out to help in its waters (EV_HELP, the navy's bark; Hero: two). Port screen: the step, the discount and
+  the next step; warm greetings (people.h kWarm). Feed: EV_REP past a step. Test: BS_REPTEST. docs/campaign.md.
+- [ ] Next: balance (the Ember Reach's story pays ~7k), boss fights at the region's time of day.
 - [x] Phase 3: fleet, officers, the shipwright (2026-11-19).
   - The port screen in three tabs: Harbour (repairs for the flagship and the fleet), Tavern (quests; officers looking
     for a berth, 1-2 a day; her officers), Shipwright (12 upgrades, each the Odyssey's upgrade at levels: timbers,

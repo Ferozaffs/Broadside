@@ -28,7 +28,7 @@ how she earns the far seas. The HUD shows the danger against a rating of her shi
 - **Tavern**: quests (2-4 on offer, by biome and how far you've got), recruits (crew with a trait each).
 - **Shipwright**: upgrades (hull, sails, guns, crew quarters), new ships (cutter -> frigate -> ship of the line ...).
 - **Market**: sell cargo and plunder; buy supplies.
-- **Governor**: bounties, reputation with the port's flag, letters of marque later.
+- **Governor**: bounties, letters of marque later (reputation with each port: built, below).
 
 ## Quests
 Every quest is a template with a giver, a place, a goal and a reward, rolled for the biome:
@@ -59,6 +59,20 @@ Every quest is a template with a giver, a place, a goal and a reward, rolled for
   keel, rigging and 18-pounders; frames, a mainmast and 32-pounders) won on quests, from dread pirates and in lairs,
   and the shipwright's labour. Ships she's built stay hers.
 - The **fleet** is won: prizes, quests that pay a ship, a merchantman's guard ship after a rescue. Nothing for sale.
+
+## Port reputation (built)
+Each of the twelve ports thinks something of her, in five steps: **Stranger** (0), **Known** (60), **Trusted** (200),
+**Friend of the port** (500), **Hero of the port** (1000).
+- **Up**: its quests done (50 + a 25th of the reward, x1.5 for a story's step, at most 150), pirates sunk in its waters
+  (within 4.5 km, +5), a merchantman saved near it (+35), the region's dread pirate sunk (+60 to every port there).
+- **Down**: its quests failed or given up (-30), a merchantman under attack lost near it (-15).
+- **What it gives**: a ship for the fleet among its rewards once it knows her, a ship's part once it trusts her (the
+  road to the frigate: earn a home port); its tavern pays 5% more a step and its prices (repairs, upgrades, building,
+  officers) are 5% less a step; a friend of the port gets a fourth quest, and when she's fighting in its waters its
+  warships come out to help (a hero's: two), going home when it's over. Its keepers greet her warmly from Trusted on
+  (people.h kWarm, two days in three, by name).
+- It never changes how hard the sea is (difficulty by place only). Saved (`rep`), in the snapshot (protocol 30).
+  Test: BS_REPTEST; BS_CAMPREP=n sets every port's for screenshots.
 
 ## The sea's own life (built)
 - **Traffic**: traders sailing port to port (the pirates hunt them; fire on one and she fights back) and navy patrols

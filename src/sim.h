@@ -512,6 +512,21 @@ inline int BuildCost(int cls) { return cls == SC_LINE ? 3500 : cls == SC_FRIGATE
 constexpr int partValue = 400;        // gold instead, for a part she has already
 constexpr float lineParts = 5.0f;     // a ship of the line's parts are only found in waters this dangerous (or in a lair)
 inline bool Buyable(int cls) { return cls == SC_CUTTER || cls == SC_GUNBOAT; }  // (escorts the shipwright sells)
+// Reputation: what each port thinks of her. Won by its work done (its quests) and its waters kept (pirates sunk near
+// it, merchantmen saved, the region's dread pirate); lost by its quests failed or given up and merchantmen lost. It
+// never changes how hard the sea is: only what the port offers her, what it charges, and who comes out to help
+constexpr int repTiers = 5;
+inline constexpr int kRepAt[repTiers] = {0, 60, 200, 500, 1000};
+inline const char* const kRepNames[repTiers] = {"Stranger", "Known", "Trusted", "Friend of the port", "Hero of the port"};
+inline int RepTier(int rep) { int t = 0; while (t + 1 < repTiers && rep >= kRepAt[t + 1]) ++t; return t; }
+inline float RepCut(int tier) { return 1.0f - 0.05f * tier; }  // the port's prices (x): up to a fifth off
+inline int RepPrice(int gold, int tier) { return tier <= 0 ? gold : (int)(roundf(gold * RepCut(tier) / 5.0f) * 5.0f); }
+inline float RepPay(int tier) { return 1.0f + 0.05f * tier; }  // the tavern's rewards (x)
+constexpr int repShipTier = 1;        // a ship for her fleet among a port's rewards: once it knows her
+constexpr int repPartsTier = 2;       // a ship's part: once it trusts her
+constexpr int repHelpTier = 3;        // its warships come out to help her in its waters (a hero's: two), and a fourth quest
+constexpr float repWaters = 4500.0f;  // m round a port that are its waters
+constexpr int repMax = 3000, repMin = -300;
 const char* FleetName(uint16_t seed);  // a ship of her fleet's name
 // Officers: one of each, hired in a tavern; each adds to the captain's upgrades (levels 1-3)
 enum Officer : uint8_t { OF_GUNNER = 0, OF_BOSUN, OF_NAVIGATOR, OF_SURGEON, OF_QUARTERMASTER, OFFICERS };
@@ -572,7 +587,9 @@ enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SA
                           EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST,
                           EV_PART,  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
                           EV_JOINED,  // (a ship joins her fleet, flags = her class; value = gold instead, if the fleet's full)
-                          EV_FINALE };  // (the last story told: the Leviathan sunk)
+                          EV_FINALE,  // (the last story told: the Leviathan sunk)
+                          EV_REP,     // (a port thinks better or worse of her, past a step: a = the port, flags = the step, value = +/-)
+                          EV_HELP };  // (a port's warships come out to help her: a = the first, flags = the port)
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -1133,6 +1150,11 @@ public:
     uint8_t campParts = 0;                   // the ship's parts she holds (bit per campaign::Part)
     uint8_t campHulls = 1u << SC_CUTTER;     // the flagships she owns (bit per class: the cutter always; the others built)
     float campHullFrac[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};  // how sound each one she's not sailing is
+    int16_t campRep[campaign::kPorts] = {};  // what each port thinks of her (campaign::kRepAt)
+    int RepTierAt(int port) const { return port >= 0 && port < campaign::kPorts ? campaign::RepTier(campRep[port]) : 0; }
+    void AddRep(int port, int amount);       // (a word in the feed when it crosses a step)
+    int PortNear(float x, float z, float within) const;  // the nearest port, -1 if none is that close
+    float campHelpT = 0.0f;                  // s before a port's warships come out to help her again
     int NextPart(float level, bool line);  // the part a reward brings: a frigate's she lacks first (or a line's, line), -1 none
     void GivePart(int part, Vector3 at);         // into her hold (or its worth in gold, if she has it)
     void JoinFleet(int cls, Vector3 at);         // a ship comes to sail with her (a reward: there's no buying them; gold, if the fleet's full)

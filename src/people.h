@@ -329,6 +329,44 @@ inline void Voiced(const char* id, const char* line, uint32_t salt) {
     sfx::Utter(p, k, 0.75f, h);
 }
 
+// What a port's keepers say once it thinks well of her (Trusted, a friend of the port, its hero: campaign::RepTier
+// 2-4), two days in three; "%s" is her name
+inline const char* const kWarm[SHOPS][3][3] = {
+    {  // the harbour
+     {"Your usual berth's free, Captain. I kept it free, in fact. Had words with a Dutchman over it.",
+      "Ah, %s. Sign here, and here. I've waived the lighthouse fee. Don't tell anyone.",
+      "Good to see you back in one piece, Captain. More or less one piece."},
+     {"%s! The harbour's yours. Well, not legally. But in spirit.",
+      "There she is. The town's been talking about you, Captain. Good things, mostly.",
+      "Berth's ready, carpenters are waiting, and the fees are... let's say a friendly rate."},
+     {"Make way for %s! Ha, I've always wanted to shout that.",
+      "They've named a pier after you, Captain. A small one. It still counts.",
+      "Half the harbour turned out when your sails came in. Wave, at least. They brought flags."},
+    },
+    {  // the tavern
+     {"%s! Your table's free. I chased a fellow off it, but it's free.",
+      "There's work for you, Captain. Good work. I saved the best of it for you.",
+      "The regulars want to buy you a drink. I said I'd ask. They're paying."},
+     {"%s! First round's on the house. The second's on them over there.",
+      "Sit, sit! Half the board's got your name on it already.",
+      "They sing a song about you now. It rhymes 'cannon' with 'Shannon'. Nobody knows who Shannon is."},
+     {"Everybody up! It's %s! ...Fine, they're too drunk to stand. In spirit, then.",
+      "Your money's no good here, Captain. Well. It's good. I just feel bad taking it.",
+      "I've hung your portrait over the bar. It's not a good likeness. The nose is all wrong."},
+    },
+    {  // the shipwright
+     {"Bring her in, Captain. I'll do right by her, and by you.",
+      "I know your ship's every creak by now, Captain. Friend's price, today.",
+      "Ah, %s. I'd know that hull anywhere. Mostly by the holes."},
+     {"For you, Captain? The good timber. I keep it under the floor.",
+      "%s! I've been saving some ideas for her. And a discount.",
+      "She's a fine ship, Captain. You're a finer customer. Pays on time, mostly."},
+     {"%s! The yard stops for you. Lads, down tools! ...Not literally. Pick them back up.",
+      "Anything she needs, Captain. I'd build you a ship from scratch if you asked. And paid. A little.",
+      "There's a model of your ship in my window now. Children press their noses on the glass."},
+    },
+};
+
 // Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line)
 constexpr int kFleetFaces = 6, kPirateFaces = 6;
 inline const char* FleetFace(int seed) { static const char* const k[kFleetFaces] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6"}; return k[(unsigned)seed % kFleetFaces]; }

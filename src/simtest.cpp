@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 static constexpr int MAX_SHIPS = 256;  // (the tests size their tables by this; the game itself has no limit)
 
@@ -1481,6 +1482,7 @@ static int ProgressTest() {
     const int me = g.AddShip("captain", false, -1);
     for (int i = 0; i < 30; ++i) g.Step();
     check(g.ships[me].cls == SC_CUTTER, TextFormat("a new campaign starts her in a %s", ClassOf(g.ships[me].cls).name));
+    g.campRep[homePort] = (int16_t)kRepAt[repPartsTier];  // (a port that trusts her: parts among its rewards)
     // the home port's tavern, thirty days of it
     int partDays = 0, lineParts = 0, shipDays = 0, frigateShips = 0, offers = 0;
     for (int day = 0; day < 30; ++day) {
@@ -1525,7 +1527,7 @@ static int ProgressTest() {
     g.campGold = 5000;
     check(!g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE), "no frigate with one part");
     for (int p = PT_KEEL; p < PT_FRAMES; ++p) g.GivePart(p, g.ships[me].pos);
-    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE) && g.ships[me].cls == SC_FRIGATE && g.campGold == 5000 + partValue - BuildCost(SC_FRIGATE),  // (one of the three she had: sold)
+    check(g.CampaignAct(me, ACT_FLAGSHIP, SC_FRIGATE) && g.ships[me].cls == SC_FRIGATE && g.campGold == 5000 + partValue - RepPrice(BuildCost(SC_FRIGATE), g.RepTierAt(homePort)),  // (one of the three she had: sold)
           "the frigate built: her three parts and the labour");
     check(g.campParts == 0 && ((g.campHulls >> SC_FRIGATE) & 1), "the parts used up, the frigate hers");
     // back to the cutter and out again: both hers, as sound as she left them
@@ -1551,6 +1553,170 @@ static int ProgressTest() {
     return problems ? 1 : 0;
 }
 
+// Port reputation: what a port offers her at each step, what moves it, its prices, the save, its warships coming out
+static int RepTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        printf("   %-66s %s\n", what.c_str(), ok ? "ok" : "PROBLEM");
+        if (!ok) ++problems;
+    };
+    World g;
+    g.campSavePath = "reptest.sav";
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    const int me = g.AddShip("captain", false, -1);
+    for (int i = 0; i < 30; ++i) g.Step();
+    // the home port's tavern at each step: forty days of it
+    struct Day { std::vector<Quest> offers; };
+    auto survey = [&](int rep, std::vector<Day>& days) {
+        g.campRep[homePort] = (int16_t)rep;
+        days.clear();
+        for (int d = 0; d < 40; ++d) {
+            g.campClock = d * dayLength + 1.0f;
+            g.TestOffers(homePort);
+            days.push_back({g.campOffers});
+        }
+    };
+    auto count = [](const std::vector<Day>& days, int& parts, int& shipsN, int& offers) {
+        parts = shipsN = offers = 0;
+        for (const Day& d : days) {
+            for (const Quest& q : d.offers) { parts += q.part >= 0; shipsN += q.ship >= 0; }
+            offers += (int)d.offers.size();
+        }
+    };
+    std::vector<Day> stranger, known, trusted, friendly;
+    survey(0, stranger);
+    survey(kRepAt[1], known);
+    survey(kRepAt[2], trusted);
+    survey(kRepAt[3], friendly);
+    int p0, s0, o0, p1, s1, o1, p2, s2, o2, p3, s3, o3;
+    count(stranger, p0, s0, o0);
+    count(known, p1, s1, o1);
+    count(trusted, p2, s2, o2);
+    count(friendly, p3, s3, o3);
+    printf("      40 days at home - stranger: %d offers, %d parts, %d ships; known: %d, %d, %d; trusted: %d, %d, %d; friend: %d, %d, %d\n",
+           o0, p0, s0, o1, p1, s1, o2, p2, s2, o3, p3, s3);
+    check(p0 == 0 && s0 == 0, "a stranger: no parts, no ships among its rewards");
+    check(p1 == 0 && s1 > 0, "known: a ship for the fleet now and then, still no parts");
+    check(p2 >= 6, TextFormat("trusted: a part on some days (%d)", p2));
+    check(o3 > o2 + 20, TextFormat("a friend of the port: a fourth offer (%d vs %d)", o3, o2));
+    {  // the same work pays more where they trust her (offers with neither a part nor a ship, the same day)
+        double sum0 = 0, sum2 = 0;
+        for (int d = 0; d < 40; ++d)
+            for (size_t k = 0; k < stranger[d].offers.size() && k < trusted[d].offers.size(); ++k) {
+                const Quest &a = stranger[d].offers[k], &b = trusted[d].offers[k];
+                if (a.type != b.type || a.part >= 0 || b.part >= 0 || a.ship >= 0 || b.ship >= 0 || a.chain || b.chain) continue;
+                sum0 += a.reward;
+                sum2 += b.reward;
+            }
+        const double ratio = sum0 > 0 ? sum2 / sum0 : 0;
+        check(fabs(ratio - RepPay(2)) < 0.02, TextFormat("trusted: rewards x%.3f (want x%.2f)", ratio, RepPay(2)));
+    }
+    // a quest done raises it, failed or given up lowers it; a step crossed tells her
+    g.campRep[homePort] = (int16_t)(kRepAt[1] - 5);
+    g.campClock = 1.0f;
+    g.TestOffers(homePort);
+    Quest q = g.campOffers[0];
+    for (const Quest& o : g.campOffers)
+        if (!o.chain) { q = o; break; }
+    q.state = QS_ACTIVE;
+    g.campQuests[0] = q;
+    g.events.clear();
+    int rep0 = g.campRep[homePort];
+    g.TestEndQuest(0, true);
+    const int gain = g.campRep[homePort] - rep0;
+    bool told = false;
+    for (const GameEvent& e : g.events) told |= e.type == EventType::CampEvent && e.b == EV_REP && e.a == homePort && e.flags == 1;
+    check(gain == std::min(150, 50 + q.reward / 25), TextFormat("a quest done (%d gold): +%d", q.reward, gain));
+    check(told, "past a step: the feed hears of it (known)");
+    g.campQuests[0] = Quest{};
+    q.state = QS_ACTIVE;
+    g.campQuests[0] = q;
+    rep0 = g.campRep[homePort];
+    g.TestEndQuest(0, false);
+    check(g.campRep[homePort] == rep0 - 30, "a quest failed: -30");
+    g.campQuests[0] = Quest{};
+    q.state = QS_ACTIVE;
+    g.campQuests[1] = q;
+    rep0 = g.campRep[homePort];
+    check(g.CampaignAct(me, ACT_ABANDON, 1) && g.campRep[homePort] == rep0 - 30, "a quest given up: -30");
+    // its prices: a friend of the port pays 15% less
+    g.campRep[homePort] = (int16_t)kRepAt[3];
+    g.campDocked = (int8_t)homePort;
+    g.campGold = 10000;
+    check(g.CampaignAct(me, ACT_UPGRADE, 0) && g.campGold == 10000 - RepPrice(UpgradeCost(0, 0), 3),
+          TextFormat("an upgrade: %d gold, not %d", RepPrice(UpgradeCost(0, 0), 3), UpgradeCost(0, 0)));
+    g.ships[me].hp = g.ships[me].maxHp - 100.0f;
+    const int gold1 = g.campGold;
+    check(g.CampaignAct(me, ACT_REPAIR) && abs((gold1 - g.campGold) - (int)ceilf(100.0f * repairPerHp * RepCut(3))) <= 1,
+          TextFormat("a repair: %d gold for 100 hull, not %d", gold1 - g.campGold, (int)ceilf(100.0f * repairPerHp)));
+    // saved, and back
+    g.campRep[5] = 321;
+    g.campRep[7] = -40;
+    g.SaveCampaign();
+    World h;
+    h.campSavePath = "reptest.sav";
+    h.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    h.LoadCampaign();
+    check(h.campRep[homePort] == g.campRep[homePort] && h.campRep[5] == 321 && h.campRep[7] == -40, "saved and loaded");
+    remove("reptest.sav");
+    // in a fight in a port's waters: a friend's warships come out (a hero's two), a stranger's don't; home again after
+    World probe;
+    probe.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    Vector2 spot{};
+    int port = -1;
+    for (int p = 0; p < (int)probe.harbours.size() && port < 0; ++p)
+        for (float a = 0.0f; a < 6.28f && port < 0; a += 0.2f) {
+            const Vector2 at = {probe.harbours[p].x + sinf(a) * 2600.0f, probe.harbours[p].z + cosf(a) * 2600.0f};
+            bool open = RocksHeight(probe.rocks, at.x, at.y) < -30.0f;
+            for (float b = 0.0f; b < 6.28f && open; b += 0.6f) open &= RocksHeight(probe.rocks, at.x + sinf(b) * 450.0f, at.y + cosf(b) * 450.0f) < -20.0f;
+            if (open && probe.PortNear(at.x, at.y, repWaters) == p) { spot = at; port = p; }
+        }
+    check(port >= 0, TextFormat("open water 2.6 km off %s", port >= 0 ? PortName(port) : "?"));
+    for (int rep : {0, kRepAt[3], kRepAt[4]}) {
+        World w;
+        w.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        const int c = w.AddShip("captain", false, SC_FRIGATE);
+        for (int16_t& r : w.campRep) r = (int16_t)rep;
+        w.ships[c].pos = {spot.x, w.ocean.Height(spot.x, spot.y) + 0.5f, spot.y};
+        w.ships[c].vel = {};
+        w.Step();
+        w.TestSpawnRaider({spot.x + 380.0f, spot.y}, -PI * 0.5f, SC_FRIGATE);
+        std::set<int> helpers;
+        bool fired = false, home = false;
+        float closest = 1e9f;
+        int raider = -1;
+        for (int i = 0; i < w.ShipCount(); ++i)
+            if (w.ships[i].active && w.ships[i].raider) raider = i;
+        for (int i = 0; i < 60 * 70; ++i) {
+            w.ships[c].hp = w.ships[c].maxHp;  // (she holds on: it's the help we're watching)
+            w.ships[c].input.sail = 0.0f;
+            w.Step();
+            for (int k = 0; k < w.ShipCount(); ++k) {
+                const Ship& s = w.ships[k];
+                if (s.active && s.npc == NPC_NAVY && s.laneFrom == -2) helpers.insert(k);
+            }
+            for (const Ball& b : w.balls) fired |= helpers.count(b.owner) > 0;
+            if (raider >= 0 && w.ships[raider].active && w.ships[raider].alive)
+                for (int k : helpers)
+                    if (w.ships[k].active) closest = fminf(closest, Vector2Distance({w.ships[k].pos.x, w.ships[k].pos.z}, {w.ships[raider].pos.x, w.ships[raider].pos.z}));
+            if (i == 60 * 45 && raider >= 0 && w.ships[raider].active && w.ships[raider].alive) w.TestKnockOut(w.ships[raider]);  // (the fight over)
+        }
+        for (int k : helpers) home |= w.ships[k].active && w.ships[k].laneFrom >= 0;
+        for (int k : helpers) home |= !w.ships[k].active;
+        const int want = rep >= kRepAt[4] ? 2 : rep >= kRepAt[3] ? 1 : 0;
+        printf("      rep %d: %zu came out, closest %.0f m to the pirate, fired %d, home after %d\n", rep, helpers.size(), closest, fired, home);
+        if (!want) check(helpers.empty(), "a stranger's port: nobody comes out");
+        else {
+            check((int)helpers.size() == want, TextFormat("%s: %d warship(s) come out", want == 2 ? "its hero" : "a friend of the port", want));
+            check(closest < 700.0f && fired, "...close with the pirate and fire on her");
+            check(home, "...and go home when it's over");
+        }
+    }
+    printf("reputation: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
 static int FloeTest() {
     using namespace campaign;
     const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
@@ -1717,6 +1883,7 @@ static int ZoneTest() {
 
 int RunSimTest() {
     if (getenv("BS_PROGRESSTEST")) return ProgressTest();
+    if (getenv("BS_REPTEST")) return RepTest();
     if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();
     if (getenv("BS_FLEETTEST")) return FleetTest();
