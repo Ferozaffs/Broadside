@@ -57,11 +57,11 @@ key that is not published; see tools/pack_ship.py), as their licences require.
   used royalty free under Adobe's terms for Mixamo content, retargeted onto the pirate
   (tools/ue4char_to_game_crew.py).
 
-## Campaign character portraits (data/portraits)
+## Campaign character portraits (data/portraits), the logo and the icon (data/logo.png, data/icon.png)
 
 Generated locally with FLUX.1 [dev] (Black Forest Labs) and the **SXZ Amadmir [FLUX]** style LoRA by
 **sadxzero** (https://civitai.com/models/733609), cut out with BiRefNet (MIT). The LoRA's terms require this
-credit, and they don't allow the generated images to be sold: the portraits are for this free game only.
+credit, and they don't allow the generated images to be sold: the portraits, the logo and the icon are for this free game only.
 
 ## Music (data/music)
 

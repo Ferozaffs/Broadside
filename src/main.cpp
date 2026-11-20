@@ -6092,15 +6092,36 @@ void Game::DrawMenu() {
     // short windows (720p) get a compact layout: smaller title, name and address side by side
     const bool compact = H < 1040.0f;
     const float x = compact ? 64.0f : 88.0f, y0 = compact ? 14.0f : fmaxf(30.0f, (H - 80.0f - 900.0f) * 0.45f);
-    const float ts = compact ? 60.0f : 92.0f, head = compact ? 112.0f : 168.0f;
+    const float ts = compact ? 60.0f : 92.0f;
+    float head = compact ? 112.0f : 168.0f;
     float y = y0;
-    DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, ts, ts * 0.12f, Fade(BLACK, 0.45f));
-    DrawTextEx(F().bold, "BROADSIDE", {x, y}, ts, ts * 0.12f, {244, 232, 206, 255});
-    DrawRectangle((int)x + 4, (int)(y + ts * 1.06f), 64, 3, kGold);
+    // the logo (data/logo.png; the old lettering if it's missing)
+    static Texture2D logo{};
+    static bool logoTried = false;
+    if (!logoTried) {
+        logoTried = true;
+        const std::string p = std::string(GetApplicationDirectory()) + "data/logo.png";
+        if (FileExists(p.c_str()) && (logo = LoadTexture(p.c_str())).id) {
+            GenTextureMipmaps(&logo);
+            SetTextureFilter(logo, TEXTURE_FILTER_TRILINEAR);
+            SetTextureWrap(logo, TEXTURE_WRAP_CLAMP);
+        }
+    }
+    float under = y + ts * 1.06f;  // (the tagline's line)
+    if (logo.id) {
+        const float lh = compact ? 128.0f : 210.0f, lw = lh * logo.width / logo.height;
+        DrawTexturePro(logo, {0, 0, (float)logo.width, (float)logo.height}, {x - 6.0f, y, lw, lh}, {0, 0}, 0.0f, WHITE);
+        under = y + lh + 4.0f;
+        head += under - (y + ts * 1.06f);
+    } else {
+        DrawTextEx(F().bold, "BROADSIDE", {x + 2, y + 3}, ts, ts * 0.12f, Fade(BLACK, 0.45f));
+        DrawTextEx(F().bold, "BROADSIDE", {x, y}, ts, ts * 0.12f, {244, 232, 206, 255});
+        DrawRectangle((int)x + 4, (int)under, 64, 3, kGold);
+    }
     if (!status.empty() && mode == Mode::Menu)
-        Text(status.c_str(), x + 4, y + ts * 1.06f + 12, compact ? 17 : 20, {255, 160, 140, 255}, true);
+        Text(status.c_str(), x + 4, under + 12, compact ? 17 : 20, {255, 160, 140, 255}, true);
     else
-        Text("Physics galleon battles on an FFT storm sea", x + 4, y + ts * 1.06f + 12, compact ? 17 : 20, kDim, false);
+        Text("Physics galleon battles on an FFT storm sea", x + 4, under + 12, compact ? 17 : 20, kDim, false);
 
     y = y0 + head;
     if (mode == Mode::Connecting) {
@@ -7485,6 +7506,17 @@ int main(int argc, char** argv) {
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(opt.width, opt.height, "Broadside");
     SetExitKey(KEY_NULL);
+    {  // the window's icon: the compass badge (data/icon.png)
+        const std::string p = std::string(GetApplicationDirectory()) + "data/icon.png";
+        if (FileExists(p.c_str())) {
+            Image icon = LoadImage(p.c_str());
+            if (icon.data) {
+                ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                SetWindowIcon(icon);
+                UnloadImage(icon);
+            }
+        }
+    }
     if (!gl::Load()) {
         TraceLog(LOG_ERROR, "OpenGL 4.3 functions missing - is your GPU driver up to date?");
         return 1;
