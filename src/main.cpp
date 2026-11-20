@@ -8979,8 +8979,8 @@ void Game::UpdateHails() {
     if (barkTest && GetTime() > 3.5) {
         barkTest = false;
         AddBark(getenv("BS_BARKTEST"), "the Valiant", people::kFleetLines[people::FB_ENEMY][0], ui::kGreen);
-        AddBark("palmhaven_tavern", "Bloody Bess", people::kPirateLines[people::PB_APPROACH][0], ui::kRed);
-        AddBark("greywater_wright", "Red Morgan", people::kPirateLines[people::PB_TAUNT][2], ui::kRed);
+        AddBark("pirate_2", "Bloody Bess", people::kPirateLines[people::PB_APPROACH][0], ui::kRed);
+        AddBark("pirate_5", "Red Morgan", people::kPirateLines[people::PB_TAUNT][2], ui::kRed);
     }
     if (GetTime() - hailAt < 120.0 || GetTime() - seaSay.at < 12.0 || myId < 0 || myId >= NumShips() || !view[myId].present) return;
     const NetShip& me = view[myId].s;
