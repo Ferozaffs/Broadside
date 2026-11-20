@@ -1209,8 +1209,8 @@ static int ChainTest() {
         for (int k = 0; k < maxQuests; ++k)
             if (g.campQuests[k].chain == b + 1) slot = k;
         const int gold0 = g.campGold;
-        bool told = false;
-        for (int guard = 0; guard < 8 && !told; ++guard) {
+        bool told = false, gaveUp = false;
+        for (int guard = 0; guard < 9 && !told; ++guard) {
             Quest& q = g.campQuests[slot];
             const int step = q.step, type = q.type;
             const Vector2 spot = {q.x, q.z};
@@ -1245,6 +1245,21 @@ static int ChainTest() {
                     tick(60);
                     break;
                 case Q_LAIR: {
+                    if (!gaveUp && step == chainSteps) {  // (given up at the lair: the story's last step is offered again, not lost)
+                        gaveUp = true;
+                        g.CampaignAct(me, ACT_ABANDON, slot);
+                        g.campOffersPort = -1;  // (another day's work)
+                        dock(port);
+                        int k2 = -1;
+                        for (size_t k = 0; k < g.campOffers.size(); ++k)
+                            if (g.campOffers[k].chain == b + 1 && g.campOffers[k].step == chainSteps) k2 = (int)k;
+                        const bool again = k2 >= 0 && g.CampaignAct(me, ACT_ACCEPT, k2);
+                        printf("      the lair given up: offered again in %s: %s\n", PortName(port), again ? "yes" : "NO   <-- PROBLEM");
+                        if (!again) { ++problems; told = true; break; }
+                        for (int k = 0; k < maxQuests; ++k)
+                            if (g.campQuests[k].chain == b + 1) slot = k;
+                        continue;
+                    }
                     hold(spot, 1.0f);
                     const bool inLair = g.mode == MODE_BOSS;
                     tick(60 * 4);
@@ -1801,7 +1816,13 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
             slot = -1;
             if (log && i % (60 * 30) == 0) printf("      %5.2f h  out of her depth (danger %.1f, her ship %.1f): running for port\n", H(i), ZoneLevel(me2.x, me2.y), rating);
         }
-        if (slot < 0) {  // nothing under way: back to a port she's a match for (the nearest of them), where the work is
+        // survivors adrift, calling (as the HUD shows them): she goes alongside, slowly, before they're lost
+        if (!g.campBotFlee && g.campAdrift >= 0 && g.campAdrift < g.ShipCount() && g.ships[g.campAdrift].active &&
+            Vector2Distance(me2, {g.ships[g.campAdrift].pos.x, g.ships[g.campAdrift].pos.z}) < 3500.0f) {
+            slot = -5;  // (an objective of its own)
+            at = {g.ships[g.campAdrift].pos.x, g.ships[g.campAdrift].pos.z};
+            stop = true;
+        } else if (slot < 0) {  // nothing under way: back to a port she's a match for (the nearest of them), where the work is
             int h = -1;
             float hs = 1e30f;
             for (int p = 0; p < (int)g.harbours.size(); ++p) {

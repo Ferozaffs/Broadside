@@ -5440,14 +5440,14 @@ void World::MakeOffers(int port) {
     const int most = offersPer + (tier >= repHelpTier ? 1 : 0);  // (a friend of the port: a fourth)
     bool storyOn = false;  // (this region's story: under way already)
     for (const Quest& o : campQuests) storyOn |= o.chain == pb + 1 && (o.state == QS_ACTIVE || o.state == QS_RETURN || o.state == QS_DONE);
-    if (!storyOn && campChain[pb] < chainSteps) {
+    if (!storyOn && campChain[pb] <= chainSteps) {  // (<=: its lair too, if she gave it up - or the story would stop there for good)
         Quest q;
         if (ChainQuest(q, pb, campChain[pb], port, h)) campOffers.push_back(q);
     }
     bool allTold = true, lastOn = false;  // (the last story: in any port, once the five are told)
     for (int b = 0; b < BIOMES; ++b) allTold &= campChain[b] > chainSteps;
     for (const Quest& o : campQuests) lastOn |= o.chain == FINAL + 1 && (o.state == QS_ACTIVE || o.state == QS_RETURN || o.state == QS_DONE);
-    if (allTold && !lastOn && campChain[FINAL] < chainSteps && (int)campOffers.size() < most) {
+    if (allTold && !lastOn && campChain[FINAL] <= chainSteps && (int)campOffers.size() < most) {
         Quest q;
         if (ChainQuest(q, FINAL, campChain[FINAL], port, h)) campOffers.push_back(q);
     }
@@ -6237,7 +6237,7 @@ void World::SeaEvent(Ship& cap) {
                       none(NPC_RIVAL) && campClock > 600.0f ? 12.0f : 0.0f,
                       none(NPC_SMUGGLER) ? (b == TEMPERATE || b == TROPICS ? 18.0f : 8.0f) : 0.0f,
                       campAdrift < 0 ? (b == FROZEN || b == FOG ? 16.0f : 10.0f) : 0.0f,
-                      b == FOG && none(NPC_GHOST) ? (night ? 30.0f : 8.0f) : 0.0f};
+                      b == FOG && none(NPC_GHOST) ? (night ? 50.0f : 22.0f) : 0.0f};  // (the Fog Banks' own: careers found one in 6 h of fog at 30 / 8)
     if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one, 1-8)
         const int k = atoi(e) - 1;
         for (int i = 0; i < kinds; ++i) w[i] = i == k ? 1.0f : 0.0f;
