@@ -3643,8 +3643,15 @@ void World::BotThink(Ship& s, float dt) {
                 if (dc > 650.0f) in.sail = 0.12f;
             }
         } else if (s.questRole == campaign::QR_CAPTOR && q.type == campaign::Q_SMUGGLE && !s.struck && target && best < 1600.0f) {
-            // a smuggler runs: away from whoever comes for her, firing only as she goes
-            const Vector2 away = Vector2Normalize({s.pos.x - target->pos.x, s.pos.z - target->pos.z});
+            // a smuggler runs: away from whoever comes for her, firing only as she goes - but in her own waters, the coves
+            // she knows (out past 1400 m from her haunt she bends back round towards it: a chase in circles, not out to sea)
+            Vector2 away = Vector2Normalize({s.pos.x - target->pos.x, s.pos.z - target->pos.z});
+            const Vector2 home = {q.x - s.pos.x, q.z - s.pos.z};
+            const float dh = Vector2Length(home);
+            if (dh > 1400.0f) {
+                const float k = fminf((dh - 1400.0f) / 300.0f, 3.0f);
+                away = Vector2Normalize(Vector2Add(away, Vector2Scale(home, k / dh)));
+            }
             goal = {s.pos.x + away.x * 300.0f, 0.0f, s.pos.z + away.y * 300.0f};
             haveGoal = true;
             fight = false;

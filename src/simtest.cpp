@@ -1643,9 +1643,16 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
         return true;
     };
     int turnedBack[maxQuests] = {};
+    int lairLost = 0;          // (a boss she keeps losing to: after two, she goes away and comes back with a better ship)
+    float lairFloor = 0.0f;
     for (long i = 0; i < steps; ++i) {
         g.Step();
         for (const GameEvent& e : g.events) {
+            if (e.type == EventType::MatchStart && e.value == 2.0f && e.b == 0 && ++lairLost >= 2) {
+                lairFloor = CareerRating(g, g.ships[me].cls) + 0.6f;
+                lairLost = 0;
+                if (log) printf("      %5.2f h  beaten at the lair again: back when her ship's rated %.1f\n", H(i), lairFloor);
+            }
             if (e.type == EventType::CampEvent && e.b < 32) {
                 c.events[e.b]++;
                 if (e.b == EV_PART && e.value <= 0.0f) c.partsGot++;
@@ -1763,6 +1770,7 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
         for (int k = 0; k < maxQuests; ++k) {
             const Quest& q = g.campQuests[k];
             if (q.state != QS_ACTIVE && q.state != QS_RETURN) continue;
+            if (q.type == Q_LAIR && rating < lairFloor) continue;  // (not yet: she'd only be sunk again)
             Vector2 p = {q.x, q.z};
             bool st = true;
             auto ship = [&](int role) -> const Ship* {
@@ -1857,7 +1865,8 @@ static int CareerTest() {
     using namespace campaign;
     static const char* const kType[Q_KINDS] = {"treasure", "bounty", "convoy", "escort", "cargo", "castaways", "captive", "lair", "reef", "icebound", "evacuate", "keeper", "smuggle"};
     static const char* const kEv[] = {"", "wreck", "distress", "monster", "dread", "saved", "dread sunk", "chest", "map", "lost", "monster slain", "struck",
-                                      "prize", "plunder", "escort lost", "officer lost", "part", "joined", "finale", "rep step", "help"};
+                                      "prize", "plunder", "escort lost", "officer lost", "part", "joined", "finale", "rep step", "help",
+                                      "rival", "smuggler", "adrift", "adrift saved", "adrift lost", "ghost", "price paid", "bomb warned", "bomb", "wanted"};
     std::vector<uint32_t> seeds;
     {
         const char* e = getenv("BS_CAREERSEEDS");
@@ -1888,7 +1897,7 @@ static int CareerTest() {
         printf("    quests (offered / taken / done / failed):");
         for (int t = 0; t < Q_KINDS; ++t) printf("  %s %d/%d/%d/%d", kType[t], c.offered[t], c.taken[t], c.done[t], c.failed[t]);
         printf("\n    at sea:");
-        for (int e = 1; e <= 20; ++e) if (c.events[e]) printf("  %s %d", kEv[e], c.events[e]);
+        for (int e = 1; e <= (int)EV_WANTED; ++e) if (c.events[e]) printf("  %s %d", kEv[e], c.events[e]);
         printf("\n    pirates sunk %d, sunk herself %d, stuck %d, gold earned %ld, ports %d (order", c.sunk, c.deaths, c.stuck, c.goldEarned, c.portsVisited);
         for (int p : c.portOrder) printf(" %d", p);
         printf(")\n    reputation:");
@@ -2132,6 +2141,13 @@ static int RegionTest() {
                 run(15.0f, nullptr);
                 const float e1 = Vector3Distance(g.ships[t].pos, c.pos);
                 check(e1 > e0 + 100.0f, TextFormat("...she runs (%.0f m -> %.0f m; found %.0f m off)", e0, e1, d0));
+                float far = 0.0f;  // (a long chase, 300 m astern of her: she keeps to her own waters, the captain in her depth)
+                run(120.0f, [&]() {
+                    const Vector3 p2 = g.ships[t].pos, a = Vector3Normalize(Vector3Subtract(c.pos, p2));
+                    c.pos = {p2.x + a.x * 300.0f, c.pos.y, p2.z + a.z * 300.0f};
+                    far = fmaxf(far, Vector2Distance({p2.x, p2.z}, {q.x, q.z}));
+                });
+                check(far < 2400.0f, TextFormat("...a 2-minute chase: she keeps to her waters (at most %.0f m from her haunt)", far));
                 g.TestDamage(g.ships[t], g.ships[t].hp - g.ships[t].maxHp * 0.25f, me);
                 check(g.ships[t].struck, "...crippled: she strikes");
                 const Vector3 tp = g.ships[t].pos;
