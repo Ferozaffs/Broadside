@@ -631,9 +631,15 @@ constexpr int neutral = 2;            // the traders' side: the pirates' prey, n
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
 std::string PirateName(uint16_t seed);    // the quest's pirate captain
+// (which of the 32: the seed's high bits count too, so a convoy - its start port in the low six - can be any of them)
+inline int MerchantIndex(uint16_t seed) { return ((seed >> 6) * 5 + seed / 7) % 32; }
 std::string MerchantName(uint16_t seed);  // the convoy's / the escorted merchantman's name
 const char* CaptiveName(uint16_t seed);   // whom the captor holds
 const char* GoodsName(uint16_t seed);     // the cargo
+// The name a quest goes by (its pirate, its captive, its merchantman, its cargo) as one number: kind * 64 + which of
+// that kind's names; -1: none. The board keeps clear of the ones on her work lately (World::campNamesUsed)
+int QuestNameCode(const Quest& q);
+inline constexpr int kNamePool[4] = {32, 24, 32, 24};  // (pirates, captives, merchantmen, cargoes: how many names each)
 // How dangerous the sea is here: a level 1-10 set by the place alone (never by how strong she is), rising from the
 // middle of the chart outward and from the gentle regions to the wild ones. The pirates, monsters and bosses met
 // here are as strong as the level says, and pay as well: venture out before her ship is ready and she's sunk.
@@ -1194,6 +1200,8 @@ public:
     uint8_t campHulls = 1u << SC_CUTTER;     // the flagships she owns (bit per class: the cutter always; the others built)
     float campHullFrac[SC_PLAYABLE] = {1.0f, 1.0f, 1.0f};  // how sound each one she's not sailing is
     int16_t campRep[campaign::kPorts] = {};  // what each port thinks of her (campaign::kRepAt)
+    std::vector<uint16_t> campNamesUsed;      // the names on the work she's taken, oldest first, a pool's worth of each kind (campaign::QuestNameCode)
+    bool NameUsedLately(int code) const;      // (within the last (its pool - 6) of its kind: the board picks another)
     int RepTierAt(int port) const { return port >= 0 && port < campaign::kPorts ? campaign::RepTier(campRep[port]) : 0; }
     void AddRep(int port, int amount);       // (a word in the feed when it crosses a step)
     int PortNear(float x, float z, float within) const;  // the nearest port, -1 if none is that close

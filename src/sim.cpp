@@ -1513,6 +1513,7 @@ void World::Init(uint32_t seed, uint8_t weather_, uint8_t timeOfDay_, uint8_t mo
     campHulls = 1u << SC_CUTTER;
     for (float& h : campHullFrac) h = 1.0f;
     for (int16_t& r : campRep) r = getenv("BS_CAMPREP") ? (int16_t)atoi(getenv("BS_CAMPREP")) : 0;  // (tests, screenshots)
+    campNamesUsed.clear();
     campHelpT = 0.0f;
     campSpawn = 75.0f;
     campWantFast = campFast = false;
@@ -4863,6 +4864,14 @@ bool World::CampaignAct(int shipId, int act, int arg) {
             campQuests[slot] = q;
             campPaths[slot].clear();
             campOffers.erase(campOffers.begin() + arg);
+            if (const int nc = campaign::QuestNameCode(q); nc >= 0) {  // (her work's names: the board keeps clear of them a while)
+                campNamesUsed.push_back((uint16_t)nc);
+                int of = 0;  // (each kind keeps its own pool's worth: the oldest of it goes)
+                for (uint16_t c : campNamesUsed) of += c / 64 == nc / 64;
+                if (of > campaign::kNamePool[(nc / 64) & 3])
+                    for (size_t j = 0; j < campNamesUsed.size(); ++j)
+                        if (campNamesUsed[j] / 64 == nc / 64) { campNamesUsed.erase(campNamesUsed.begin() + j); break; }
+            }
             GameEvent ev{EventType::Quest};
             ev.a = (uint16_t)slot;
             ev.flags = 1;
@@ -5226,7 +5235,7 @@ std::string MerchantName(uint16_t seed) {
                                       "Pelican", "Two Brothers", "Providence", "Dolphin", "Industry", "Charity", "Unity", "Lark",
                                       "Mary Rose", "Abundance", "Fortitude", "Golden Hind", "Sea Lily", "Perseverance", "Kingfisher", "Patience",
                                       "Three Sisters", "Bountiful", "Sparrow", "Hopewell", "Morning Star", "Plenty", "Speedwell", "Albatross"};
-    return k[(seed / 7) % 32];
+    return k[MerchantIndex(seed)];
 }
 const char* CaptiveName(uint16_t seed) {
     static const char* const k[24] = {"the governor's daughter", "a navigator", "the harbourmaster's wife", "a cartographer",
@@ -5236,6 +5245,15 @@ const char* CaptiveName(uint16_t seed) {
                                      "a ship's chaplain", "an old ship's cook", "the consul's wife", "a naturalist",
                                      "a smuggler's sister", "the harbour pilot", "a runaway heiress", "a gunsmith"};
     return k[(seed / 3) % 24];
+}
+int QuestNameCode(const Quest& q) {
+    switch (q.type) {
+        case Q_BOUNTY: case Q_SMUGGLE: return 0 * 64 + q.seed % 32;     // (PirateName)
+        case Q_CAPTIVE: return 1 * 64 + (q.seed / 3) % 24;              // (CaptiveName)
+        case Q_CONVOY: case Q_ESCORT: return 2 * 64 + MerchantIndex(q.seed);  // (MerchantName)
+        case Q_CARGO: return 3 * 64 + (q.seed / 5) % 24;                // (GoodsName)
+        default: return -1;
+    }
 }
 const char* GoodsName(uint16_t seed) {
     static const char* const k[24] = {"rum", "sugar", "spices", "silk", "tobacco", "timber", "powder", "salt fish", "wine", "tea",
@@ -5495,6 +5513,39 @@ void World::MakeOffers(int port) {
     }
     if (tier > 0)  // (a port that thinks well of her pays her well)
         for (Quest& q : campOffers) q.reward = (int32_t)(roundf(q.reward * RepPay(tier) / 10.0f) * 10.0f);
+    // no name she's met lately on her work (a merchantman, a pirate, a captive, a cargo), and none twice on the board:
+    // another seed for the name alone (a convoy's start port rides in the seed's low bits: those stay)
+    for (size_t k = 0; k < campOffers.size(); ++k) {
+        Quest& q = campOffers[k];
+        if (q.chain) continue;
+        auto taken = [&](const Quest& t) {
+            const int c = QuestNameCode(t);
+            if (NameUsedLately(c)) return true;
+            for (size_t j = 0; j < k; ++j)
+                if (QuestNameCode(campOffers[j]) == c) return true;
+            for (const Quest& a : campQuests)
+                if ((a.state == QS_ACTIVE || a.state == QS_RETURN) && QuestNameCode(a) == c) return true;
+            return false;
+        };
+        if (QuestNameCode(q) < 0 || !taken(q)) continue;
+        Quest t = q;
+        for (int n = 1; n < 600; ++n) {  // (every name of its kind within reach, either way)
+            t.seed = (uint16_t)(q.type == Q_CONVOY ? q.seed + n * 64 : q.seed + n);
+            if (!taken(t)) { q.seed = t.seed; break; }
+        }
+    }
+}
+
+bool World::NameUsedLately(int code) const {
+    if (code < 0) return false;
+    const int kind = code / 64, window = campaign::kNamePool[kind & 3] - 6;
+    int seen = 0;
+    for (auto it = campNamesUsed.rbegin(); it != campNamesUsed.rend() && seen < window; ++it)
+        if (*it / 64 == kind) {
+            if (*it == code) return true;
+            ++seen;
+        }
+    return false;
 }
 
 void World::AddRep(int port, int amount) {
@@ -6237,7 +6288,7 @@ void World::SeaEvent(Ship& cap) {
                       none(NPC_RIVAL) && campClock > 600.0f ? 12.0f : 0.0f,
                       none(NPC_SMUGGLER) ? (b == TEMPERATE || b == TROPICS ? 18.0f : 8.0f) : 0.0f,
                       campAdrift < 0 ? (b == FROZEN || b == FOG ? 16.0f : 10.0f) : 0.0f,
-                      b == FOG && none(NPC_GHOST) ? (night ? 50.0f : 22.0f) : 0.0f};  // (the Fog Banks' own: careers found one in 6 h of fog at 30 / 8)
+                      b == FOG && none(NPC_GHOST) ? (night ? 110.0f : 40.0f) : 0.0f};  // (the Fog Banks' own: a quarter of its events by day, half at night - careers met one in 6 h of fog at 30 / 8, and at 50 / 22)
     if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one, 1-8)
         const int k = atoi(e) - 1;
         for (int i = 0; i < kinds; ++i) w[i] = i == k ? 1.0f : 0.0f;
@@ -6422,6 +6473,8 @@ bool World::SaveCampaign() const {
     fprintf(f, "parts %d\nhulls %d\nlaidup %.2f %.2f %.2f\n", campParts, campHulls, campHullFrac[0], campHullFrac[1], campHullFrac[2]);
     fprintf(f, "rep");
     for (int16_t r : campRep) fprintf(f, " %d", r);
+    fprintf(f, "\nnames %d", (int)campNamesUsed.size());
+    for (uint16_t c : campNamesUsed) fprintf(f, " %u", (unsigned)c);
     fprintf(f, "\n");
     if (cap) fprintf(f, "class %d\nhull %.2f\n", (int)cap->cls, cap->alive ? cap->hp / fmaxf(cap->maxHp, 1.0f) : 1.0f);
     else if (campLoadCls >= 0) fprintf(f, "class %d\nhull %.2f\n", campLoadCls, campLoadHull);  // (she's left the sea already: as she was last)
@@ -6456,6 +6509,12 @@ bool World::LoadCampaign() {
         else if (!strcmp(key, "class")) { int v; if (fscanf(f, "%d", &v) == 1) { campLoadCls = v; if (v >= 0 && v < SC_PLAYABLE) campHulls |= (uint8_t)(1u << v); } }  // (an older save: she owns what she sails)
         else if (!strcmp(key, "parts")) { int v; if (fscanf(f, "%d", &v) == 1) campParts = (uint8_t)v; }
         else if (!strcmp(key, "rep")) { for (int16_t& r : campRep) { int v; if (fscanf(f, "%d", &v) == 1) r = (int16_t)std::clamp(v, campaign::repMin, campaign::repMax); } }
+        else if (!strcmp(key, "names")) {
+            int n = 0;
+            campNamesUsed.clear();
+            if (fscanf(f, "%d", &n) == 1)
+                for (int k = 0; k < n && k < 128; ++k) { unsigned c; if (fscanf(f, "%u", &c) != 1) break; if (c < 4 * 64) campNamesUsed.push_back((uint16_t)c); }
+        }
         else if (!strcmp(key, "hulls")) { int v; if (fscanf(f, "%d", &v) == 1) campHulls |= (uint8_t)v; }
         else if (!strcmp(key, "laidup")) { for (float& h : campHullFrac) { float v; if (fscanf(f, "%f", &v) == 1) h = Clamp(v, 0.15f, 1.0f); } }
         else if (!strcmp(key, "hull")) { float v; if (fscanf(f, "%f", &v) == 1) campLoadHull = v; }
@@ -6466,7 +6525,7 @@ bool World::LoadCampaign() {
             char line[256] = {};
             if (!fgets(line, sizeof line, f)) break;
             const int got = sscanf(line, "%d %d %d %d %f %f %d %f %u %d %d %d %d %d %d %d %d", &ty, &st, &fr, &to, &x, &z, &rw, &dl, &sd, &bi, &co, &su, &go, &ch, &sp, &pt, &sh);
-            if (got >= 13 && ty >= 0 && ty <= campaign::Q_LAIR)
+            if (got >= 13 && ty >= 0 && ty < campaign::Q_KINDS)  // (the regions' quests too: they come after the lair)
                 for (Quest& q : campQuests)
                     if (q.state == campaign::QS_NONE) {
                         q = Quest{};

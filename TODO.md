@@ -930,8 +930,13 @@ Design in docs/campaign.md (solo; one seamless sea; port screens; quests, chains
   convoy that waits for her, the navy's help every 10 min at most, the tavern's word on the next story. Protocol 31.
   Tests: BS_REGIONTEST, BS_SEAEVENTTEST. Careers found and fixed earlier: pirates dragging her out of her depth,
   captors sunk with the captive, monsters at home, the home dread pirate.
-- [ ] Next: re-run the careers to see the repetition numbers move; balance (the Ember Reach's story pays ~7k), boss
-  fights at the region's time of day.
+  Careers re-run (2026-11-20, three seeds x 14 h): repeated names 19-30 -> 4-6, navy help 70-82 -> 20-40; found and
+  fixed: smugglers running out of her depth (4 of 37 done -> 14 of 23), a story's lair given up never offered again,
+  region quests dropped on loading a save, ghost ships too rare (1 in 6 h of fog). Then no name again soon
+  (BS_NAMETEST; a convoy's merchantman could only be 7 of the 32 names when picking another), 32 more faces at sea
+  (the last 8 all women), each region's sea and each boss's own music.
+- [ ] Next: balance (the Ember Reach's story pays ~7k; no career reached its end in 14 h), boss fights at the
+  region's time of day; a story's lair could say what ship it wants (a cutter at the Kraken Queen: sunk 6-36 times).
 - [x] Phase 3: fleet, officers, the shipwright (2026-11-19).
   - The port screen in three tabs: Harbour (repairs for the flagship and the fleet), Tavern (quests; officers looking
     for a berth, 1-2 a day; her officers), Shipwright (12 upgrades, each the Odyssey's upgrade at levels: timbers,

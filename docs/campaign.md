@@ -88,6 +88,10 @@ Each of the twelve ports thinks something of her, in five steps: **Stranger** (0
   adrift** in a crippled boat (alongside, slowly, before they're lost); in the Fog Banks, mostly at night, **ghost
   ships** rising close by (spectral shot; a chance of a ship's part). Every keeper and sea voice has six lines, every
   dread pirate three hails; the name pools are two or three times bigger. Test: BS_SEAEVENTTEST.
+- **No name again soon**: the tavern's board keeps clear of the pirates, captives, merchantmen and cargoes on the
+  work she's taken lately (the last pool-less-six of each kind: 26 pirates, 18 captives, 26 merchantmen, 18 cargoes),
+  and never shows one twice; what she's had is in the save (`names`). The people at sea have several faces each,
+  the same ship always the same captain. Test: BS_NAMETEST (150 days of every named offer taken: none again).
 
 ## Each region's own work and hazards (v0.23, built)
 Offered only in its own ports (most days), and a hazard of its own (test: BS_REGIONTEST):

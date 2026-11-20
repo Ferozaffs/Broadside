@@ -437,6 +437,9 @@ inline const Voice kVoices[] = {
     {"rival_1", 215, 1.15f, 0.12f, 0.05f, 1}, {"rival_2", 120, 0.98f, 0.10f, 0.15f, 1}, {"rival_3", 185, 1.10f, 0.15f, 0.10f, 0},
     {"rival_4", 80, 0.88f, 0.15f, 0.45f, 1}, {"rival_5", 225, 1.16f, 0.12f, 0.05f, 1}, {"rival_6", 105, 0.94f, 0.10f, 0.10f, 0},
     {"smuggler_1", 130, 1.00f, 0.25f, 0.15f, 1}, {"smuggler_2", 220, 1.16f, 0.12f, 0.00f, 1}, {"smuggler_3", 175, 1.08f, 0.30f, 0.30f, 2},
+    {"smuggler_4", 190, 1.10f, 0.15f, 0.10f, 0}, {"smuggler_5", 205, 1.12f, 0.20f, 0.10f, 1}, {"castaway_4", 180, 1.08f, 0.30f, 0.20f, 2},
+    {"castaway_5", 245, 1.20f, 0.25f, 0.00f, 0}, {"captive_f_4", 185, 1.10f, 0.10f, 0.05f, 2}, {"captive_f_5", 215, 1.15f, 0.10f, 0.00f, 0},
+    {"navy_4", 195, 1.11f, 0.08f, 0.05f, 0}, {"merchant_5", 175, 1.07f, 0.25f, 0.25f, 1},
     {"fleet_1", 220, 1.17f, 0.10f, 0.00f, 1}, {"fleet_2", 105, 0.95f, 0.20f, 0.40f, 2}, {"fleet_3", 100, 0.94f, 0.08f, 0.05f, 0},
     {"fleet_4", 200, 1.13f, 0.15f, 0.00f, 0}, {"fleet_5", 90, 0.92f, 0.10f, 0.30f, 1}, {"fleet_6", 125, 1.00f, 0.20f, 0.20f, 0},
     {"pirate_1", 95, 0.93f, 0.15f, 0.40f, 2}, {"pirate_2", 215, 1.15f, 0.20f, 0.05f, 1}, {"pirate_3", 80, 0.88f, 0.10f, 0.45f, 2},
@@ -509,8 +512,16 @@ inline const char* const kWarm[SHOPS][3][3] = {
 
 // Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line)
 constexpr int kFleetFaces = 6, kPirateFaces = 6;
-inline const char* FleetFace(int seed) { static const char* const k[kFleetFaces] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6"}; return k[(unsigned)seed % kFleetFaces]; }
-inline const char* PirateFace(int seed) { static const char* const k[kPirateFaces] = {"pirate_1", "pirate_2", "pirate_3", "pirate_4", "pirate_5", "pirate_6"}; return k[(unsigned)seed % kPirateFaces]; }
+// (the favourites twice over, here and in FacePool: the faces that came out best are the ones she meets most -
+// fleet 2, 3 and 4, pirates 2 and 4)
+inline const char* FleetFace(int seed) {
+    static const char* const k[] = {"fleet_1", "fleet_2", "fleet_2", "fleet_3", "fleet_3", "fleet_4", "fleet_4", "fleet_5", "fleet_6"};
+    return k[(unsigned)seed % (sizeof k / sizeof k[0])];
+}
+inline const char* PirateFace(int seed) {
+    static const char* const k[] = {"pirate_1", "pirate_2", "pirate_2", "pirate_3", "pirate_4", "pirate_4", "pirate_5", "pirate_6"};
+    return k[(unsigned)seed % (sizeof k / sizeof k[0])];
+}
 enum FleetBark { FB_IDLE = 0, FB_ENEMY, FB_HURT, FB_KILL, FB_JOINED, FB_COUNT };
 inline const char* const kFleetLines[FB_COUNT][6] = {
     {"Fair wind today, Captain. Long may it last.", "The men are in good spirits. Mostly about the rum.", "Keeping station off your quarter, Captain.",
@@ -538,16 +549,25 @@ inline const char* const kPirateLines[PB_COUNT][6] = {
 // one of these (by the ship's name, so the same ship keeps the same captain); name nullptr keeps the speaker's own
 struct FacePick { const char* id; const char* name; };
 inline const FacePick* FacePool(const std::string& base, int& n) {
-    static const FacePick merchant[] = {{"sea_merchant", nullptr}, {"merchant_1", nullptr}, {"merchant_2", nullptr}, {"merchant_3", nullptr}, {"merchant_4", nullptr}};
-    static const FacePick navy[] = {{"sea_navy", nullptr}, {"navy_1", "Captain Edmund Hale"}, {"navy_2", "Lieutenant Clara Vance"}, {"navy_3", "Admiral Sir Rufus Blackwood"}};
-    static const FacePick castaway[] = {{"sea_castaway", nullptr}, {"castaway_1", nullptr}, {"castaway_2", nullptr}, {"castaway_3", nullptr}};
-    static const FacePick woman[] = {{"sea_captive", nullptr}, {"captive_f_1", nullptr}, {"captive_f_2", nullptr}, {"captive_f_3", nullptr}};
-    static const FacePick man[] = {{"sea_captive_m", nullptr}, {"captive_m_1", nullptr}, {"captive_m_2", nullptr}};
-    static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr}, {"rival_5", nullptr}, {"rival_6", nullptr}};
-    static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}};
+    // (the favourites listed twice: met twice as often)
+    static const FacePick merchant[] = {{"sea_merchant", nullptr}, {"merchant_1", nullptr}, {"merchant_2", nullptr}, {"merchant_2", nullptr}, {"merchant_3", nullptr},
+                                        {"merchant_4", nullptr}, {"merchant_5", nullptr}};
+    static const FacePick navy[] = {{"sea_navy", nullptr}, {"navy_1", "Captain Edmund Hale"}, {"navy_2", "Lieutenant Clara Vance"}, {"navy_2", "Lieutenant Clara Vance"},
+                                    {"navy_3", "Admiral Sir Rufus Blackwood"}, {"navy_3", "Admiral Sir Rufus Blackwood"}, {"navy_4", "Commander Isobel Thorne"}};
+    static const FacePick castaway[] = {{"sea_castaway", nullptr}, {"castaway_1", nullptr}, {"castaway_2", nullptr}, {"castaway_3", nullptr}, {"castaway_3", nullptr},
+                                        {"castaway_4", nullptr}, {"castaway_5", nullptr}, {"castaway_5", nullptr}};
+    static const FacePick woman[] = {{"sea_captive", nullptr}, {"captive_f_1", nullptr}, {"captive_f_1", nullptr}, {"captive_f_2", nullptr}, {"captive_f_2", nullptr},
+                                     {"captive_f_3", nullptr}, {"captive_f_4", nullptr}, {"captive_f_5", nullptr}, {"captive_f_5", nullptr}};
+    static const FacePick man[] = {{"sea_captive_m", nullptr}, {"sea_captive_m", nullptr}, {"captive_m_1", nullptr}, {"captive_m_2", nullptr}, {"captive_m_2", nullptr}};
+    static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr},
+                                     {"rival_5", nullptr}, {"rival_5", nullptr}, {"rival_6", nullptr}};
+    static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}, {"smuggler_4", nullptr},
+                                        {"smuggler_4", nullptr}, {"smuggler_5", nullptr}};
     struct P { const char* base; const FacePick* f; int n; };
-    static const P k[] = {{"sea_merchant", merchant, 5}, {"sea_navy", navy, 4}, {"sea_castaway", castaway, 4}, {"sea_captive", woman, 4},
-                          {"sea_captive_m", man, 3}, {"rival", rival, 6}, {"smuggler", smuggler, 3}};
+#define BS_POOL(b, a) {b, a, (int)(sizeof a / sizeof a[0])}
+    static const P k[] = {BS_POOL("sea_merchant", merchant), BS_POOL("sea_navy", navy), BS_POOL("sea_castaway", castaway), BS_POOL("sea_captive", woman),
+                          BS_POOL("sea_captive_m", man), BS_POOL("rival", rival), BS_POOL("smuggler", smuggler)};
+#undef BS_POOL
     for (const P& p : k)
         if (base == p.base) { n = p.n; return p.f; }
     n = 0;

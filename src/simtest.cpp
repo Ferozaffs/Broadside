@@ -2259,6 +2259,80 @@ static int RegionTest() {
 }
 
 // Port reputation: what a port offers her at each step, what moves it, its prices, the save, its warships coming out
+// BS_NAMETEST: the names on her work don't come round again soon - a long career's worth of the tavern's work (every
+// named offer taken, day after day, port after port): no pirate, captive, merchantman or cargo again within the last
+// (its pool - 6) of its kind, none twice on one board; and what she's had is saved, and back (the regions' quests too)
+static int NameTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        printf("   %-66s %s\n", what.c_str(), ok ? "ok" : "PROBLEM");
+        if (!ok) ++problems;
+    };
+    World g;
+    g.campSavePath = "nametest.sav";
+    g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    const int me = g.AddShip("captain", false, -1);
+    for (int i = 0; i < 30; ++i) g.Step();
+    static const char* const kKind[4] = {"pirates", "captives", "merchantmen", "cargoes"};
+    std::vector<int> taken[4];
+    int soon[4] = {}, twice = 0, boards = 0;
+    for (int d = 0; d < 150; ++d) {
+        const int port = d % 8;  // (the Temperate Isles and the Tropics, round and round)
+        g.campClock = d * dayLength + 1.0f;
+        g.campDocked = (int8_t)port;
+        g.TestOffers(port);
+        ++boards;
+        std::vector<int> board;
+        for (const Quest& o : g.campOffers)
+            if (!o.chain && QuestNameCode(o) >= 0) board.push_back(QuestNameCode(o));
+        for (size_t a = 0; a < board.size(); ++a)
+            for (size_t b = a + 1; b < board.size(); ++b) twice += board[a] == board[b];
+        for (int k = (int)g.campOffers.size() - 1; k >= 0; --k) {
+            const Quest o = g.campOffers[k];
+            const int c = QuestNameCode(o);
+            const bool before = c >= 0 && g.NameUsedLately(c);
+            if (o.chain || c < 0 || !g.CampaignAct(me, ACT_ACCEPT, k)) continue;
+            std::vector<int>& t = taken[c / 64];
+            const int window = kNamePool[c / 64] - 6;
+            for (int j = (int)t.size() - 1; j >= 0 && j >= (int)t.size() - window; --j) if (t[j] == c) { soon[c / 64]++; if (getenv("BS_NAMEDEBUG")) printf("   again: code %d type %d day %d, %d back; used lately said %d\n", c, o.type, d, (int)t.size() - j, (int)before); }
+            t.push_back(c);
+            for (int s = 0; s < maxQuests; ++s) g.ClearQuest(s);
+        }
+    }
+    for (int k = 0; k < 4; ++k)
+        check(soon[k] == 0 && !taken[k].empty(), TextFormat("%d %s taken over %d days: %d again within %d of the last", (int)taken[k].size(), kKind[k], boards, soon[k],
+                                                            kNamePool[k] - 6));
+    check(twice == 0, TextFormat("the same name twice on one board: %d times", twice));
+    // saved, and back: what she's had, and a region's quest under way
+    g.campDocked = 0;
+    g.campClock += dayLength;
+    g.TestOffers(0);
+    int smug = -1;
+    for (int k = 0; k < (int)g.campOffers.size(); ++k)
+        if (g.campOffers[k].type == RegionQuest(TEMPERATE)) smug = k;
+    for (int d = 1; d < 30 && smug < 0; ++d) {
+        g.campClock += dayLength;
+        g.TestOffers(0);
+        for (int k = 0; k < (int)g.campOffers.size(); ++k)
+            if (g.campOffers[k].type == RegionQuest(TEMPERATE)) smug = k;
+    }
+    const bool took = smug >= 0 && g.CampaignAct(me, ACT_ACCEPT, smug);
+    g.SaveCampaign();
+    World h;
+    h.campSavePath = "nametest.sav";
+    h.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    h.LoadCampaign();
+    check(h.campNamesUsed == g.campNamesUsed && !h.campNamesUsed.empty(), TextFormat("saved and loaded: the %d names she's had", (int)g.campNamesUsed.size()));
+    bool back = false;
+    for (const Quest& q : h.campQuests) back |= q.type == RegionQuest(TEMPERATE) && q.state == QS_ACTIVE;
+    check(took && back, "...and a region's quest under way (the smugglers) is still hers");
+    remove("nametest.sav");
+    printf("names: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
 static int RepTest() {
     using namespace campaign;
     const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
@@ -2589,6 +2663,7 @@ static int ZoneTest() {
 int RunSimTest() {
     if (getenv("BS_PROGRESSTEST")) return ProgressTest();
     if (getenv("BS_REPTEST")) return RepTest();
+    if (getenv("BS_NAMETEST")) return NameTest();
     if (getenv("BS_SEAEVENTTEST")) return SeaEventTest();
     if (getenv("BS_REGIONTEST")) return RegionTest();
     if (getenv("BS_CAREERTEST")) return CareerTest();
