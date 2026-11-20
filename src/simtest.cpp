@@ -1787,7 +1787,9 @@ static Career PlayCareer(uint32_t seed, float hours, bool log) {
             float hs = 1e30f;
             for (int p = 0; p < (int)g.harbours.size(); ++p) {
                 const float over = fmaxf(0.0f, ZoneLevel(g.harbours[p].x, g.harbours[p].z) - rating - 1.0f);
-                const float sc = Vector2Distance(me2, {g.harbours[p].x, g.harbours[p].z}) + over * 20000.0f;
+                // (the tavern's word: a region with a story still to tell, if she's a match for its waters)
+                const bool story = g.campChain[PortBiome(p)] == 0 && g.campChain[PortBiome(g.PortNear(me2.x, me2.y, 1e9f))] > 0;
+                const float sc = Vector2Distance(me2, {g.harbours[p].x, g.harbours[p].z}) + over * 20000.0f - (story && over <= 0.0f ? 15000.0f : 0.0f);
                 if (sc < hs) { hs = sc; h = p; }
             }
             if (h >= 0) at = {g.harbours[h].x, g.harbours[h].z};
@@ -1908,6 +1910,101 @@ static int CareerTest() {
     }
     printf("career: done\n");
     return 0;
+}
+
+// The sea's other life (v0.23): a rival captain, a smuggler, survivors adrift, a ghost ship out of the fog - each one
+// comes, does what it does, and pays (or is lost) as it should
+static int SeaEventTest() {
+    using namespace campaign;
+    const uint32_t seed = getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u;
+    int problems = 0;
+    auto check = [&](bool ok, const std::string& what) {
+        printf("   %-66s %s\n", what.c_str(), ok ? "ok" : "PROBLEM");
+        if (!ok) ++problems;
+    };
+    World probe;
+    probe.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    auto open = [&](int biome) {  // open water in that region, clear of the ports
+        for (float r = 3000.0f; r < 10000.0f; r += 400.0f)
+            for (float a = 0.0f; a < 6.28f; a += 0.15f) {
+                const Vector2 p = {sinf(a) * r, cosf(a) * r};
+                bool ok = BiomeAt(p.x, p.y) == biome && RocksHeight(probe.rocks, p.x, p.y) < -40.0f && ZoneLevel(p.x, p.y) < 7.0f;
+                for (const Harbour& h : probe.harbours) ok &= Vector2Distance({h.x, h.z}, p) > 2500.0f;
+                for (float b = 0.0f; b < 6.28f && ok; b += 0.8f) ok &= RocksHeight(probe.rocks, p.x + sinf(b) * 900.0f, p.y + cosf(b) * 900.0f) < -20.0f;
+                if (ok) return p;
+            }
+        return Vector2{0.0f, 4000.0f};
+    };
+    struct Case { int ev, npc, biome; const char* what; };
+    const Case cases[] = {{5, NPC_RIVAL, TEMPERATE, "a rival captain"}, {6, NPC_SMUGGLER, TEMPERATE, "a smuggler"},
+                          {7, NPC_ADRIFT, FROZEN, "survivors adrift"}, {8, NPC_GHOST, FOG, "a ghost ship"}};
+    for (const Case& k : cases) {
+        World g;
+        g.Init(seed, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+        g.campBotCaptain = true;
+        const int me = g.AddShip("captain", true, SC_FRIGATE);
+        const Vector2 at = open(k.biome);
+        g.ships[me].pos = {at.x, g.ocean.Height(at.x, at.y) + 1.0f, at.y};
+        g.ships[me].vel = {};
+        g.campClock = 1100.0f;  // (late enough for a rival; night for the ghost)
+        g.campSpawn = 1e9f;     // (no pirate bands: just this)
+        _putenv_s("BS_SEAEVENT", TextFormat("%d", k.ev));
+        _putenv_s("BS_SEAEVENTS", "5");
+        g.campEventT = 1.0f;
+        int npc = -1;
+        float d0 = 0.0f, d1 = 0.0f;
+        for (int i = 0; i < 60 * 12 && npc < 0; ++i) {
+            g.ships[me].vel = {};
+            g.Step();
+            g.events.clear();
+            for (int s = 0; s < g.ShipCount(); ++s)
+                if (g.ships[s].active && g.ships[s].npc == k.npc) npc = s;
+        }
+        _putenv_s("BS_SEAEVENT", "");
+        _putenv_s("BS_SEAEVENTS", "");
+        g.campEventT = 1e9f;
+        check(npc >= 0, TextFormat("%s comes (%s)", k.what, npc >= 0 ? g.ships[npc].name.c_str() : "-"));
+        if (npc < 0) continue;
+        d0 = Vector2Distance({g.ships[npc].pos.x, g.ships[npc].pos.z}, at);
+        if (k.npc == NPC_ADRIFT) {  // alongside, slowly: taken off, paid, gone
+            const int gold0 = g.campGold;
+            bool saved = false;
+            for (int i = 0; i < 60 * 10 && !saved; ++i) {
+                const Ship& m = g.ships[npc];
+                g.ships[me].pos = {m.pos.x + 40.0f, g.ocean.Height(m.pos.x + 40.0f, m.pos.z) + 1.0f, m.pos.z};
+                g.ships[me].vel = {};
+                g.Step();
+                for (const GameEvent& e : g.events) saved |= e.type == EventType::CampEvent && e.b == EV_ADRIFTSAVED;
+                g.events.clear();
+            }
+            check(saved && g.campGold > gold0 && g.campAdrift < 0, TextFormat("...taken off alongside: +%d gold", g.campGold - gold0));
+            continue;
+        }
+        for (int i = 0; i < 60 * 25; ++i) {
+            g.ships[me].hp = g.ships[me].maxHp;
+            g.ships[me].vel = {};
+            g.Step();
+            g.events.clear();
+        }
+        if (!g.ships[npc].active) { check(false, "...still there after 25 s"); continue; }
+        d1 = Vector2Distance({g.ships[npc].pos.x, g.ships[npc].pos.z}, at);
+        if (k.npc == NPC_SMUGGLER) check(Vector3Length(g.ships[npc].vel) > 4.0f && g.ships[npc].team == neutral, TextFormat("...running down her lane (%.0f m/s), nobody's enemy", Vector3Length(g.ships[npc].vel)));
+        else check(d1 < d0 - 150.0f || d1 < 400.0f, TextFormat("...comes for her (%.0f m -> %.0f m)", d0, d1));
+        // sunk by her: the price paid
+        const int gold0 = g.campGold;
+        g.ships[npc].lastAttacker = me;
+        if (k.npc == NPC_SMUGGLER) g.ships[npc].provoked = true;
+        g.TestDamage(g.ships[npc], 1e6f, me);
+        bool paid = false;
+        for (int i = 0; i < 30; ++i) {
+            g.Step();
+            for (const GameEvent& e : g.events) paid |= e.type == EventType::CampEvent && e.b == EV_PRICE;
+            g.events.clear();
+        }
+        check(paid && g.campGold > gold0, TextFormat("...sunk: the price on her, +%d gold", g.campGold - gold0));
+    }
+    printf("sea events: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
 }
 
 // Port reputation: what a port offers her at each step, what moves it, its prices, the save, its warships coming out
@@ -2241,6 +2338,7 @@ static int ZoneTest() {
 int RunSimTest() {
     if (getenv("BS_PROGRESSTEST")) return ProgressTest();
     if (getenv("BS_REPTEST")) return RepTest();
+    if (getenv("BS_SEAEVENTTEST")) return SeaEventTest();
     if (getenv("BS_CAREERTEST")) return CareerTest();
     if (getenv("BS_FLOETEST")) return FloeTest();
     if (getenv("BS_ZONETEST")) return ZoneTest();

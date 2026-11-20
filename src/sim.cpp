@@ -2016,6 +2016,23 @@ void World::Damage(Ship& v, float amount, int attacker) {
                     if (campQuests[k].type == campaign::Q_CARGO && campQuests[k].state == campaign::QS_ACTIVE) EndQuest(k, false);
             }
             if (v.questSlot >= 0) QuestShipSunk(v);
+            if ((v.npc == campaign::NPC_RIVAL || v.npc == campaign::NPC_GHOST || v.npc == campaign::NPC_SMUGGLER) &&
+                (byEnemy || (killer >= 0 && ships[killer].team == 0))) {  // a rival, a ghost ship, a smuggler: what she was worth
+                const float lv = campaign::ZoneLevel(v.pos.x, v.pos.z);
+                const int gold = v.npc == campaign::NPC_SMUGGLER ? (int)(roundf(450.0f * campaign::LevelMul(lv) / 10.0f) * 10.0f)
+                                                                 : campaign::Bounty(v.cls, lv) * (v.npc == campaign::NPC_RIVAL ? 4 : 3);
+                campGold += gold;
+                AddRep(PortNear(v.pos.x, v.pos.z, 8000.0f), v.npc == campaign::NPC_RIVAL ? 40 : 15);
+                GameEvent ce{EventType::CampEvent};
+                ce.a = v.id;
+                ce.b = campaign::EV_PRICE;
+                ce.flags = v.npc;
+                ce.value = (float)gold;
+                ce.pos = v.pos;
+                events.push_back(ce);
+                if (v.npc == campaign::NPC_GHOST && RandF() < 0.35f) GivePart(NextPart(lv, false), v.pos);  // (and what the drowned took down with them)
+                campSaveDue = true;
+            }
             if (v.npc == campaign::NPC_DREAD) {  // a region's dread pirate: the bounty on her head
                 const int b = campaign::BiomeAt(v.pos.x, v.pos.z);
                 campDreadAt[b] = campClock;
@@ -4717,7 +4734,7 @@ void World::Step() {
                 if (s.leader >= 0 && mode == MODE_CAMPAIGN) RemoveShip(s.id);  // (the campaign: sunk, she's gone)
                 else if (s.leader >= 0) s.stowed = true;  // lost escorts wait for their captain
                 else if (s.fireship) FireshipBlast(s);
-                else if (s.raider || s.merchant) {  // (a pirate (voyage) or a merchant (raid) goes down for good; its slot isn't handed straight on)
+                else if (s.raider || s.merchant || s.npc) {  // (a pirate (voyage), a merchant (raid), the sea's own people go down for good)
                     RemoveShip(s.id);
                     voyageSpawn = fmaxf(voyageSpawn, 0.5f);
                 }
@@ -5025,7 +5042,8 @@ void World::UpdateCampaign(float dt) {
     if (mode != MODE_CAMPAIGN) return;  // (into a lair: the rest is a boss fight's business)
     UpdateSeaLife(dt, *cap, nearFoe);
     for (const Ship& p : ships)  // (the quests' pirates count as near too)
-        if (p.active && p.alive && p.questSlot >= 0 && p.team == 1 && !p.struck) nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
+        if (p.active && p.alive && (p.questSlot >= 0 || p.npc == NPC_RIVAL || p.npc == NPC_GHOST) && p.team == 1 && !p.struck)
+            nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
     campFast = campWantFast && cap->alive && campDocked < 0 && nearFoe > fastClear;
     // a port that counts her a friend sends its warships out when she's in a fight in its waters (a hero: two of them)
     campHelpT = fmaxf(0.0f, campHelpT - dt);
@@ -5033,7 +5051,7 @@ void World::UpdateCampaign(float dt) {
         const int p = PortNear(cap->pos.x, cap->pos.z, repWaters);
         const int tier = RepTierAt(p);
         if (p >= 0 && tier >= repHelpTier) {
-            campHelpT = 240.0f;
+            campHelpT = 600.0f;  // (not every fight: about one in a few)
             const Vector2 me = {cap->pos.x, cap->pos.z}, hp = {harbours[p].x, harbours[p].z};
             const Vector2 dir = Vector2Normalize(Vector2Subtract(hp, me)), side = {dir.y, -dir.x};
             const float lv = ZoneLevel(me.x, me.y);
@@ -5068,7 +5086,7 @@ void World::UpdateCampaign(float dt) {
     if (gone) campSpawn = fmaxf(campSpawn, 1.0f);
     const int most = 2 + (int)(ZoneLevel(cap->pos.x, cap->pos.z) / 3.0f);  // (at once: two at home, five out in the wild)
     if (campSpawn > 0.0f || !cap->alive || campDocked >= 0 || pirates >= most) return;
-    campSpawn = 70.0f + RandF() * 80.0f;
+    campSpawn = 150.0f + RandF() * 130.0f;  // (half as often as they were: room for the sea's other life)
     float portD = 1e9f;
     for (const Harbour& hb : harbours) portD = fminf(portD, Vector2Distance({hb.x, hb.z}, {cap->pos.x, cap->pos.z}));
     if (portD < portSafe) return;  // (her port's forts: try again later)
@@ -5095,23 +5113,34 @@ void World::UpdateCampaign(float dt) {
 // ---- the campaign's quests ------------------------------------------------------------------
 namespace campaign {
 std::string PirateName(uint16_t seed) {
-    static const char* const k[16] = {"Mad Jack", "Black Anne", "Red Morgan", "One-Eyed Tom", "Calico Mary", "Long Ned", "Silver Kate", "Iron Hob",
-                                      "Bloody Bess", "Gentleman Jim", "Crooked Sal", "Black Hal", "Scarlet Wen", "Dutch Piet", "Grey Nan", "Salt Billy"};
-    return k[seed % 16];
+    static const char* const k[32] = {"Mad Jack", "Black Anne", "Red Morgan", "One-Eyed Tom", "Calico Mary", "Long Ned", "Silver Kate", "Iron Hob",
+                                      "Bloody Bess", "Gentleman Jim", "Crooked Sal", "Black Hal", "Scarlet Wen", "Dutch Piet", "Grey Nan", "Salt Billy",
+                                      "Barnacle Bart", "Velvet Rose", "Hangman Hugo", "Tilly Two-Guns", "Smiling Sam", "Mother Crow", "Jonas the Knife",
+                                      "Red Molly", "Old Scratch", "Pretty Polly", "Cutlass Kit", "Bonny Jean", "Six-Toed Silas", "Lady Lockjaw",
+                                      "Captain Vex", "Rotten Rupert"};
+    return k[seed % 32];
 }
 std::string MerchantName(uint16_t seed) {
-    static const char* const k[16] = {"Fair Wind", "Good Hope", "Margaret", "Prosperous", "Diligence", "Endeavour", "Swallow", "Constant",
-                                      "Pelican", "Two Brothers", "Providence", "Dolphin", "Industry", "Charity", "Unity", "Lark"};
-    return k[(seed / 7) % 16];
+    static const char* const k[32] = {"Fair Wind", "Good Hope", "Margaret", "Prosperous", "Diligence", "Endeavour", "Swallow", "Constant",
+                                      "Pelican", "Two Brothers", "Providence", "Dolphin", "Industry", "Charity", "Unity", "Lark",
+                                      "Mary Rose", "Abundance", "Fortitude", "Golden Hind", "Sea Lily", "Perseverance", "Kingfisher", "Patience",
+                                      "Three Sisters", "Bountiful", "Sparrow", "Hopewell", "Morning Star", "Plenty", "Speedwell", "Albatross"};
+    return k[(seed / 7) % 32];
 }
 const char* CaptiveName(uint16_t seed) {
-    static const char* const k[8] = {"the governor's daughter", "a navigator", "the harbourmaster's wife", "a cartographer",
-                                     "the surgeon's sister", "a merchant's heiress", "the parson's niece", "a young midshipman"};
-    return k[(seed / 3) % 8];
+    static const char* const k[24] = {"the governor's daughter", "a navigator", "the harbourmaster's wife", "a cartographer",
+                                     "the surgeon's sister", "a merchant's heiress", "the parson's niece", "a young midshipman",
+                                     "the admiral's nephew", "a lighthouse keeper's widow", "a famous painter", "the bishop's secretary",
+                                     "a lady astronomer", "the tavern keeper's son", "a sugar baron", "the mapmaker's apprentice",
+                                     "a ship's chaplain", "an old ship's cook", "the consul's wife", "a naturalist",
+                                     "a smuggler's sister", "the harbour pilot", "a runaway heiress", "a gunsmith"};
+    return k[(seed / 3) % 24];
 }
 const char* GoodsName(uint16_t seed) {
-    static const char* const k[10] = {"rum", "sugar", "spices", "silk", "tobacco", "timber", "powder", "salt fish", "wine", "tea"};
-    return k[(seed / 5) % 10];
+    static const char* const k[24] = {"rum", "sugar", "spices", "silk", "tobacco", "timber", "powder", "salt fish", "wine", "tea",
+                                      "indigo", "coffee", "whale oil", "cocoa", "copper ingots", "furs", "porcelain", "cotton",
+                                      "medicine", "letters and parcels", "lamp oil", "coal", "church bells", "a menagerie"};
+    return k[(seed / 5) % 24];
 }
 }  // namespace campaign
 
@@ -5764,7 +5793,8 @@ void World::UpdateQuests(float dt, Ship& cap) {
                 break;
             case Q_CONVOY: {
                 const int a = q.seed & 0x3F;
-                if (!(q.flags & QF_SPAWNED) && a < (int)harbours.size()) {  // the convoy puts to sea
+                if (!(q.flags & QF_SPAWNED) && a < (int)harbours.size() &&
+                    Vector2Distance(me, {harbours[a].x, harbours[a].z}) < 3500.0f) {  // the convoy puts to sea as she comes near (she lies in wait)
                     const Harbour& hb = harbours[a];
                     const Harbour& b = harbours[q.to];
                     Vector2 in = {-cosf(hb.ang), -sinf(hb.ang)}, side = {-in.y, in.x};
@@ -5916,6 +5946,46 @@ void World::UpdateSeaLife(float dt, Ship& cap, float nearFoe) {
             }
         }
     }
+    if (campAdrift >= 0) {  // survivors adrift: alongside her, slowly, a few seconds, and they're aboard - or in time they're lost
+        const int m = campAdrift;
+        const bool there = m < ShipCount() && ships[m].active && ships[m].alive && ships[m].npc == NPC_ADRIFT;
+        campAdriftT += dt;
+        if (!there) campAdrift = -1;
+        else {
+            const float d = Vector2Distance(me, {ships[m].pos.x, ships[m].pos.z});
+            const bool alongside = cap.alive && d < 65.0f && Vector2Length({cap.vel.x, cap.vel.z}) < 5.0f;
+            campAdriftHold = alongside ? campAdriftHold + dt : fmaxf(0.0f, campAdriftHold - dt);
+            GameEvent ce{EventType::CampEvent};
+            ce.a = (uint16_t)m;
+            ce.pos = ships[m].pos;
+            if (campAdriftHold > 4.0f) {
+                const int gold = (int)(roundf(220.0f * LevelMul(ZoneLevel(me.x, me.y)) / 10.0f) * 10.0f);
+                campGold += gold;
+                AddRep(PortNear(me.x, me.y, 8000.0f), 25);
+                ce.b = EV_ADRIFTSAVED;
+                ce.value = (float)gold;
+                events.push_back(ce);
+                RemoveShip(m);
+                campAdrift = -1;
+                campSaveDue = true;
+            } else if (campAdriftT > 300.0f || d > 5000.0f) {
+                ce.b = EV_ADRIFTLOST;
+                events.push_back(ce);
+                RemoveShip(m);
+                campAdrift = -1;
+            }
+        }
+    }
+    for (Ship& s : ships)  // (a rival, a smuggler, a ghost: gone when she's far astern; a smuggler home, gone)
+        if (s.active && (s.npc == NPC_RIVAL || s.npc == NPC_SMUGGLER || s.npc == NPC_GHOST)) {
+            const float d = Vector2Distance(me, {s.pos.x, s.pos.z});
+            bool home = false;
+            if (s.npc == NPC_SMUGGLER) {
+                const std::vector<Vector2>& path = Lane(s.laneFrom, s.laneTo);
+                home = path.empty() || (s.wp + 1 >= (int)path.size() && Vector2Distance({s.pos.x, s.pos.z}, path.back()) < 200.0f);
+            }
+            if (d > 7000.0f || home) RemoveShip(s.id);
+        }
     // a dread pirate gone off (far astern, or out of the world): she's still out there
     if (campDread >= 0 && (campDread >= ShipCount() || !ships[campDread].active || ships[campDread].npc != NPC_DREAD)) campDread = -1;
     // a merchantman under attack: saved, or lost
@@ -5989,20 +6059,105 @@ void World::SeaEvent(Ship& cap) {
     // what: by the region (the wilder, the more dangerous), and what's possible now
     const bool dreadReady = campDread < 0 && (campDreadAt[b] == 0.0f || campClock - campDreadAt[b] > 3.0f * dayLength) && campClock > 240.0f;
     const bool monsterReady = !monsters[MON_KRAKEN].active && !monsters[MON_MEGALODON].active && ZoneLevel(me.x, me.y) >= 2.5f;  // (not in the gentlest waters)
-    float w[5] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 8.0f + 2.0f * ZoneLevel(me.x, me.y) : 0.0f, 0.0f};
-    if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one)
+    auto none = [&](int npc) {
+        for (const Ship& o : ships)
+            if (o.active && o.alive && o.npc == npc) return false;
+        return true;
+    };
+    const float lv = ZoneLevel(me.x, me.y);
+    const float ph = fmodf(campClock / dayLength, 1.0f);
+    const bool night = ph > 0.72f && ph < 0.88f;  // (as the sky has it)
+    constexpr int kinds = 8;
+    static const uint8_t kKind[kinds] = {EV_WRECK, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_RIVAL, EV_SMUGGLER, EV_ADRIFT, EV_GHOST};
+    float w[kinds] = {35.0f, 25.0f, monsterReady ? (b == TROPICS || b == FOG ? 28.0f : 16.0f) : 0.0f, dreadReady ? 8.0f + 2.0f * lv : 0.0f,
+                      none(NPC_RIVAL) && campClock > 600.0f ? 12.0f : 0.0f,
+                      none(NPC_SMUGGLER) ? (b == TEMPERATE || b == TROPICS ? 18.0f : 8.0f) : 0.0f,
+                      campAdrift < 0 ? (b == FROZEN || b == FOG ? 16.0f : 10.0f) : 0.0f,
+                      b == FOG && none(NPC_GHOST) ? (night ? 30.0f : 8.0f) : 0.0f};
+    if (const char* e = getenv("BS_SEAEVENT")) {  // (tests: always this one, 1-8)
         const int k = atoi(e) - 1;
-        for (int i = 0; i < 5; ++i) w[i] = i == k ? 1.0f : 0.0f;
+        for (int i = 0; i < kinds; ++i) w[i] = i == k ? 1.0f : 0.0f;
     }
     float sum = 0.0f;
     for (float x : w) sum += x;
     if (sum <= 0.0f) return;
     float u = RandF() * sum;
     int kind = 0;
-    while (kind < 4 && u > w[kind]) u -= w[kind++];
+    while (kind < kinds - 1 && u > w[kind]) u -= w[kind++];
     GameEvent ce{EventType::CampEvent};
     Vector2 at;
-    switch (kind + 1) {
+    const uint16_t eseed = (uint16_t)(RandF() * 65535.0f);
+    switch (kKind[kind]) {
+        case EV_RIVAL: {  // a rival captain: she's heard of you - a ship like yours, and her tricks
+            if (!ahead(1100.0f, 1400.0f, at)) return;
+            const int cls = cap.cls < SC_PLAYABLE ? cap.cls : SC_FRIGATE;
+            const int r = SpawnNpc(NPC_RIVAL, at, atan2f(me.x - at.x, me.y - at.y), cls, 1, false, 1.0f, "Captain " + PirateName(eseed) + ", a rival");
+            if (r < 0) return;
+            Ship& s = ships[r];
+            static const uint8_t kTricks[6] = {PK_CHAIN, PK_HOTSHOT, PK_GRAPE, PK_RICOCHET, PK_RELOAD, PK_SHOT};
+            const int n = 2 + (int)(lv / 3.5f);
+            for (int k = 0; k < n; ++k) {
+                const uint8_t pk = kTricks[(int)(RandF() * 6.0f) % 6];
+                s.perks[pk] = (uint8_t)std::min<int>(s.perks[pk] + 1, kPerkMax[pk]);
+            }
+            s.maxHp = s.hp = MaxHpOf(s) * 1.3f * PirateHull(lv);
+            ce.a = (uint16_t)r;
+            ce.b = EV_RIVAL;
+            ce.flags = (uint8_t)(eseed % 6);
+            ce.pos = s.pos;
+            break;
+        }
+        case EV_SMUGGLER: {  // a smuggler on a lane between two ports, low in the water (neutral: fired on, she fights)
+            int bestFrom = -1, bestTo = -1, bestWp = -1;
+            float bestD = 1e9f;
+            for (int a = 0; a < (int)harbours.size(); ++a)  // (the lane nearest her, a little way off: any pair of ports)
+                for (int z = 0; z < (int)harbours.size(); ++z) {
+                    if (a == z || Vector2Distance({harbours[a].x, harbours[a].z}, me) > 12000.0f) continue;
+                    const std::vector<Vector2>& path = Lane(a, z);
+                    for (int k = 0; k + 1 < (int)path.size(); k += 2) {
+                        const float d = Vector2Distance(path[k], me);
+                        if (d > 600.0f && d < 2200.0f && d < bestD && RocksHeight(rocks, path[k].x, path[k].y) < -25.0f) { bestD = d; bestFrom = a; bestTo = z; bestWp = k; }
+                    }
+                }
+            if (bestWp < 0) return;
+            const std::vector<Vector2>& path = Lane(bestFrom, bestTo);
+            const Vector2 p = path[bestWp], nx = path[bestWp + 1];
+            const int m = SpawnNpc(NPC_SMUGGLER, p, atan2f(nx.x - p.x, nx.y - p.y), SC_CUTTER, neutral, false, 1.1f, "the " + MerchantName(eseed) + ", a smuggler");
+            if (m < 0) return;
+            ships[m].laneFrom = (int8_t)bestFrom;
+            ships[m].laneTo = (int8_t)bestTo;
+            ships[m].wp = (int16_t)bestWp;
+            ce.a = (uint16_t)m;
+            ce.b = EV_SMUGGLER;
+            ce.pos = ships[m].pos;
+            break;
+        }
+        case EV_ADRIFT: {  // survivors of a wreck in a crippled boat, dead in the water: alongside, slowly, and she takes them off
+            if (!ahead(600.0f, 900.0f, at)) return;
+            const int m = SpawnNpc(NPC_ADRIFT, at, RandF() * 2.0f * PI, SC_CUTTER, neutral, true, 1.0f, "survivors of the " + MerchantName(eseed));
+            if (m < 0) return;
+            ships[m].struck = true;  // (nobody fires on her; she lies still)
+            ships[m].hp = ships[m].maxHp * 0.25f;
+            campAdrift = (int16_t)m;
+            campAdriftT = campAdriftHold = 0.0f;
+            ce.a = (uint16_t)m;
+            ce.b = EV_ADRIFT;
+            ce.pos = ships[m].pos;
+            break;
+        }
+        case EV_GHOST: {  // a ghost ship rising out of the fog close by: her shot passes through her own kind
+            if (!ahead(450.0f, 650.0f, at)) return;
+            const int g2 = SpawnNpc(NPC_GHOST, at, atan2f(me.x - at.x, me.y - at.y), lv > 6.5f ? SC_LINE : SC_FRIGATE, 1, false, 1.0f, "the Drowned " + MerchantName(eseed));
+            if (g2 < 0) return;
+            Ship& s = ships[g2];
+            s.perks[PK_SPECTRAL] = (uint8_t)std::min<int>(1, kPerkMax[PK_SPECTRAL]);
+            s.perks[PK_HOMING] = (uint8_t)std::min<int>(1, kPerkMax[PK_HOMING]);
+            s.maxHp = s.hp = MaxHpOf(s) * 1.5f * PirateHull(lv);
+            ce.a = (uint16_t)g2;
+            ce.b = EV_GHOST;
+            ce.pos = s.pos;
+            break;
+        }
         case EV_WRECK: {  // wreckage: chests and the odd power-up crate, floating where a ship went down
             if (!ahead(550.0f, 900.0f, at)) return;
             int n = 0;

@@ -3276,14 +3276,14 @@ void Game::PlayEvent(const GameEvent& e) {
                     break;
                 case EV_DISTRESS: {
                     const people::SeaVoice& v = people::kSea[people::ST_DISTRESS];
-                    Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]);
+                    Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 5)]);
                 }
                     seaDistress = e.a;
                     Feed3("A MERCHANTMAN", TextFormat("  under attack, %s", BearingFrom(e.pos).c_str()), "", ui::kGold, ui::kText);
                     Notice("A MERCHANTMAN UNDER ATTACK", ui::kGold, 3.0f);
                     sfx::PlayFlat(sfx::Chime, 0.7f, 0.6f);
                     break;
-                case EV_SAVED: { const people::SeaVoice& v = people::kSea[people::ST_SAVED]; Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]); }
+                case EV_SAVED: { const people::SeaVoice& v = people::kSea[people::ST_SAVED]; Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 5)]); }
                     Feed3("SAVED", "  the merchantman sends her thanks", gold, ui::kGreen, ui::kGold); seaDistress = -1; sfx::PlayFlat(sfx::Treasure, 0.8f, 1.1f); break;
                 case EV_REP: {  // (a port thinks better of her, or worse, past a step)
                     const int p = e.a % kPorts, t = e.flags % repTiers;
@@ -3304,9 +3304,39 @@ void Game::PlayEvent(const GameEvent& e) {
                     AddBark("sea_navy", NameOf(e.a), TextFormat("Compliments of %s, Captain! We'll see these villains off.", PortName(p)), ui::kGreen);
                     break;
                 }
+                case EV_RIVAL:
+                    Notice("A RIVAL CAPTAIN", ui::kRed, 3.0f);
+                    Feed3(NameOf(e.a), "  has come looking for you", "", ui::kRed, ui::kText);
+                    Say(people::PirateFace(e.flags), NameOf(e.a), "A rival captain", people::kRivalLines[GetRandomValue(0, 5)]);
+                    break;
+                case EV_SMUGGLER:
+                    Feed3(NameOf(e.a), "  runs for port, low in the water: contraband. Sink her for it", "", ui::kGold, ui::kText);
+                    floats.push_back({Vector3Add(e.pos, {0, 25, 0}), "A SMUGGLER", ui::kGold, 4.0f});
+                    break;
+                case EV_ADRIFT:
+                    Feed3("SURVIVORS", "  adrift in a crippled boat: come alongside, slowly", "", ui::kGold, ui::kText);
+                    floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "SURVIVORS", ui::kGold, 5.0f});
+                    Say("sea_castaway", "Survivors", "Adrift in a crippled boat", people::kAdriftLines[GetRandomValue(0, 2)]);
+                    break;
+                case EV_ADRIFTSAVED:
+                    Feed3("SURVIVORS", "  taken off, and what they saved is yours", gold, ui::kGold, ui::kGold);
+                    Say("sea_castaway", "Survivors", "Taken off their boat", people::kAdriftThanks[GetRandomValue(0, 2)]);
+                    sfx::PlayFlat(sfx::Treasure, 0.8f, 1.0f);
+                    break;
+                case EV_ADRIFTLOST: Feed3("SURVIVORS", "  lost: their boat went down", "", ui::kRed, ui::kText); break;
+                case EV_GHOST:
+                    Notice("A GHOST SHIP", ui::kGreen, 3.5f);
+                    Feed3(NameOf(e.a), "  rises out of the fog", "", ui::kGreen, ui::kText);
+                    break;
+                case EV_PRICE:
+                    Feed3(NameOf(e.a), e.flags == NPC_SMUGGLER ? "  sunk: her contraband" : e.flags == NPC_GHOST ? "  sunk: back to the deep" : "  sunk: the rivalry's over",
+                          gold, ui::kGold, ui::kGold);
+                    sfx::PlayFlat(sfx::Treasure, 0.9f, 0.9f);
+                    break;
                 case EV_LOST: Feed3("LOST", "  the merchantman went down", "", ui::kRed, ui::kText); seaDistress = -1; break;
                 case EV_DREAD:
-                    Say(people::kDread[e.flags % BIOMES].id, DreadName(e.flags), TextFormat("Dread pirate of %s", kBiomeNames[e.flags % BIOMES]), people::kDread[e.flags % BIOMES].line);
+                    Say(people::kDread[e.flags % BIOMES].id, DreadName(e.flags), TextFormat("Dread pirate of %s", kBiomeNames[e.flags % BIOMES]),
+                        [&]() { const people::DreadVoice& d = people::kDread[e.flags % BIOMES]; const int k = GetRandomValue(0, 2); return k ? d.more[k - 1] : d.line; }());
                     Notice(TextFormat("THE DREAD PIRATE %s", TextToUpper(DreadName(e.flags))), ui::kRed, 4.5f);
                     Feed3(DreadName(e.flags), "  hunts these waters, and she's found you", "", ui::kRed, ui::kText);
                     sfx::PlayFlat(sfx::Thunder, 0.6f, 0.7f);
@@ -3318,7 +3348,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_STRUCK:
                     if (myId >= 0 && myId < NumShips() && Vector3Distance(e.pos, view[myId].s.pos) < 1500.0f) {
                         const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
-                        Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 2)]);
+                        Say(v.id, NameOf(e.a), v.title, v.lines[GetRandomValue(0, 5)]);
                     }
                     Feed3(NameOf(e.a), "  has struck her colours: come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
@@ -3370,17 +3400,17 @@ void Game::PlayEvent(const GameEvent& e) {
                 if (q.type == campaign::Q_CASTAWAYS) {
                     Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
                     const people::SeaVoice& v = people::kSea[people::ST_CASTAWAY];
-                    Say(v.id, v.name, v.title, v.lines[GetRandomValue(0, 2)]);
+                    Say(v.id, v.name, v.title, v.lines[GetRandomValue(0, 5)]);
                 } else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
                     const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
-                    Say(v.id, campaign::PirateName(q.seed), v.title, v.lines[GetRandomValue(0, 2)]);
+                    Say(v.id, campaign::PirateName(q.seed), v.title, v.lines[GetRandomValue(0, 5)]);
                     Feed3(campaign::PirateName(q.seed), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
                 } else if (q.type == campaign::Q_CAPTIVE) {
                     std::string c = CaptiveOf(q);
                     const people::SeaVoice& v = people::kSea[people::CaptiveIsWoman(c) ? people::ST_CAPTIVE_F : people::ST_CAPTIVE_M];
                     c[0] = (char)toupper(c[0]);
-                    Say(v.id, c, v.title, v.lines[GetRandomValue(0, 2)]);
+                    Say(v.id, c, v.title, v.lines[GetRandomValue(0, 5)]);
                     Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
                 }
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
@@ -8514,7 +8544,7 @@ static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) {
         case Q_BOUNTY: return TextFormat("%s has been raiding in %s, last seen %s of here. Find the ship and sink it.", PirateName(q.seed).c_str(), region, where.c_str());
         case Q_CONVOY: {
             const int a = q.seed & 0x3F;
-            return TextFormat("Three laden merchantmen and a guard sail from %s for %s. Sink them before they make port: %d gold a ship.", PortName(a), PortName(q.to),
+            return TextFormat("Three laden merchantmen and a guard lie in %s, bound for %s: they sail when you come near. Sink them before they make port: %d gold a ship.", PortName(a), PortName(q.to),
                               (int)q.reward / std::max<int>(q.count, 1));
         }
         case Q_ESCORT: return TextFormat("The merchantman %s sails from here for %s, %s off, and wants a warship beside her. Pirates will come.",
@@ -8624,7 +8654,8 @@ bool Game::QuestGoal(int slot, std::string& what, Vector3& at) const {
                     nearest = k;
                 }
             const int left = q.count - q.sunk - q.gone;
-            what = TextFormat("Sink the convoy: %d left, bound for %s", left, PortName(q.to));
+            what = nearest >= 0 ? TextFormat("Sink the convoy: %d left, bound for %s", left, PortName(q.to))
+                                : TextFormat("Lie off %s: the convoy sails when you come near", PortName(q.seed & 0x3F));
             if (nearest >= 0) at = Vector3Add(view[nearest].s.pos, {0, 30, 0});
             else at = port(q.seed & 0x3F);
             return true;
@@ -9069,7 +9100,7 @@ void Game::UpdateHails() {
     hailed.insert(who);
     hailAt = GetTime();
     const people::SeaVoice& v = people::kSea[navy ? people::ST_NAVY : people::ST_HAIL];
-    Say(v.id, navy ? v.name : NameOf(who), navy ? NameOf(who) : v.title, v.lines[GetRandomValue(0, 2)]);
+    Say(v.id, navy ? v.name : NameOf(who), navy ? NameOf(who) : v.title, v.lines[GetRandomValue(0, 5)]);
 }
 
 void Game::DrawPort(float W, float H) {
@@ -9090,7 +9121,7 @@ void Game::DrawPort(float W, float H) {
         for (const Snapshot::CampFleet& f : campFleetC) sore |= f.hull < 0.6f;
         const bool special = portTab == 0 ? sore : portTab == 1 ? campOffers.empty() : campGold < 150;
         const int day = (int)(campClock / dayLength);
-        const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 3];
+        const char* line = special ? who.special : who.hello[(day + campDocked * 7 + portTab * 3) % 6];
         static std::string warm;
         if (!special && repT >= 2 && (day + portTab) % 3 != 0) {  // (a port that thinks well of her: a warmer word, two days in three)
             warm = people::kWarm[portTab % people::SHOPS][repT - 2][(day + campDocked * 5 + portTab) % 3];
@@ -9180,6 +9211,23 @@ void Game::DrawPort(float W, float H) {
     } else if (portTab == 1) {  // the tavern: today's work, who's looking for a berth, her officers
         Label("TODAY'S WORK", x0, y, 12, kDim);
         y += 20;
+        {  // word in the tavern: where the next untold story is to be found (a story is offered only in its own region's ports)
+            const int pb = PortBiome(campDocked);
+            int bestP = -1;
+            float bd = 1e9f;
+            for (int p2 = 0; p2 < kPorts && p2 < (int)pred.harbours.size() && campDocked < (int)pred.harbours.size(); ++p2) {
+                const int b2 = PortBiome(p2);
+                if (b2 == pb || campChainC[b2] != 0) continue;
+                const float d = Vector2Distance({pred.harbours[p2].x, pred.harbours[p2].z}, {pred.harbours[campDocked].x, pred.harbours[campDocked].z});
+                if (d < bd) { bd = d; bestP = p2; }
+            }
+            if (bestP >= 0 && campChainC[pb] > 0) {
+                std::string w = std::string("Word in the tavern: ") + kBiomeNames[PortBiome(bestP)] + " has a story to tell - ask in " + PortName(bestP);
+                for (char& ch : w) ch = (char)toupper((unsigned char)ch);
+                Label(w.c_str(), x0, y - 2, 10, kGold);
+                y += 16;
+            }
+        }
         int active = 0;
         for (const Quest& q : campQuests) active += q.state == QS_ACTIVE || q.state == QS_RETURN;
         if (campOffers.empty()) { Text("Nothing more today. Come back tomorrow.", x0, y + 4, 16, kDim, false); y += 30; }

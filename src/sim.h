@@ -582,14 +582,25 @@ enum QuestRole : uint8_t { QR_NONE = 0, QR_TARGET, QR_MERCHANT, QR_GUARD, QR_CAP
 enum QuestFlag : uint8_t { QF_SPAWNED = 1, QF_GUARDS = 2, QF_BAND1 = 4, QF_BAND2 = 8, QF_STRUCK = 16 };
 constexpr int maxQuests = 3, offersPer = 3, questShips = 4;
 // The sea's own life: traders and the navy on their lanes, things that happen at sea, the regions' dread pirates
-enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS };
+enum Npc : uint8_t { NPC_NONE = 0, NPC_TRADER, NPC_NAVY, NPC_DREAD, NPC_DREADMATE, NPC_DISTRESS,
+                     NPC_RIVAL,     // a rival captain: a ship like hers, with tricks of her own
+                     NPC_SMUGGLER,  // a smuggler on a lane, contraband in her hold (neutral: fired on, she fights)
+                     NPC_ADRIFT,    // survivors in a crippled boat, dead in the water (struck: nobody fires)
+                     NPC_GHOST };   // a ghost ship out of the Fog Banks: her shot passes through her own
 enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SAVED, EV_DREADSUNK, EV_CHEST, EV_MAP, EV_LOST, EV_MONSTERSLAIN,
                           EV_STRUCK, EV_PRIZE, EV_PLUNDER, EV_ESCORTLOST, EV_OFFICERLOST,
                           EV_PART,  // (EV_PART: a ship's part into her hold, flags = which; value = gold instead, if she had it)
                           EV_JOINED,  // (a ship joins her fleet, flags = her class; value = gold instead, if the fleet's full)
                           EV_FINALE,  // (the last story told: the Leviathan sunk)
                           EV_REP,     // (a port thinks better or worse of her, past a step: a = the port, flags = the step, value = +/-)
-                          EV_HELP };  // (a port's warships come out to help her: a = the first, flags = the port)
+                          EV_HELP,    // (a port's warships come out to help her: a = the first, flags = the port)
+                          EV_RIVAL,   // (a rival captain comes for her: a = her ship, flags = her face)
+                          EV_SMUGGLER,     // (a smuggler running for port: a = her ship)
+                          EV_ADRIFT,       // (survivors adrift: a = their boat)
+                          EV_ADRIFTSAVED,  // (...taken off: value = what they paid)
+                          EV_ADRIFTLOST,   // (...lost)
+                          EV_GHOST,        // (a ghost ship out of the fog: a = her ship)
+                          EV_PRICE };      // (a rival, a ghost or a smuggler sunk: value = the gold, flags = which (Npc))
 constexpr int neutral = 2;            // the traders' side: the pirates' prey, nobody's enemy unless fired on
 const char* DreadName(int biome);     // each region's dread pirate
 std::string NavyName(uint16_t seed);
@@ -1155,6 +1166,8 @@ public:
     void AddRep(int port, int amount);       // (a word in the feed when it crosses a step)
     int PortNear(float x, float z, float within) const;  // the nearest port, -1 if none is that close
     float campHelpT = 0.0f;                  // s before a port's warships come out to help her again
+    int16_t campAdrift = -1;                 // survivors adrift (their boat), how long they've waited, how long she's lain alongside
+    float campAdriftT = 0.0f, campAdriftHold = 0.0f;
     int NextPart(float level, bool line);  // the part a reward brings: a frigate's she lacks first (or a line's, line), -1 none
     void GivePart(int part, Vector3 at);         // into her hold (or its worth in gold, if she has it)
     void JoinFleet(int cls, Vector3 at);         // a ship comes to sail with her (a reward: there's no buying them; gold, if the fleet's full)
