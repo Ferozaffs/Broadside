@@ -640,6 +640,10 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
         p.guns[0] = at(p.pierTo + 7.0f, -2.4f, 2.86f);
         p.guns[1] = at(p.pierTo + 7.0f, 2.4f, 2.86f);
         p.anchor = at(p.pierFrom - 10.5f, -7.2f, 2.2f);
+        p.barrels[0] = at(p.pierFrom - 10.2f, -9.9f, 2.2f);  // (along the quay from the anchor)
+        p.barrels[1] = at(p.pierFrom - 10.0f, -11.0f, 2.2f);
+        p.barrels[2] = at(p.pierFrom - 11.1f, -10.5f, 2.2f);
+        p.barrels[3] = at(p.pierTo + 9.4f, 0.0f, 2.86f);     // (behind the guns: the lighthouse's platform covers the pier head)
         p.launch = at(p.pierTo + 22.0f, 7.6f, 0.0f);
         p.seaYaw = atan2f(-Z.x, -Z.z);
         if (B.P.size() < 65000) {
@@ -651,11 +655,11 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
 }
 
 void Scenery::DrawPropModel(int which, Matrix world) {
-    static const char* const kName[3] = {"cannon", "anchor", "launch"};
+    static const char* const kName[4] = {"cannon", "anchor", "launch", "barrel"};
     PropModel& pm = propModels[which];
     if (!pm.tried) {
         pm.tried = true;
-        const char* path = TextFormat("data/parts/prop_%s.glb", kName[which]);
+        const char* path = TextFormat("%sdata/parts/prop_%s.glb", GetApplicationDirectory(), kName[which]);  // (beside the game, whatever the working folder)
         if (FileExists(path)) {
             pm.m = LoadModel(path);
             for (int i = 0; i < pm.m.materialCount; ++i) pm.m.materials[i].shader = propMat.shader;
@@ -684,6 +688,8 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
             const Matrix gunFace = MatrixRotateY(p.seaYaw + PI);
             for (const Vector3& g : p.guns) DrawPropModel(0, MatrixMultiply(gunFace, MatrixTranslate(g.x, g.y, g.z)));
             DrawPropModel(1, MatrixMultiply(MatrixRotateY(p.seaYaw + 0.6f), MatrixTranslate(p.anchor.x, p.anchor.y, p.anchor.z)));
+            for (int b = 0; b < 4; ++b)  // (each turned its own way: the staves and hoops don't line up like soldiers)
+                DrawPropModel(3, MatrixMultiply(MatrixRotateY(p.seaYaw + 1.7f * b + i), MatrixTranslate(p.barrels[b].x, p.barrels[b].y, p.barrels[b].z)));
             const float by = ocean.Height(p.launch.x, p.launch.z), bob = 0.04f * sinf(time * 1.3f + i);
             DrawPropModel(2, MatrixMultiply(MatrixMultiply(MatrixRotateZ(bob), face), MatrixTranslate(p.launch.x, by - 0.7f, p.launch.z)));
         }

@@ -976,7 +976,7 @@ void ShipModel::Figure(int which, Matrix local, const Matrix& model, Color tint)
     if (which < 0 || which >= 3) return;
     if (!g_figTried[which]) {
         g_figTried[which] = true;
-        const char* path = TextFormat("data/parts/figure_%s.glb", kName[which]);
+        const char* path = TextFormat("%sdata/parts/figure_%s.glb", GetApplicationDirectory(), kName[which]);  // (beside the game)
         if (FileExists(path)) g_fig[which] = LoadModel(path);
         if (g_fig[which].meshCount == 0) TraceLog(LOG_WARNING, "Ship parts: no figurehead model %s", path);
     }

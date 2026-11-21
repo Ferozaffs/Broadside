@@ -52,10 +52,11 @@ private:
         // the generated props (data/parts/prop_*.glb): two guns on the pier facing the anchorage, an anchor on the quay,
         // the harbour's launch moored alongside the pier
         Vector3 guns[2]{}, anchor{}, launch{};
+        Vector3 barrels[4]{};  // (three by the anchor on the quay, a powder cask between the pier guns)
         float seaYaw = 0;  // (about up: +z turned to face out over the anchorage)
     };
     struct PropModel { Model m{}; bool tried = false; };
-    PropModel propModels[3];  // cannon, anchor, launch
+    PropModel propModels[4];  // cannon, anchor, launch, barrel
     void DrawPropModel(int which, Matrix world);
     std::vector<Port> ports;
     Mesh cube{}, cyl{}, cone{};
