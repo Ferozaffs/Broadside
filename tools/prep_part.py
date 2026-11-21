@@ -2,7 +2,10 @@
 on y = 0 (the origin at the middle of its foot), a given height in metres, fewer triangles, smaller textures.
 
   blender -b --factory-startup --python tools/prep_part.py -- in.glb out.glb --height 2.6 [--tris 12000] [--tex 512]
-          [--yaw 0] [--tilt 0]
+          [--yaw 0] [--tilt 0] [--align] [--length 30]
+
+--align turns the model so its longest horizontal axis runs fore and aft (a hull: then --yaw 180 if the bow ended up
+astern); --length scales it to that many metres long instead of --height tall.
 
 --yaw turns it about up (degrees) when the model doesn't face +z (glTF's forward, toward the reference camera);
 --tilt leans it forward about x afterwards (a figurehead leaning out over the bow). The game loads the result with
@@ -16,6 +19,7 @@ src, dst = os.path.abspath(argv[0]), os.path.abspath(argv[1])
 def opt(name, default):
     return float(argv[argv.index(name) + 1]) if name in argv else default
 height, tris, tex, yaw, tilt = opt("--height", 2.6), int(opt("--tris", 12000)), int(opt("--tex", 512)), opt("--yaw", 0.0), opt("--tilt", 0.0)
+length, align = opt("--length", 0.0), "--align" in argv
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=src)
@@ -36,11 +40,20 @@ for o in list(bpy.context.scene.objects):
 
 # Blender space now: up = +Z, the model's front (glTF +z) = Blender -Y. Turn, scale, stand it on its foot.
 me = obj.data
+if align:  # the long axis (principal component on the ground plane) onto Blender Y (= the game's fore and aft)
+    n0 = len(me.vertices)
+    cx = sum(v.co.x for v in me.vertices) / n0
+    cy = sum(v.co.y for v in me.vertices) / n0
+    sxx = sum((v.co.x - cx) ** 2 for v in me.vertices)
+    syy = sum((v.co.y - cy) ** 2 for v in me.vertices)
+    sxy = sum((v.co.x - cx) * (v.co.y - cy) for v in me.vertices)
+    ang = 0.5 * math.atan2(2 * sxy, sxx - syy)  # (the long axis's angle from X)
+    me.transform(Matrix.Rotation(math.pi / 2 - ang, 4, "Z"))
 R = Matrix.Rotation(math.radians(yaw), 4, "Z")
 me.transform(R)
 lo = Vector((min(v.co.x for v in me.vertices), min(v.co.y for v in me.vertices), min(v.co.z for v in me.vertices)))
 hi = Vector((max(v.co.x for v in me.vertices), max(v.co.y for v in me.vertices), max(v.co.z for v in me.vertices)))
-s = height / max(hi.z - lo.z, 1e-6)
+s = (length / max(hi.y - lo.y, 1e-6)) if length else (height / max(hi.z - lo.z, 1e-6))
 foot = Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z))
 me.transform(Matrix.Translation(-foot))
 me.transform(Matrix.Scale(s, 4))
