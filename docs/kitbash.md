@@ -26,6 +26,7 @@ them). So a ship is built from parts:
 5. **Into the game**: `assets/ship_<class>/ship.glb` + `ship.cfg` (`length=41`, `keel=-1.5`, `sails=sail,canvas`).
    The keel matters: at the default -3.6 a shallow generated hull sits so deep that the sea shows through its deck.
    Release staging packs every `assets/ship*` folder.
+   `prep_part.py --width W` gives a tubby hull a beam of its own; `--desat k` washes the paint toward grey.
 
 ## Built so far (2026-11-21, local, not shipped)
 
@@ -33,6 +34,7 @@ them). So a ship is built from parts:
 |---|---|---|---|
 | cutter (`assets/ship_cutter`) | ZWUUUP `assets/parts/hull2_brig/hull2_brig_semi_s33` -> `assets/3d/hull2_brig_semi_s33` | `--type brig` (prep `--yaw 180`) | a blue-and-gold brig, carved scroll bow, 10 guns (57k triangles) |
 | gunboat (`assets/ship_gunboat`) | `hull_cutter_semi_s33` (an open launch) | `--type cutter --masts 0.38 --rig-scale 0.9 --bow-gun --bow-gun-at 0.21` | gaff mainsail and two jibs, a bow chaser (33k) |
+| ghost: the Flying Dutchman and the Fog's "Drowned" ships (`assets/ship_ghost`) | ZWUUUP `hull4_ghost_semi_s99` (hulls3's s22 failed the frame checks; hull4 asked for a small ship on a plain ground) | prep `--align --yaw 180 --length 30 --width 9 --desat 0.65`, rig `--type ship --tattered --guns 6`; cfg `keel=-4` | rotten grey-green canvas, rents and ragged feet per sail; TRELLIS made her tubby (12.5 m beam on 30 m), so `--width` narrows her (66k / lo 7.8k) |
 
 ## Figureheads (shipped in data/parts)
 

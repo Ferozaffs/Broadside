@@ -160,9 +160,25 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
             p.y -= belly * math.sin(math.pi * u) * math.sin(math.pi * min(1.0, v * 1.1 + 0.05))  # (filled forward: -Y)
             row.append(bm.verts.new(p))
         grid.append(row)
+    if tattered:  # each sail its own rents (a few ragged-edged round holes, one long split) and a foot torn to rags
+        rents = [(0.15 + 0.7 * _rag.random(), 0.15 + 0.6 * _rag.random(), 0.07 + 0.09 * _rag.random()) for _ in range(_rag.randint(2, 4))]
+        sx, sy = 0.2 + 0.6 * _rag.random(), 0.2 + 0.4 * _rag.random()
+        split = [(sx + 0.04 * k * (_rag.random() - 0.5), sy + 0.05 * k) for k in range(_rag.randint(3, 7))]
+        foot, d = [], 0.0
+        for i in range(nu):  # (a random walk: rags of different lengths, not a saw)
+            d = min(0.32, max(0.0, d + (_rag.random() - 0.45) * 0.09))
+            foot.append(1.0 - d)
+    def torn(i, j):
+        u, v = (i + 0.5) / nu, (j + 0.5) / nv
+        if v > foot[i]:
+            return True
+        for x, y, r in rents:
+            if ((u - x) ** 2 + ((v - y) * 1.3) ** 2) ** 0.5 < r * (0.75 + 0.5 * _rag.random()):
+                return True
+        return any(abs(u - x) < 0.6 / nu and abs(v - y) < 0.03 for x, y in split)
     for j in range(nv):
         for i in range(nu):
-            if tattered and 0 < i < nu - 1 and (_rag.random() < 0.07 + 0.25 * _holes(i / nu, j / nv) or (j >= nv - 4 and _rag.random() < 0.2 * (j - nv + 5))):
+            if tattered and 0 < i < nu - 1 and torn(i, j):
                 continue  # (a hole torn through, or the foot in rags)
             f = bm.faces.new((grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]))
             for loop, (a, b) in zip(f.loops, ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))):

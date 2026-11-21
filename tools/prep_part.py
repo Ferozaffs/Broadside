@@ -2,6 +2,7 @@
 on y = 0 (the origin at the middle of its foot), a given height in metres, fewer triangles, smaller textures.
 
   blender -b --factory-startup --python tools/prep_part.py -- in.glb out.glb --height 2.6 [--tris 12000] [--tex 512]
+      [--length 30 --align] [--yaw 180] [--tilt deg] [--width 9] [--desat 0.65]
           [--yaw 0] [--tilt 0] [--align] [--length 30]
 
 --align turns the model so its longest horizontal axis runs fore and aft (a hull: then --yaw 180 if the bow ended up
@@ -57,6 +58,9 @@ s = (length / max(hi.y - lo.y, 1e-6)) if length else (height / max(hi.z - lo.z, 
 foot = Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z))
 me.transform(Matrix.Translation(-foot))
 me.transform(Matrix.Scale(s, 4))
+width = opt("--width", 0.0)  # (a beam of its own, metres: TRELLIS hulls often come out tubby)
+if width:
+    me.transform(Matrix.Diagonal((width / max((hi.x - lo.x) * s, 1e-6), 1.0, 1.0, 1.0)))
 if tilt:
     me.transform(Matrix.Rotation(math.radians(-tilt), 4, "X"))  # (forward is -Y: leaning forward turns the top toward -Y)
 
@@ -77,10 +81,29 @@ for img in bpy.data.images:
         img.scale(tex, tex)
         img.pack()
 
+# --desat k: wash the base colour out toward grey by k (0..1), e.g. a ghost ship's paint gone pale (TRELLIS paints
+# what the reference shows, often brighter than asked)
+desat = opt("--desat", 0.0)
+if desat > 0:
+    import numpy as np
+    base = {l.from_node.image for m in bpy.data.materials if m.use_nodes for l in m.node_tree.links
+            if l.to_socket.name == "Base Color" and l.from_node.type == "TEX_IMAGE" and l.from_node.image}
+    for img in base:
+        px = np.empty(img.size[0] * img.size[1] * 4, dtype=np.float32)
+        img.pixels.foreach_get(px)
+        px = px.reshape(-1, 4)
+        lum = px[:, :3] @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        px[:, :3] = px[:, :3] * (1 - desat) + lum[:, None] * desat
+        img.pixels.foreach_set(px.ravel())
+        img.pack()
+        print(f"DESAT {img.name} by {desat}")
+
 n2 = sum(len(p.vertices) - 2 for p in me.polygons)
 os.makedirs(os.path.dirname(dst), exist_ok=True)
 bpy.ops.export_scene.gltf(filepath=dst, export_format="GLB", use_selection=False, export_yup=True,
                           export_image_format="AUTO", export_apply=True)
 dims = (hi - lo) * s
+if width:
+    dims.x = width
 print(f"PREPPED {os.path.basename(dst)}: {n} -> {n2} triangles, {len(me.vertices)} vertices, "
       f"{dims.x:.2f} x {dims.y:.2f} x {dims.z:.2f} m (w, l, h), textures {tex}")
