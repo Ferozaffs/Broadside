@@ -63,6 +63,12 @@ Generated locally with FLUX.1 [dev] (Black Forest Labs) and the **SXZ Amadmir [F
 **sadxzero** (https://civitai.com/models/733609), cut out with BiRefNet (MIT). The LoRA's terms require this
 credit, and they don't allow the generated images to be sold: the portraits, the logo and the icon are for this free game only.
 
+## Carved figureheads and other 3D parts (data/parts)
+
+Made locally: a reference image with FLUX.1 [dev] (Black Forest Labs; no LoRA), turned into a 3D model with TRELLIS.2
+(Microsoft, MIT licence) in ComfyUI, then cut down for the game with Blender (tools/prep_part.py). The FLUX.1 [dev]
+licence lets its outputs be used for any purpose other than training competing models.
+
 ## Music (data/music)
 
 Any tracks shipped in data/music were generated locally with YuE2 (multimodal-art-projection, https://github.com/multimodal-art-projection/YuE),

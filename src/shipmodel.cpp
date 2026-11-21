@@ -967,6 +967,29 @@ bool ShipModel::LoadLod(const std::string& dir, const char* base, Shader lit, co
     return true;
 }
 
+// The carved figureheads: textured models (data/parts/figure_<name>.glb, tools/prep_part.py: facing +z, standing on
+// their foot at the origin, 2.6 m tall), loaded the first time one is wanted, drawn in the ship's light
+static Model g_fig[3];
+static bool g_figTried[3];
+void ShipModel::Figure(int which, Matrix local, const Matrix& model, Color tint) {
+    static const char* const kName[3] = {"eagle", "lion", "mermaid"};
+    if (which < 0 || which >= 3) return;
+    if (!g_figTried[which]) {
+        g_figTried[which] = true;
+        const char* path = TextFormat("data/parts/figure_%s.glb", kName[which]);
+        if (FileExists(path)) g_fig[which] = LoadModel(path);
+        if (g_fig[which].meshCount == 0) TraceLog(LOG_WARNING, "Ship parts: no figurehead model %s", path);
+    }
+    Model& M = g_fig[which];
+    tint.a = (unsigned char)(tint.a * alpha);
+    for (int i = 0; i < M.meshCount; ++i) {
+        Material em = M.materials[M.meshMaterial[i]];
+        em.shader = mat.shader;
+        em.maps[MATERIAL_MAP_DIFFUSE].color = tint;
+        DrawMesh(M.meshes[i], em, MatrixMultiply(MatrixMultiply(M.transform, local), model));
+    }
+}
+
 void ShipModel::Part(const Mesh& mesh, Matrix local, const Matrix& model, Color c) {
     c.a = (unsigned char)(c.a * alpha);
     mat.maps[MATERIAL_MAP_DIFFUSE].color = c;
@@ -976,6 +999,10 @@ void ShipModel::Part(const Mesh& mesh, Matrix local, const Matrix& model, Color 
 static Matrix TRS(Vector3 t, Matrix r, Vector3 s) {
     return MatrixMultiply(MatrixMultiply(MatrixScale(s.x, s.y, s.z), r), MatrixTranslate(t.x, t.y, t.z));
 }
+
+// where a carved figurehead's foot goes from the stem's anchor, and how far it leans out (BS_FIGPOSE "y z tilt [scale]")
+static float kFigY = -1.0f, kFigZ = 0.25f, kFigTilt = 22.0f, kFigS = 1.25f;
+[[maybe_unused]] static const bool kFigPose = getenv("BS_FIGPOSE") && sscanf(getenv("BS_FIGPOSE"), "%f %f %f %f", &kFigY, &kFigZ, &kFigTilt, &kFigS) >= 3;
 
 // how far a painted ship's sails go over to her side's colour in a team game (the picture stays, in shades of it)
 static const float kTeamPaint = getenv("BS_TEAMPAINT") ? (float)atof(getenv("BS_TEAMPAINT")) : 0.8f;
@@ -1216,6 +1243,12 @@ void ShipModel::DrawParts(Renderer& r, const Matrix& model, const LiveryGpu* liv
             Part(Get(PM_HORN), MatrixTranslate(bow.x, bow.y, bow.z), model, T(ivory));
             Part(Get(PM_HORN_COLLAR), MatrixTranslate(bow.x, bow.y, bow.z), model, T(gold));
             break;
+        case FIG_EAGLE: case FIG_LION: case FIG_MERMAID: {
+            // (its foot down the stem, leaning out under the bowsprit like the serpent)
+            r.SetRough(0.0f);
+            Figure(liv->figure - FIG_EAGLE, TRS({bow.x, bow.y + kFigY, bow.z + kFigZ}, MatrixRotateX(kFigTilt * DEG2RAD), {kFigS, kFigS, kFigS}), model, tint);
+            break;
+        }
         case FIG_SKULL: {
             Matrix L = TRS({bow.x, bow.y + 0.35f, bow.z + 0.55f}, MatrixRotateX(-12.0f * DEG2RAD), {1.35f, 1.35f, 1.35f});
             Part(Get(PM_SKULL), L, model, T(bone));

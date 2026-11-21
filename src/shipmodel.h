@@ -65,6 +65,7 @@ private:
     void BuildAnchors(const Model& m, const Matrix& fix, const std::vector<bool>& skip);
     Mesh hull{}, deck{}, cube{}, cyl{}, sailMesh{}, sphere{};
     Material mat{};
+    void Figure(int which, Matrix local, const Matrix& model, Color tint);  // (a carved figurehead: 0 eagle, 1 lion, 2 mermaid)
     bool hasExt = false;
     Model ext{};
     Matrix extFix{};

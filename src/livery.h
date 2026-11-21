@@ -11,7 +11,9 @@ constexpr int kLiveryMaxBytes = 60000;     // encoded; anything bigger is refuse
 
 enum LogoWhere : uint8_t { LOGO_OFF = 0, LOGO_MAIN = 1, LOGO_SQUARE = 2, LOGO_ALL = 3, LOGO_COUNT = 4 };
 // the Shipwright's parts (src/shipparts.h builds them)
-enum Figurehead : uint8_t { FIG_NONE = 0, FIG_SERPENT, FIG_SCROLL, FIG_HORN, FIG_SKULL, FIG_COUNT };
+enum Figurehead : uint8_t { FIG_NONE = 0, FIG_SERPENT, FIG_SCROLL, FIG_HORN, FIG_SKULL,
+                            FIG_EAGLE, FIG_LION, FIG_MERMAID,  // (carved and painted: models in data/parts, made on ZWUUUP)
+                            FIG_COUNT };
 enum SternPiece : uint8_t { STERN_NONE = 0, STERN_LANTERN, STERN_SUN, STERN_BONES, STERN_COUNT };
 // the masts: height in % over the model's own, rake aft in half degrees, the yards' spread in %
 constexpr int kMastHMin = -30, kMastHMax = 40, kRakeMin = -12, kRakeMax = 30, kSpreadMin = -23, kSpreadMax = 30;  // (v0.14.1: half as wide again)

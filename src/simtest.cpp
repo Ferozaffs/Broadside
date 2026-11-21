@@ -81,10 +81,10 @@ static int LiveryTest() {
     check(!t.Decode(bad.data(), bad.size()), "a bad placement is refused");
     // the Shipwright's parts come back too, and nonsense in them is refused
     Livery p;
-    p.figure = FIG_SERPENT; p.stern = STERN_BONES; p.flag = 1; p.mastH = kMastHMax; p.rake = kRakeMin; p.spread = -7;
+    p.figure = FIG_MERMAID; p.stern = STERN_BONES; p.flag = 1; p.mastH = kMastHMax; p.rake = kRakeMin; p.spread = -7;
     std::vector<uint8_t> pe2 = p.Encode();
     Livery q;
-    check(q.Decode(pe2.data(), pe2.size()) && q.figure == FIG_SERPENT && q.stern == STERN_BONES && q.flag == 1 && q.mastH == kMastHMax &&
+    check(q.Decode(pe2.data(), pe2.size()) && q.figure == FIG_MERMAID && q.stern == STERN_BONES && q.flag == 1 && q.mastH == kMastHMax &&
               q.rake == kRakeMin && q.spread == -7 && !q.IsDefault(),
           "the parts (figurehead, stern, flag, masts) come back");
     bad = pe2;

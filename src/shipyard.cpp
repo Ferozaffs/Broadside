@@ -412,10 +412,12 @@ void Shipyard::DrawPartsPage(float x, float y, float iw, bool compact) {
     using namespace ui;
     const float gap = compact ? 64.0f : 74.0f;
     Label("FIGUREHEAD", x + 2, y, 11, kDim);
-    static const char* const kFig[FIG_COUNT] = {"None", "Serpent", "Scroll", "Horn", "Skull"};
-    int f = work.figure;
-    if (Segmented({x, y + 18, iw, 38}, kFig, FIG_COUNT, f)) { work.figure = (uint8_t)f; dirty = true; Focus(1); }
-    y += gap;
+    static const char* const kFig[FIG_COUNT] = {"None", "Serpent", "Scroll", "Horn", "Skull", "Eagle", "Lion", "Mermaid"};
+    // (two rows of four: the carved ones on the second)
+    int f = work.figure, a = f < 4 ? f : -1, b = f >= 4 ? f - 4 : -1;
+    if (Segmented({x, y + 18, iw, 38}, kFig, 4, a)) { work.figure = (uint8_t)a; dirty = true; Focus(1); }
+    if (Segmented({x, y + 60, iw, 38}, kFig + 4, FIG_COUNT - 4, b)) { work.figure = (uint8_t)(b + 4); dirty = true; Focus(1); }
+    y += gap + 42.0f;
     Label("ON THE STERN", x + 2, y, 11, kDim);
     static const char* const kStern[STERN_COUNT] = {"None", "Great lantern", "Sun", "Skull & bones"};
     int s = work.stern;
