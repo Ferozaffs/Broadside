@@ -160,6 +160,13 @@ void Scenery::DrawCrate(Renderer& r, Vector3 pos, Quaternion rot, int type, floa
     if (!ready) return;
     r.SetLitParams(0.0f, glow);
     Matrix m = MatrixMultiply(QuaternionToMatrix(rot), MatrixTranslate(pos.x, pos.y, pos.z));
+    if (type == PU_COUNT) {  // the booty: the generated sea chest (data/parts/prop_chest.glb, its foot at 0: down by half the cube)
+        DrawPropModel(4, MatrixMultiply(MatrixTranslate(0.0f, -1.4f, 0.0f), m));
+        if (propModels[4].m.meshCount > 0) {
+            r.SetLitParams(0.0f, 0.0f);
+            return;
+        }
+    }
     DrawMesh(crateMesh, crateMat[type < 0 || type > PU_COUNT ? 0 : type], m);
     r.SetLitParams(0.0f, 0.0f);
 }
@@ -655,7 +662,7 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
 }
 
 void Scenery::DrawPropModel(int which, Matrix world) {
-    static const char* const kName[4] = {"cannon", "anchor", "launch", "barrel"};
+    static const char* const kName[5] = {"cannon", "anchor", "launch", "barrel", "chest"};
     PropModel& pm = propModels[which];
     if (!pm.tried) {
         pm.tried = true;

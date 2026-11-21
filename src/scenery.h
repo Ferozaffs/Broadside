@@ -56,7 +56,7 @@ private:
         float seaYaw = 0;  // (about up: +z turned to face out over the anchorage)
     };
     struct PropModel { Model m{}; bool tried = false; };
-    PropModel propModels[4];  // cannon, anchor, launch, barrel
+    PropModel propModels[5];  // cannon, anchor, launch, barrel, chest
     void DrawPropModel(int which, Matrix world);
     std::vector<Port> ports;
     Mesh cube{}, cyl{}, cone{};
