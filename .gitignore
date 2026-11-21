@@ -3,6 +3,8 @@ build/
 assets/
 dist/
 *.glb
+# (except our own generated parts: figureheads and props made on ZWUUUP, no licence to protect)
+!data/parts/*.glb
 *.gltf
 *.pak
 *.zip

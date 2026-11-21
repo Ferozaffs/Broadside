@@ -49,7 +49,14 @@ private:
         bool hasMesh = false;
         Vector3 glass{};   // lamp room (drawn glowing)
         Vector3 flagPole{};
+        // the generated props (data/parts/prop_*.glb): two guns on the pier facing the anchorage, an anchor on the quay,
+        // the harbour's launch moored alongside the pier
+        Vector3 guns[2]{}, anchor{}, launch{};
+        float seaYaw = 0;  // (about up: +z turned to face out over the anchorage)
     };
+    struct PropModel { Model m{}; bool tried = false; };
+    PropModel propModels[3];  // cannon, anchor, launch
+    void DrawPropModel(int which, Matrix world);
     std::vector<Port> ports;
     Mesh cube{}, cyl{}, cone{};
     Material partMat{};

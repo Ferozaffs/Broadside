@@ -635,12 +635,33 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
                 else B.Box(Vector3Add(bp, {0, 0.6f, 0}), {1.2f, 1.2f, 1.2f}, X, Y, Z, tone({150, 112, 70, 255}, rnd(0.8f, 1.1f)));
             }
         }
+        // the generated props' places (drawn in DrawHarbours): the guns on the pier near its head, the anchor by the
+        // first warehouse, the launch alongside the pier, bow to seaward
+        p.guns[0] = at(p.pierTo + 7.0f, -2.4f, 2.86f);
+        p.guns[1] = at(p.pierTo + 7.0f, 2.4f, 2.86f);
+        p.anchor = at(p.pierFrom - 10.5f, -7.2f, 2.2f);
+        p.launch = at(p.pierTo + 22.0f, 7.6f, 0.0f);
+        p.seaYaw = atan2f(-Z.x, -Z.z);
         if (B.P.size() < 65000) {
             p.mesh = B.Build();
             p.hasMesh = true;
         }
         ports.push_back(p);
     }
+}
+
+void Scenery::DrawPropModel(int which, Matrix world) {
+    static const char* const kName[3] = {"cannon", "anchor", "launch"};
+    PropModel& pm = propModels[which];
+    if (!pm.tried) {
+        pm.tried = true;
+        const char* path = TextFormat("data/parts/prop_%s.glb", kName[which]);
+        if (FileExists(path)) {
+            pm.m = LoadModel(path);
+            for (int i = 0; i < pm.m.materialCount; ++i) pm.m.materials[i].shader = propMat.shader;
+        }
+    }
+    for (int i = 0; i < pm.m.meshCount; ++i) DrawMesh(pm.m.meshes[i], pm.m.materials[pm.m.meshMaterial[i]], MatrixMultiply(pm.m.transform, world));
 }
 
 void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& ocean, const Color* flag, float time, bool cull) {
@@ -656,6 +677,13 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
             r.SetProp(1.0f);
             DrawMesh(p.mesh, propMat, MatrixIdentity());
             r.SetProp(0.0f);
+        }
+        if (!cull || Vector3Distance(mid, v.pos) < 900.0f) {  // (the generated props, textured; small: not from afar)
+            const Matrix face = MatrixRotateY(p.seaYaw);
+            for (const Vector3& g : p.guns) DrawPropModel(0, MatrixMultiply(face, MatrixTranslate(g.x, g.y, g.z)));
+            DrawPropModel(1, MatrixMultiply(MatrixRotateY(p.seaYaw + 0.6f), MatrixTranslate(p.anchor.x, p.anchor.y, p.anchor.z)));
+            const float by = ocean.Height(p.launch.x, p.launch.z), bob = 0.04f * sinf(time * 1.3f + i);
+            DrawPropModel(2, MatrixMultiply(MatrixMultiply(MatrixRotateZ(bob), face), MatrixTranslate(p.launch.x, by - 0.7f, p.launch.z)));
         }
         auto column = [&](const Mesh& m, Vector3 base, float rad, float h, Color col) {
             Part(m, MatrixMultiply(MatrixScale(rad * 2, h, rad * 2), MatrixTranslate(base.x, base.y, base.z)), col);

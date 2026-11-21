@@ -7361,6 +7361,11 @@ void Game::Frame() {
             rv.target = {hb.x + o.x * 30.0f, 12.0f, hb.z + o.y * 30.0f};
             rv.pos = {hb.x - o.x * 110.0f + sd.x * 90.0f, 45.0f, hb.z - o.y * 110.0f + sd.y * 90.0f};
             rv.fovy = 55;
+            float c[6];  // (BS_HCAM "out side y  out side y": the target and the eye in the harbour's frame, out toward the island)
+            if (getenv("BS_HCAM") && sscanf(getenv("BS_HCAM"), "%f %f %f %f %f %f", &c[0], &c[1], &c[2], &c[3], &c[4], &c[5]) == 6) {
+                rv.target = {hb.x + o.x * c[0] + sd.x * c[1], c[2], hb.z + o.y * c[0] + sd.y * c[1]};
+                rv.pos = {hb.x + o.x * c[3] + sd.x * c[4], c[5], hb.z + o.y * c[3] + sd.y * c[4]};
+            }
         }
         if (opt.crateCam && !crates.empty()) {
             rv.target = {crates[0].x, Ocean().Height(crates[0].x, crates[0].z) + 2.0f, crates[0].z};
