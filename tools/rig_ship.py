@@ -3,7 +3,7 @@ so the game can sway, light and paint the sails (material names: sail_*, rope_*)
 pipeline: the hull comes from TRELLIS.2 (tools/prep_part.py --align --length L), the rig from this.
 
   blender -b --factory-startup --python tools/rig_ship.py -- hull.glb out.glb [--type brig|cutter|ship]
-          [--masts 0.30 0.58] [--rig-scale 1.0] [--preview out_dir]
+          [--masts 0.30 0.58] [--rig-scale 1.0] [--preview out_dir] [--lite]
 
 The hull: Blender space with the bow toward -Y (glTF +z, the game's forward), the keel at z = 0, any length. The
 deck height and the beam come from the mesh itself (the top of the centreline, the widest point of each station),
@@ -20,6 +20,7 @@ def opt(name, default, n=1):
     i = argv.index(name)
     return argv[i + 1] if n == 1 else argv[i + 1:i + 1 + n]
 kind = opt("--type", "brig")
+lite = "--lite" in argv   # (the far level of detail, ship_lo: no ratlines, lifts or braces; coarser sails)
 rs = float(opt("--rig-scale", 1.0))
 preview = opt("--preview", None)
 
@@ -136,7 +137,7 @@ sails = []
 def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
     bm = bmesh.new()
     uv = bm.loops.layers.uv.new("UVMap")
-    nu, nv = 16, 12
+    nu, nv = (6, 4) if lite else (16, 12)
     grid = []
     for j in range(nv + 1):
         v = j / nv
@@ -158,7 +159,7 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
 def tri_sail(name, a, b, c, belly_dir, belly):
     bm = bmesh.new()
     uv = bm.loops.layers.uv.new("UVMap")
-    n = 12
+    n = 4 if lite else 12
     pts = {}
     for i in range(n + 1):
         for j in range(n + 1 - i):
@@ -317,7 +318,7 @@ for (y, deck, beam, rail, lower, top, tg, h) in heads:
         rope(Vector((side * 0.15, y + 0.1, tg - 0.4)), Vector((side * beam * 0.98, y + 0.38 * L, rail)))
 
 # ratlines: rungs across each side's lower shrouds, every 0.5 m (thinner than the shrouds)
-for (y, deck, beam, rail, lower, top, tg, h) in heads:
+for (y, deck, beam, rail, lower, top, tg, h) in ([] if lite else heads):
     for side in (-1, 1):
         a = [Vector((side * 0.3, y + 0.2, lower - 0.2)) for i in range(4)]
         b = [Vector((side * beam * 0.98, y + 0.6 + i * 0.045 * L, rail)) for i in range(4)]
@@ -328,7 +329,7 @@ for (y, deck, beam, rail, lower, top, tg, h) in heads:
             p0, p1 = b[0].lerp(a[0], t), b[3].lerp(a[3], t)
             tube(ropes, p0, p1, 0.018 * rs, 0.018 * rs, 4)
 # lifts (yard arms up to the masthead) and braces (yard arms aft to the rail)
-if kind != "cutter":
+if kind != "cutter" and not lite:
     for k, (y, deck, beam, rail, lower, top, tg, h) in enumerate(heads):
         scale = 1.0 if k == len(heads) - 1 else 0.92
         yw = YARD * scale

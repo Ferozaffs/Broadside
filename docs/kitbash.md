@@ -17,7 +17,9 @@ them). So a ship is built from parts:
    hull, then builds masts, yards, square sails (canvas texture: seams, tabling, weathering), a gaff spanker, jibs,
    shrouds with ratlines, stays, lifts and braces; and re-planks the deck (TRELLIS smears colour over an open deck).
    Materials: `sail_canvas` (the game's sail keys), `rope_tar` (mesh `rope_rigging`), `spar_wood`, `deck_planks`.
-4. **Into the game**: `assets/ship_<class>/ship.glb` + `ship.cfg` (`length=41`, `keel=-1.5`, `sails=sail,canvas`).
+4. **Far detail** (`ship_lo.glb`, as the frigate has): prep the hull again with `--tris 6000 --tex 512` and rig it
+   with `--lite` (no ratlines, lifts or braces; coarser sails): about 6-7k triangles against 44k.
+5. **Into the game**: `assets/ship_<class>/ship.glb` + `ship.cfg` (`length=41`, `keel=-1.5`, `sails=sail,canvas`).
    The keel matters: at the default -3.6 a shallow generated hull sits so deep that the sea shows through its deck.
    Release staging packs every `assets/ship*` folder.
 
