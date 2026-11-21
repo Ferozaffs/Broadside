@@ -357,6 +357,111 @@ if kind != "cutter" and not lite:
                 aft = station(min(1.0, (y - ymin) / L + 0.22))
                 rope(arm, Vector((side * aft[2] * 0.95, aft[0], aft[3])), 0.022 * rs)
 
+# ---- deck fittings (not in the lite level): guns along each side from the generated cannon
+# (data/parts/prop_cannon.glb), a bow chaser on a cutter, the helm, a capstan and hatch gratings. Each stands on the
+# deck found by a ray cast down onto the hull (TRELLIS decks camber and step, the station's centreline height doesn't).
+from mathutils.bvhtree import BVHTree
+_hv, _hp = [], []
+for o in hull:
+    base = len(_hv)
+    _hv += [o.matrix_world @ v.co for v in o.data.vertices]
+    _hp += [[base + i for i in p.vertices] for p in o.data.polygons]
+_bvh = BVHTree.FromPolygons(_hv, _hp)
+def deck_at(x, y):
+    top = max(v.z for v in V) + 2.0
+    hit = _bvh.ray_cast(Vector((x, y, top)), Vector((0, 0, -1)))
+    return hit[0].z if hit[0] is not None else station((y - ymin) / L)[1]
+
+def box(bm, c, size, rot=0.0):
+    bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.Translation(Vector(c)) @ Matrix.Rotation(rot, 4, "Z") @ Matrix.Diagonal((*size, 1.0)))
+
+n_guns = int(opt("--guns", {"brig": 5, "ship": 7, "cutter": 0}[kind]))
+bow_gun = "--bow-gun" in argv
+fittings = "--no-fittings" not in argv and not lite
+if fittings and (n_guns or bow_gun):
+    cannon_src = opt("--cannon", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "parts", "prop_cannon.glb"))
+    before = set(bpy.context.scene.objects)
+    bpy.ops.import_scene.gltf(filepath=os.path.abspath(cannon_src))
+    parts = [o for o in bpy.context.scene.objects if o not in before and o.type == "MESH"]
+    gun = parts[0]
+    for o in parts:  # (one mesh, transforms applied, cut down: ~1200 triangles a gun)
+        o.data.transform(o.matrix_world)
+        o.matrix_world = Matrix.Identity(4)
+    if len(parts) > 1:
+        bpy.context.view_layer.objects.active = gun
+        for o in parts: o.select_set(True)
+        bpy.ops.object.join()
+    for o in [o for o in bpy.context.scene.objects if o not in before and o != gun]:
+        bpy.data.objects.remove(o, do_unlink=True)
+    gv = [v.co for v in gun.data.vertices]
+    glen = max(v.y for v in gv) - min(v.y for v in gv)
+    gs = 0.075 * L / glen  # (a 30 m brig: guns about 2.3 m long)
+    tri = sum(len(p.vertices) - 2 for p in gun.data.polygons)
+    if tri > 1300:
+        dm = gun.modifiers.new("cut", "DECIMATE")
+        dm.ratio = 1200 / tri
+        bpy.context.view_layer.objects.active = gun
+        bpy.ops.object.modifier_apply(modifier=dm.name)
+    places = []  # (x, y, rot): the cannon's muzzle points +Y (glTF -z) as made: turned to point outboard
+    for k in range(n_guns):
+        f = 0.22 + (0.76 - 0.22) * (k + 0.5) / n_guns
+        y, deck, beam, rail = station(f)
+        for side in (-1, 1):
+            x = side * (beam * 0.84 - 0.5 * glen * gs)
+            places.append((x, y, -side * math.pi / 2))
+    if bow_gun:
+        places.append((0.0, ymin + float(opt("--bow-gun-at", 0.13)) * L, math.pi))
+    copies = []
+    for (x, y, rot) in places:
+        me = gun.data.copy()
+        me.transform(Matrix.Translation((x, y, deck_at(x, y))) @ Matrix.Rotation(rot, 4, "Z") @ Matrix.Scale(gs, 4))
+        o = bpy.data.objects.new("deck_gun", me)
+        bpy.context.scene.collection.objects.link(o)
+        copies.append(o)
+    bpy.data.objects.remove(gun, do_unlink=True)
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in copies: o.select_set(True)
+    bpy.context.view_layer.objects.active = copies[0]
+    bpy.ops.object.join()
+    copies[0].name = "deck_guns"
+    print(f"GUNS {len(places)} placed, {glen * gs:.2f} m long")
+if fittings:
+    fit, hold = bmesh.new(), bmesh.new()
+    # the helm: a spoked wheel on a pedestal, aft of the last mast, its axle fore and aft
+    hy = ymin + (0.86 if kind != "cutter" else 0.80) * L
+    hz = deck_at(0, hy)
+    wr = 0.028 * L * rs ** 0.3
+    wc = Vector((0, hy, hz + wr + 0.35))
+    box(fit, (0, hy + 0.12, hz + (wr + 0.35) / 2), (0.25, 0.25, wr + 0.35))
+    rim = [wc + Vector((math.cos(t) * wr, 0, math.sin(t) * wr)) for t in (2 * math.pi * i / 16 for i in range(16))]
+    for i in range(16):
+        tube(spars, rim[i], rim[(i + 1) % 16], 0.05, 0.05, 6)
+    for i in range(8):
+        t = 2 * math.pi * i / 8
+        tube(spars, wc, wc + Vector((math.cos(t) * wr * 1.25, 0, math.sin(t) * wr * 1.25)), 0.035, 0.03, 5)
+    # the capstan: a drum and its drumhead, between the masts (well aft of the only mast on a cutter)
+    cy = ymin + ((masts_f[0] + masts_f[1]) / 2 if len(masts_f) > 1 else min(0.9, masts_f[0] + 0.30)) * L
+    cz = deck_at(0, cy)
+    tube(spars, (0, cy, cz - 0.1), (0, cy, cz + 0.9), 0.32, 0.26, 12)
+    disc(spars, (0, cy, cz + 0.95), 0.55, 0.14)
+    # hatch gratings: a coaming and a lattice, fore and aft of the main mast (on a cutter one, aft of the mast)
+    for f in ((masts_f[-1] - 0.10, masts_f[-1] + 0.10) if len(masts_f) > 1 else (masts_f[0] + 0.14,)):
+        gy = ymin + f * L
+        gz = deck_at(0, gy)
+        gw, gl = 0.07 * L, 0.055 * L
+        for s in (-1, 1):
+            box(fit, (s * gw / 2, gy, gz + 0.15), (0.12, gl, 0.3))
+            box(fit, (0, gy + s * gl / 2, gz + 0.15), (gw + 0.12, 0.12, 0.3))
+        box(hold, (0, gy, gz + 0.05), (gw, gl, 0.04))  # (the dark hold below the lattice)
+        for i in range(1, 6):
+            box(fit, (-gw / 2 + gw * i / 6, gy, gz + 0.22), (0.06, gl, 0.08))
+        for i in range(1, 5):
+            box(fit, (0, gy - gl / 2 + gl * i / 5, gz + 0.22), (gw, 0.06, 0.08))
+    M_FIT = material("fitting_wood", (0.11, 0.07, 0.04))
+    for o in (new_obj("deck_fittings", fit, M_FIT), new_obj("deck_hold", hold, material("hold_dark", (0.02, 0.015, 0.01), 1.0))):
+        for p in o.data.polygons:
+            p.use_smooth = False  # (boxes: flat)
+
 new_obj("spars", spars, M_SPAR)
 new_obj("rope_rigging", ropes, M_ROPE)
 

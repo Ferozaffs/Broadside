@@ -17,6 +17,10 @@ them). So a ship is built from parts:
    hull, then builds masts, yards, square sails (canvas texture: seams, tabling, weathering), a gaff spanker, jibs,
    shrouds with ratlines, stays, lifts and braces; and re-planks the deck (TRELLIS smears colour over an open deck).
    Materials: `sail_canvas` (the game's sail keys), `rope_tar` (mesh `rope_rigging`), `spar_wood`, `deck_planks`.
+   Deck fittings, each set down on the deck by a ray cast onto the hull: guns along both sides from
+   `data/parts/prop_cannon.glb` (`--guns N` a side: brig 5, ship 7, cutter 0; cut to ~1200 triangles each),
+   `--bow-gun [--bow-gun-at 0.21]` for a chaser, a wheel, a capstan and hatch gratings over a dark hold
+   (`--no-fittings` leaves them off). The cannon model's muzzle points glTF -z (Blender +Y): turn it to aim.
 4. **Far detail** (`ship_lo.glb`, as the frigate has): prep the hull again with `--tris 6000 --tex 512` and rig it
    with `--lite` (no ratlines, lifts or braces; coarser sails): about 6-7k triangles against 44k.
 5. **Into the game**: `assets/ship_<class>/ship.glb` + `ship.cfg` (`length=41`, `keel=-1.5`, `sails=sail,canvas`).
@@ -27,8 +31,8 @@ them). So a ship is built from parts:
 
 | Class | Hull | Rig | Notes |
 |---|---|---|---|
-| cutter (`assets/ship_cutter`) | ZWUUUP `assets/parts/hull2_brig/hull2_brig_semi_s33` -> `assets/3d/hull2_brig_semi_s33` | `--type brig` (prep `--yaw 180`) | a blue-and-gold brig, carved scroll bow |
-| gunboat (`assets/ship_gunboat`) | `hull_cutter_semi_s33` (an open launch) | `--type cutter --masts 0.38 --rig-scale 0.9` | gaff mainsail and two jibs |
+| cutter (`assets/ship_cutter`) | ZWUUUP `assets/parts/hull2_brig/hull2_brig_semi_s33` -> `assets/3d/hull2_brig_semi_s33` | `--type brig` (prep `--yaw 180`) | a blue-and-gold brig, carved scroll bow, 10 guns (57k triangles) |
+| gunboat (`assets/ship_gunboat`) | `hull_cutter_semi_s33` (an open launch) | `--type cutter --masts 0.38 --rig-scale 0.9 --bow-gun --bow-gun-at 0.21` | gaff mainsail and two jibs, a bow chaser (33k) |
 
 ## Figureheads (shipped in data/parts)
 

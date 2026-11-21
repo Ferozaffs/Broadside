@@ -680,7 +680,9 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
         }
         if (!cull || Vector3Distance(mid, v.pos) < 900.0f) {  // (the generated props, textured; small: not from afar)
             const Matrix face = MatrixRotateY(p.seaYaw);
-            for (const Vector3& g : p.guns) DrawPropModel(0, MatrixMultiply(face, MatrixTranslate(g.x, g.y, g.z)));
+            // (the cannon model's muzzle points -z: turned half round to face the anchorage)
+            const Matrix gunFace = MatrixRotateY(p.seaYaw + PI);
+            for (const Vector3& g : p.guns) DrawPropModel(0, MatrixMultiply(gunFace, MatrixTranslate(g.x, g.y, g.z)));
             DrawPropModel(1, MatrixMultiply(MatrixRotateY(p.seaYaw + 0.6f), MatrixTranslate(p.anchor.x, p.anchor.y, p.anchor.z)));
             const float by = ocean.Height(p.launch.x, p.launch.z), bob = 0.04f * sinf(time * 1.3f + i);
             DrawPropModel(2, MatrixMultiply(MatrixMultiply(MatrixRotateZ(bob), face), MatrixTranslate(p.launch.x, by - 0.7f, p.launch.z)));
