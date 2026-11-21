@@ -4770,7 +4770,10 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
             if (!shadow && id == myId && OwnShipLate()) continue;  // drawn see-through after the water
             if (s.cls == SC_GHOST) continue;  // (the Dutchman: see-through, after the water)
-            DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, s.cls == SC_IRON ? 0.0f : fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
+            // the Fog Banks' ghost ships ("the Drowned ...") look the part when there's a ghost ship's model (assets/ship_ghost):
+            // the Dutchman's, at her own class's size
+            const int look = curMode == MODE_CAMPAIGN && classModel[SC_GHOST].HasExternal() && NameOf(id).rfind("the Drowned ", 0) == 0 ? SC_GHOST : s.cls;
+            DrawShip(look, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, s.cls == SC_IRON ? 0.0f : fabsf(s.sail), ColorOf(id), hitFlash[id] * 0.6f, s.hp / s.maxHp,
                      (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         }
         if (!shadow)
