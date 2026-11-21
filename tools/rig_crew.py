@@ -97,6 +97,10 @@ def surface_points(objs, spacing=0.01):
 
 
 tp = surface_points([o for o in bpy.data.objects if o.type == "MESH" and len(o.data.vertices) > 100])
+if any(m.name.endswith("_cloth") and any(x.name == m.name[:-6] + "_body" for x in bpy.data.materials) for m in bpy.data.materials):
+    # (this tool's own output - a cloth/body material pair - as the template: its arms were already turned, and
+    # another fit on top would stack the corrections. The sailors' originals are the template.)
+    sys.exit(f"rig_crew: {TEMPLATE} is a rigged generated figure, not an original sailor - pass --template")
 T_CROTCH = crotch(tp, 0.0) if len(tp) else None
 T_ARMPIT = armpit(tp, 0.0) if len(tp) else None
 for o in list(bpy.data.objects):
