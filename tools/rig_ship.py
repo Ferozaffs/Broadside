@@ -20,6 +20,12 @@ def opt(name, default, n=1):
     i = argv.index(name)
     return argv[i + 1] if n == 1 else argv[i + 1:i + 1 + n]
 kind = opt("--type", "brig")
+tattered = "--tattered" in argv  # (a ghost ship: rotten grey-green canvas, holes torn through it, a ragged foot)
+import random as _random
+_rag = _random.Random(13)
+_hc = [(_rag.random(), _rag.random(), 0.06 + 0.08 * _rag.random()) for _ in range(5)]  # (a few rents in each sail)
+def _holes(u, v):
+    return max((1.0 - min(1.0, ((u - x) ** 2 + (v - y) ** 2) ** 0.5 / r) for x, y, r in _hc), default=0.0)
 lite = "--lite" in argv   # (the far level of detail, ship_lo: no ratlines, lifts or braces; coarser sails)
 rs = float(opt("--rig-scale", 1.0))
 preview = opt("--preview", None)
@@ -53,7 +59,7 @@ def material(name, rgb, rough=0.8):
     b.inputs["Base Color"].default_value = (*rgb, 1)
     b.inputs["Roughness"].default_value = rough
     return m
-M_SPAR = material("spar_wood", (0.32, 0.20, 0.10))
+M_SPAR = material("spar_wood", (0.13, 0.13, 0.12) if "--tattered" in argv else (0.32, 0.20, 0.10))  # (a ghost's spars: weathered grey)
 M_SAIL = material("sail_canvas", (1.0, 1.0, 1.0), 0.95)
 
 # the canvas: bolts of cloth sewn side by side (a seam every 1/14 of the width), a tabled edge, a reef band near
@@ -81,7 +87,11 @@ def canvas_texture(n=512):
             if u < 0.02 or u > 0.98 or v < 0.025 or v > 0.975: k *= 0.82  # (the tabling round the edge)
             if 0.86 < v < 0.875: k *= 0.88                                # (a reef band)
             i = (y * n + x) * 4
-            px[i], px[i + 1], px[i + 2], px[i + 3] = 0.92 * k, 0.88 * k, 0.78 * k, 1.0
+            if tattered:
+                k *= 0.85 + 0.3 * smooth((u * 3) % 1.0, (v * 3) % 1.0) - 0.25 * (1 - v)
+                px[i], px[i + 1], px[i + 2], px[i + 3] = 0.52 * k, 0.56 * k, 0.50 * k, 1.0
+            else:
+                px[i], px[i + 1], px[i + 2], px[i + 3] = 0.92 * k, 0.88 * k, 0.78 * k, 1.0
     img.pixels = px
     img.pack()
     return img
@@ -137,7 +147,7 @@ sails = []
 def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
     bm = bmesh.new()
     uv = bm.loops.layers.uv.new("UVMap")
-    nu, nv = (6, 4) if lite else (16, 12)
+    nu, nv = (6, 4) if lite else (28, 20) if tattered else (16, 12)  # (torn: a finer weave, so the holes are small and ragged)
     grid = []
     for j in range(nv + 1):
         v = j / nv
@@ -152,6 +162,8 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
         grid.append(row)
     for j in range(nv):
         for i in range(nu):
+            if tattered and 0 < i < nu - 1 and (_rag.random() < 0.07 + 0.25 * _holes(i / nu, j / nv) or (j >= nv - 4 and _rag.random() < 0.2 * (j - nv + 5))):
+                continue  # (a hole torn through, or the foot in rags)
             f = bm.faces.new((grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]))
             for loop, (a, b) in zip(f.loops, ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))):
                 loop[uv].uv = (a / nu, 1 - b / nv)
@@ -172,6 +184,8 @@ def tri_sail(name, a, b, c, belly_dir, belly):
         for j in range(n - i):
             for tri in (((i, j), (i + 1, j), (i, j + 1)), ((i + 1, j), (i + 1, j + 1), (i, j + 1))):
                 if all(t in pts for t in tri):
+                    if tattered and _rag.random() < 0.15:
+                        continue
                     f = bm.faces.new([pts[t][0] for t in tri])
                     for loop, t in zip(f.loops, tri):
                         loop[uv].uv = pts[t][1]
@@ -195,7 +209,10 @@ def plank_texture(n=512):
             if ((x * 4 / n + (r % 2) * 0.5) % 1.0) < 0.008: k *= 0.6
             grain = 0.04 * ((x * 37 + y * 3) % 11) / 11
             i = (y * n + x) * 4
-            px[i], px[i + 1], px[i + 2], px[i + 3] = (0.55 + grain) * k, (0.40 + grain) * k, (0.24 + grain * 0.5) * k, 1.0
+            if tattered:  # (a ghost's deck: grey, rotten)
+                px[i], px[i + 1], px[i + 2], px[i + 3] = (0.30 + grain) * k, (0.31 + grain) * k, (0.28 + grain) * k, 1.0
+            else:
+                px[i], px[i + 1], px[i + 2], px[i + 3] = (0.55 + grain) * k, (0.40 + grain) * k, (0.24 + grain * 0.5) * k, 1.0
     img.pixels = px
     img.pack()
     return img
