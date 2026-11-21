@@ -53,11 +53,48 @@ def material(name, rgb, rough=0.8):
     b.inputs["Roughness"].default_value = rough
     return m
 M_SPAR = material("spar_wood", (0.32, 0.20, 0.10))
-M_SAIL = material("sail_canvas", (0.86, 0.82, 0.72), 0.95)
+M_SAIL = material("sail_canvas", (1.0, 1.0, 1.0), 0.95)
+
+# the canvas: bolts of cloth sewn side by side (a seam every 1/14 of the width), a tabled edge, a reef band near
+# the head, and a little weathering lower down; built pixel by pixel (no PIL in Blender's Python)
+def canvas_texture(n=512):
+    import random
+    rnd = random.Random(7)
+    img = bpy.data.images.new("sail_canvas_tex", n, n, alpha=False)
+    noise = [[rnd.random() for _ in range(33)] for _ in range(33)]
+    def smooth(u, v):  # (value noise, 32 cells)
+        x, y = u * 32, v * 32
+        i, j = int(x), int(y)
+        fx, fy = x - i, y - j
+        a, b, c, d = noise[j][i], noise[j][i + 1], noise[j + 1][i], noise[j + 1][i + 1]
+        return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy
+    px = [0.0] * (n * n * 4)
+    for y in range(n):
+        v = y / n
+        for x in range(n):
+            u = x / n
+            k = 0.93 + 0.05 * smooth(u, v) - 0.05 * (1 - v) ** 3  # (weathered toward the foot: v = 0 is the bottom)
+            seam = (u * 14) % 1.0
+            if seam < 0.035: k *= 0.86
+            elif seam < 0.06: k *= 1.03
+            if u < 0.02 or u > 0.98 or v < 0.025 or v > 0.975: k *= 0.82  # (the tabling round the edge)
+            if 0.86 < v < 0.875: k *= 0.88                                # (a reef band)
+            i = (y * n + x) * 4
+            px[i], px[i + 1], px[i + 2], px[i + 3] = 0.92 * k, 0.88 * k, 0.78 * k, 1.0
+    img.pixels = px
+    img.pack()
+    return img
+_tex = canvas_texture()
+_nodes = M_SAIL.node_tree.nodes
+_t = _nodes.new("ShaderNodeTexImage")
+_t.image = _tex
+M_SAIL.node_tree.links.new(_t.outputs["Color"], _nodes["Principled BSDF"].inputs["Base Color"])
 M_ROPE = material("rope_tar", (0.10, 0.08, 0.06))
 M_TOP = material("spar_top", (0.25, 0.16, 0.08))
 
 def new_obj(name, bm, mat):
+    for f in bm.faces:  # (smooth: the sails' belly and the round spars without facets)
+        f.smooth = True
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
@@ -99,7 +136,7 @@ sails = []
 def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
     bm = bmesh.new()
     uv = bm.loops.layers.uv.new("UVMap")
-    nu, nv = 10, 8
+    nu, nv = 16, 12
     grid = []
     for j in range(nv + 1):
         v = j / nv
@@ -121,7 +158,7 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
 def tri_sail(name, a, b, c, belly_dir, belly):
     bm = bmesh.new()
     uv = bm.loops.layers.uv.new("UVMap")
-    n = 8
+    n = 12
     pts = {}
     for i in range(n + 1):
         for j in range(n + 1 - i):
@@ -139,8 +176,65 @@ def tri_sail(name, a, b, c, belly_dir, belly):
                         loop[uv].uv = pts[t][1]
     sails.append(new_obj(name, bm, M_SAIL))
 
+# ---- the deck: TRELLIS guesses the inside of an open hull badly (smears of colour), so the faces that make up the
+# deck get planks of their own: facing up, inside the rail, high in the hull; planar UVs, a plank every 0.25 m
+def plank_texture(n=512):
+    import random
+    rnd = random.Random(3)
+    img = bpy.data.images.new("deck_planks_tex", n, n, alpha=False)
+    rows = 16
+    shade = [[0.85 + 0.25 * rnd.random() for _ in range(8)] for _ in range(rows)]
+    px = [0.0] * (n * n * 4)
+    for y in range(n):
+        r = y * rows // n
+        fy = (y * rows / n) % 1.0
+        for x in range(n):
+            seg = (x * 4 // n + (r % 2) * 2) % 8  # (butt joints staggered row to row)
+            k = shade[r][seg] * (0.55 if fy < 0.06 else 1.0)  # (the caulked seam between planks)
+            if ((x * 4 / n + (r % 2) * 0.5) % 1.0) < 0.008: k *= 0.6
+            grain = 0.04 * ((x * 37 + y * 3) % 11) / 11
+            i = (y * n + x) * 4
+            px[i], px[i + 1], px[i + 2], px[i + 3] = (0.55 + grain) * k, (0.40 + grain) * k, (0.24 + grain * 0.5) * k, 1.0
+    img.pixels = px
+    img.pack()
+    return img
+if "--keep-deck" not in argv:
+    M_DECK = material("deck_planks", (1, 1, 1), 0.9)
+    _dn = M_DECK.node_tree.nodes
+    _dt = _dn.new("ShaderNodeTexImage")
+    _dt.image = plank_texture()
+    M_DECK.node_tree.links.new(_dt.outputs["Color"], _dn["Principled BSDF"].inputs["Base Color"])
+    zs = sorted(v.z for v in V)
+    for o in hull:
+        o.data.materials.append(M_DECK)
+        slot = len(o.data.materials) - 1
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        uvl = bm.loops.layers.uv.active or bm.loops.layers.uv.new("UVMap")
+        n_deck = 0
+        W = o.matrix_world
+        W3 = W.to_3x3()
+        for f in bm.faces:
+            c = W @ f.calc_center_median()
+            if (W3 @ f.normal).normalized().z < 0.8:
+                continue
+            fy = (c.y - ymin) / L
+            if fy < 0.03 or fy > 0.97:
+                continue
+            _, deck_z, beam_z, rail_z = station(min(max(fy, 0.0), 1.0))
+            if abs(c.x) > beam_z * 0.86 or c.z < zs[int(len(zs) * 0.35)]:  # (inside the rail, above the hull's lower third: a waist sits low)
+                continue
+            f.material_index = slot
+            for loop in f.loops:
+                wv = W @ loop.vert.co
+                loop[uvl].uv = (wv.x / 4.0, wv.y / 4.0)  # (4 m of deck per texture: 16 planks)
+            n_deck += 1
+        bm.to_mesh(o.data)
+        bm.free()
+        print(f"DECK {n_deck} faces planked")
+
 # ---- the rig ---------------------------------------------------------------------------------------------------
-masts_f = [float(x) for x in opt("--masts", None, 2)] if "--masts" in argv else {"brig": [0.30, 0.58], "cutter": [0.40], "ship": [0.25, 0.50, 0.75]}[kind]
+masts_f = [float(x) for x in __import__("itertools").takewhile(lambda t: not t.startswith("--"), argv[argv.index("--masts") + 1:])] if "--masts" in argv else {"brig": [0.30, 0.58], "cutter": [0.40], "ship": [0.25, 0.50, 0.75]}[kind]
 H = 0.78 * L * rs        # main mast above the deck (lower + top + topgallant, less the doublings)
 YARD = 0.50 * L * rs     # the main course yard
 heads = []
@@ -221,6 +315,29 @@ for (y, deck, beam, rail, lower, top, tg, h) in heads:
         for i in range(2):
             rope(Vector((side * 0.2, y + 0.1, top - 0.2)), Vector((side * beam * 0.98, y + 0.25 * L + i * 0.05 * L, rail)))
         rope(Vector((side * 0.15, y + 0.1, tg - 0.4)), Vector((side * beam * 0.98, y + 0.38 * L, rail)))
+
+# ratlines: rungs across each side's lower shrouds, every 0.5 m (thinner than the shrouds)
+for (y, deck, beam, rail, lower, top, tg, h) in heads:
+    for side in (-1, 1):
+        a = [Vector((side * 0.3, y + 0.2, lower - 0.2)) for i in range(4)]
+        b = [Vector((side * beam * 0.98, y + 0.6 + i * 0.045 * L, rail)) for i in range(4)]
+        span = (a[0] - b[0]).length
+        for k in range(1, int(span / 0.5)):
+            t = k * 0.5 / span
+            if t > 0.88: break
+            p0, p1 = b[0].lerp(a[0], t), b[3].lerp(a[3], t)
+            tube(ropes, p0, p1, 0.018 * rs, 0.018 * rs, 4)
+# lifts (yard arms up to the masthead) and braces (yard arms aft to the rail)
+if kind != "cutter":
+    for k, (y, deck, beam, rail, lower, top, tg, h) in enumerate(heads):
+        scale = 1.0 if k == len(heads) - 1 else 0.92
+        yw = YARD * scale
+        for (yz, w, head) in ((lower - 0.6, yw, top), (top - 0.4, yw * 0.78, tg), (tg - 0.6, yw * 0.55, tg + 0.4)):
+            for side in (-1, 1):
+                arm = Vector((side * w / 2 * 0.97, y - 0.4, yz))
+                rope(Vector((0, y + 0.05, head - 0.3)), arm, 0.025 * rs)
+                aft = station(min(1.0, (y - ymin) / L + 0.22))
+                rope(arm, Vector((side * aft[2] * 0.95, aft[0], aft[3])), 0.022 * rs)
 
 new_obj("spars", spars, M_SPAR)
 new_obj("rope_rigging", ropes, M_ROPE)
