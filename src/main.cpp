@@ -434,6 +434,14 @@ public:
     std::vector<Passenger> passengers;
     int adriftN = 0;  // (each boat of survivors their own face)
     void UpdatePassengers(bool fight);
+    // the prologue (campaign::Prologue): its stage from the snapshot, its lines in turn, the fade into the deep and out at Haverly
+    uint8_t campPrologueC = 0;
+    struct ScriptLine { double at; std::string id, name, title, line; };
+    std::deque<ScriptLine> script;
+    double proDeepAt = -1.0, proAshoreAt = -1.0;
+    void Script(double after, const char* id, const char* name, const char* title, const char* line) { script.push_back({GetTime() + after, id, name, title, line}); }
+    void PrologueScript(int stage);
+    void DrawPrologueFade(float W, float H);
     // the faces at sea: a ship's captain keeps the face she first had; a new one gets whichever of the pool's
     // (imported) faces she's seen least lately - not the same few over and over
     std::map<std::string, std::string> faceOf;  // (whose -> face)
@@ -1346,6 +1354,7 @@ void Game::Interpolate() {
             campClock = sn.campClock;
             campFast = sn.campFast;
             campWantFast = sn.campWantFast;
+            campPrologueC = sn.campPrologue;
             if (sn.campReal != curRealistic) {  // (she changed her handling: the prediction follows)
                 curRealistic = sn.campReal;
                 pred.realistic = curRealistic;
@@ -3455,6 +3464,7 @@ void Game::PlayEvent(const GameEvent& e) {
                         "So it's done. The lights out there have gone dark, Captain, all but mine. Sail where you like now: the sea is yours.");
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.7f);
                     break;
+                case EV_PROLOGUE: PrologueScript(e.flags); break;
                 case EV_SOVEREIGN:
                     Notice("THE SOVEREIGN IS YOURS AGAIN", ui::kGold, 6.0f);
                     Feed3("THE SOVEREIGN", "  in her iron, at the shipwright's for you: sail her from any port", "", ui::kGold, ui::kText);
@@ -4548,6 +4558,13 @@ void Game::UpdateAtmosphere(float dt, bool menu) {
             fogUp += s * 0.8f;
             tint = Vector3Add(tint, Vector3Scale(kTint[b], s));
             if (s > best) { best = s; campSquallKind = b; }
+        }
+        if (campPrologueC == campaign::PRO_BETRAYAL || campPrologueC == campaign::PRO_DEEP) {  // (the prologue: a storm out of a clear sky)
+            const float k = 1.0f - g;
+            g += k;
+            rain += k * kRain[campaign::TROPICS];
+            tint = Vector3Add(tint, Vector3Scale(kTint[campaign::TROPICS], k));
+            campSquallKind = campaign::TROPICS;
         }
         campSquall += (g - campSquall) * fminf(1.0f, dt * 0.5f);
         if (g > 0.001f) {
@@ -5752,6 +5769,13 @@ void Game::DrawHUD() {
         if (!portOpen && !chartOpen) {
             UpdateHails();
             UpdateBarks();
+            while (!script.empty() && GetTime() >= script.front().at) {  // (the prologue's lines, each in turn)
+                const ScriptLine l = script.front();
+                script.pop_front();
+                if (l.id == "!feed") Feed3(l.name, l.line, "", ui::kGold, ui::kText);
+                else if (l.id == "!notice") Notice(l.line, ui::kGold, 6.0f);
+                else Say(l.id, l.name, l.title, l.line, "script|" + l.id);
+            }
             DrawSeaSay(W, H);
             DrawBarks(W, H);
         }
@@ -5783,7 +5807,7 @@ void Game::DrawHUD() {
         Text(t.c_str(), r.x + r.width * 0.5f, yy + 4, 15, A(hurry ? kRed : kText, pulse), true, Center);
     }
     // ---- hull critical ----
-    if (alive && matchState == 0) {
+    if (alive && matchState == 0 && proDeepAt < 0.0) {  // (not as the deep takes the Sovereign)
         float f = me->hp / me->maxHp;
         if (f < 0.25f) {
             if (!lowHpWarned) { lowHpWarned = true; sfx::PlayFlat(sfx::Chime, 0.6f, 0.5f); }
@@ -6047,6 +6071,7 @@ void Game::DrawHUD() {
             Text("A friend alongside brings you back", W * 0.5f, H * 0.5f - 84, 18, kText, false, Center);
         Text(curMode == MODE_VOYAGE ? "every convoy ship disabled at once loses the voyage" : "everyone disabled at once loses the fight",
              W * 0.5f, H * 0.5f - 34, 14, A(kDim, 0.8f), false, Center);
+    } else if (me && !alive && proDeepAt >= 0.0) {  // (the prologue: the Sovereign lost - the dark, not a respawn)
     } else if (me && !alive) {
         Text("SUNK", W * 0.5f, H * 0.5f - 150, 72, kRed, true, Center);
         if (curMode == MODE_VOYAGE && (me->flags & SF_LOST))
@@ -6271,6 +6296,16 @@ void Game::DrawHUD() {
         Text("the sea, however, is not", W * 0.5f, H * 0.5f - 88, 18, kDim, false, Center);
         if (Button({W * 0.5f - 150, H * 0.5f - 30, 300, 52}, "Resume", true)) { paused = false; DisableCursor(); }
         float yb = H * 0.5f + 34;
+        if (campaign && !IsCrew() && campPrologueC >= campaign::PRO_BEGIN && campPrologueC <= campaign::PRO_DEEP) {
+            if (Button({W * 0.5f - 150, yb, 300, 52}, "Skip the prologue")) {
+                CampaignAct(campaign::ACT_SKIPPROLOGUE);
+                script.clear();
+                proDeepAt = GetTime() - 30.0;  // (straight to black, then Haverly)
+                paused = false;
+                DisableCursor();
+            }
+            yb += 64;
+        }
         if (campaign && !IsCrew()) {  // her handling, hers to change whenever she likes (the solo campaign)
             if (Button({W * 0.5f - 150, yb, 300, 52}, curRealistic ? "Handling  \xC2\xB7  Realistic" : "Handling  \xC2\xB7  Over the top")) {
                 CampaignAct(campaign::ACT_HANDLING, curRealistic ? 0 : 1);
@@ -7569,6 +7604,7 @@ void Game::Frame() {
             rv.uiScale = s;
             if (!(campaign && portOpen)) DrawMonsterLabels();
             if (!campYard) DrawHUD();
+            if (curMode == MODE_CAMPAIGN) DrawPrologueFade(GetScreenWidth() / s, GetScreenHeight() / s);  // (over all of it)
             rlDrawRenderBatchActive();
             rlPopMatrix();
             SetMouseScale(1.0f, 1.0f);
@@ -9094,6 +9130,11 @@ void Game::DrawCampaignHud(float W, float H) {
     else if (campFast) { sub = "FAST-SAIL   \xC2\xB7   F: OFF"; sc = kGreen; }
     else if (campWantFast) { sub = "FAST-SAIL: ENEMY NEAR"; sc = kRed; }
     else sub = "TAB: THE CHART   \xC2\xB7   F: FAST-SAIL";
+    if (campPrologueC >= campaign::PRO_FIGHT && campPrologueC <= campaign::PRO_DEEP) {
+        sub = campPrologueC == campaign::PRO_FIGHT ? "THE PROLOGUE   \xC2\xB7   BREAK THE PIRATE LINE   \xC2\xB7   ESC: SKIP"
+            : campPrologueC == campaign::PRO_BETRAYAL ? "THE PROLOGUE   \xC2\xB7   BLACK SAILS: FIGHT   \xC2\xB7   ESC: SKIP" : "THE PROLOGUE";
+        sc = kGold;
+    }
     if (campWantedC > 0.0f && campDocked < 0) {
         sub = TextFormat("WANTED   \xC2\xB7   THE NAVY HUNTS YOU   %d:%02d", (int)campWantedC / 60, (int)campWantedC % 60);
         sc = kRed;
@@ -9327,6 +9368,70 @@ void Game::AddBark(const std::string& id, const std::string& name, const std::st
 
 // Who says what: her fleet's captains between fights (now and then), when a fight starts, when they're badly hurt,
 // when an enemy goes down; the pirates as they come at her, while they fight, and as they sink
+// The prologue's lines, a stage at a time (docs/campaign.md "The story")
+void Game::PrologueScript(int stage) {
+    using namespace campaign;
+    const char* mara = "story_mara";
+    const char* ash = "story_ashgrave";
+    switch (stage) {
+        case PRO_FIGHT:
+            script.clear();
+            proDeepAt = proAshoreAt = -1.0;
+            Script(4.5, "!notice", "", "", "THE LAST NIGHT OF THE SOVEREIGN");  // (after the region's own card)
+            Script(0.5, "!feed", "THE PROLOGUE", "  the edge of the Ember Reach, by night   (Esc: skip it)", "");
+            Script(5.5, mara, "Mara Vell", "First mate of the Sovereign", "All hands at quarters, Captain. Pirates off the bow, and the Admiral's signalling: break their line.");
+            Script(14.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "A fine night for it, Captain. Show them what the Sovereign can do. I'll be watching.");
+            Script(27.0, "officer_stroud", "Jonah Stroud", "Bosun of the Sovereign", "Guns run out and the lads are singing, Captain! Give us the word!");
+            break;
+        case PRO_BETRAYAL:
+            script.clear();
+            Notice("BLACK SAILS", ui::kRed, 4.0f);
+            Script(1.0, "officer_fairweather", "Grace Fairweather", "Navigator of the Sovereign", "Sails all round us, Captain! Black sails! There was nothing on the glass a minute ago!");
+            Script(8.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "Forgive me, Captain. The sea needs a master, and a master needs a voice the sea will answer. I'm taking Mara.");
+            Script(16.0, mara, "Mara Vell", "First mate of the Sovereign", "Captain! The Dominion's boats are alongside, they're boarding us! Don't let him take the -");
+            Script(24.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "Ring them. All five. Let the deep hear it.");
+            Script(30.0, "officer_gage", "Silas Gage", "Master gunner of the Sovereign", "Bells? Out here? Captain... the water's gone still.");
+            break;
+        case PRO_DEEP:
+            script.clear();
+            proDeepAt = GetTime();
+            Script(1.0, "officer_whitlock", "Amos Whitlock", "Surgeon of the Sovereign", "Something's under us! Captain, something's under the keel!");
+            Script(6.5, "officer_penhallow", "Ruth Penhallow", "Quartermaster of the Sovereign", "She's going, Captain! Abandon ship! Abandon -");
+            break;
+        case PRO_ASHORE: {
+            script.clear();
+            if (proDeepAt < 0.0) proDeepAt = GetTime() - 30.0;
+            proAshoreAt = GetTime();
+            const char* tom = "haverly_wright";
+            Script(3.5, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "Easy, Captain. Easy. Old Tom Fennick. I pulled you out of the surf three mornings back, and you've not said a sensible word since.");
+            Script(14.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "This washed up beside you. A navy dispatch case, the Admiral's own seal. Five names, five seas, and a bell broken in five. Perhaps you can make sense of it.");
+            Script(26.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "The Admiralty's posted the Sovereign lost to pirates, with all hands. Nobody will believe you, Captain. So don't tell them. Show them.");
+            Script(38.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "I've a cutter at the pier. Not much, but she's sound. Take her, and bring back your ship. The taverns will know where the Five are.");
+            Script(48.0, "!feed", "THE STORY", "  Ashgrave's Five, one in each sea: every region's taverns tell its story", "");
+            break;
+        }
+        default: break;
+    }
+}
+
+// The deep: black as she goes down; Port Haverly, three days later, out of it
+void Game::DrawPrologueFade(float W, float H) {
+    if (proDeepAt < 0.0) return;
+    const double now = GetTime();
+    float a = Clamp((float)(now - proDeepAt - 6.0) / 4.0f, 0.0f, 1.0f);  // (down into the dark)
+    if (proAshoreAt >= 0.0) a = fminf(a, 1.0f - Clamp((float)(now - proAshoreAt - 2.5) / 2.5f, 0.0f, 1.0f));  // (and out of it)
+    if (a <= 0.0f) {
+        if (proAshoreAt >= 0.0 && now - proAshoreAt > 5.0) proDeepAt = proAshoreAt = -1.0;
+        return;
+    }
+    DrawRectangle(0, 0, (int)W + 1, (int)H + 1, {0, 0, 0, (unsigned char)(255 * a)});
+    if (proAshoreAt >= 0.0) {
+        const float t = Clamp((float)(now - proAshoreAt - 0.6) / 0.8f, 0.0f, 1.0f) * a;
+        ui::Text("PORT HAVERLY", W * 0.5f, H * 0.5f - 30, 44, ui::A(ui::kGold, t), true, ui::Center);
+        ui::Text("three days later", W * 0.5f, H * 0.5f + 24, 20, ui::A(ui::kText, t), false, ui::Center);
+    }
+}
+
 // The passengers talk on the way home: three lines, a minute or so apart, never in a fight or over someone else
 void Game::UpdatePassengers(bool fight) {
     const double now = GetTime();

@@ -1747,6 +1747,7 @@ void World::Respawn(Ship& s) {
         PlaceNearConvoy(s);
         voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
     }
+    if (mode == MODE_CAMPAIGN && !s.raider && s.leader < 0 && campPrologue >= campaign::PRO_FIGHT && !s.isBot) EndPrologue(s);  // (washed up at Haverly)
     if (mode == MODE_CAMPAIGN && !s.raider) {  // the campaign: back in the last port put into
         s.team = 0;
         PlaceInHarbour(s, campLastPort, 0);
@@ -2011,7 +2012,8 @@ void World::Damage(Ship& v, float amount, int attacker) {
                         campSaveDue = true;
                         break;
                     }
-            if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
+            if (!v.isBot && v.leader < 0 && campPrologue != campaign::PRO_NONE) {  // (the prologue: the Sovereign goes down; nothing else is lost)
+            } else if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
                 int held = 0;
                 for (uint8_t o : campOfficer) held += o > 0;
                 if (held && RandF() < 0.3f) {  // (and now and then an officer goes down with her)
@@ -5040,6 +5042,11 @@ bool World::CampaignAct(int shipId, int act, int arg) {
         case campaign::ACT_FAST_ON: campWantFast = true; return true;
         case campaign::ACT_FAST_OFF: campWantFast = false; return true;
         case campaign::ACT_HANDLING: realistic = arg != 0; return true;  // (the solo campaign: hers to change at any time)
+        case campaign::ACT_SKIPPROLOGUE:
+            if (campPrologue == campaign::PRO_NONE) return false;
+            if (campPrologue < campaign::PRO_FIGHT) campPrologue = campaign::PRO_FIGHT;  // (not begun yet: end it all the same)
+            Respawn(s);  // (EndPrologue, then Port Haverly)
+            return true;
     }
     return false;
 }
@@ -5047,6 +5054,132 @@ bool World::CampaignAct(int shipId, int act, int arg) {
 // The campaign: the captain putting into port and leaving it, fast-sail, and the pirates - found in bands out of sight
 // round her, thicker in the wilder regions, never near a port, chasing her down, and giving up when she's left them far
 // behind
+// The prologue (docs/campaign.md "The story"): the Sovereign's last night
+void World::UpdatePrologue(float dt, Ship& cap) {
+    using namespace campaign;
+    campProT += dt;
+    if (campPrologue != PRO_BEGIN) campClock -= dt * 0.9f;  // (the night holds)
+    campSpawn = 999.0f;    // (nothing else at sea tonight)
+    campEventT = 999.0f;
+    auto stage = [&](uint8_t st) {
+        campPrologue = st;
+        campProT = 0.0f;
+        GameEvent e{EventType::CampEvent};
+        e.b = EV_PROLOGUE;
+        e.flags = st;
+        e.a = cap.id;
+        e.pos = cap.pos;
+        events.push_back(e);
+    };
+    const Vector3 fwd = Vector3RotateByQuaternion({0, 0, 1}, cap.rot);
+    const Vector2 f2 = Vector2Normalize({fwd.x, fwd.z}), r2 = {f2.y, -f2.x};
+    const Vector2 me = {cap.pos.x, cap.pos.z};
+    auto around = [&](float ahead, float side) { return Vector2{me.x + f2.x * ahead + r2.x * side, me.y + f2.y * ahead + r2.y * side}; };
+    const float hdg = atan2f(f2.x, f2.y);
+    switch (campPrologue) {
+        case PRO_BEGIN: {  // the Sovereign at full strength, her officers aboard, by night at the Reach's edge
+            if (!cap.alive) return;
+            cap.cls = cap.nextCls = SC_LINE;
+            cap.fixedCls = true;
+            for (int u = 0; u < kUpgradeCount; ++u) campUpg[u] = kUpgrades[u].max;
+            for (const OldHand& oh : kOldHand) { campOfficer[oh.role] = 3; campOfficerSeed[oh.role] = oh.seed; }
+            ApplyCampPerks(cap);
+            campPerkKey = -1;
+            cap.maxHp = MaxHpOf(cap);
+            cap.hp = cap.maxHp;
+            const float h0 = 1.4f;  // (heading west-north-west, home: +x is west)
+            cap.rot = QuaternionFromAxisAngle({0, 1, 0}, h0);
+            cap.pos = {prologueX, ocean.Height(prologueX, prologueZ), prologueZ};
+            cap.vel = {sinf(h0) * 8.0f, 0.0f, cosf(h0) * 8.0f};
+            cap.angVel = {0, 0, 0};
+            campClock = dayLength * (floorf(campClock / dayLength) + 0.72f);  // (night, just fallen)
+            const Vector2 fw = {sinf(h0), cosf(h0)}, rt = {fw.y, -fw.x};
+            auto at = [&](float ahead, float side) { return Vector2{prologueX + fw.x * ahead + rt.x * side, prologueZ + fw.y * ahead + rt.y * side}; };
+            campProDominion = (int16_t)SpawnNpc(NPC_NAVY, at(-30.0f, 110.0f), h0, SC_LINE, 0, false, 1.4f, "the Dominion");
+            for (int k = 0; k < 2; ++k) {
+                const int id = SpawnNpc(NPC_NAVY, at(-90.0f - 40.0f * k, k ? -120.0f : -90.0f), h0, k ? SC_CUTTER : SC_FRIGATE, 0, false, 1.0f,
+                                        k ? "the Merryweather" : "the Resolute");
+                if (id >= 0) { ships[id].laneFrom = -2; ships[id].laneTo = -1; }
+            }
+            if (campProDominion >= 0) { ships[campProDominion].laneFrom = -2; ships[campProDominion].laneTo = -1; }
+            for (int k = 0; k < 4; ++k)  // (a pirate line to break: no match for her tonight)
+                SpawnRaider(at(780.0f + 60.0f * (k % 2), -150.0f + 100.0f * k), h0 + PI, k % 2 ? SC_GUNBOAT : SC_CUTTER, 0.45f);
+            stage(PRO_FIGHT);
+            break;
+        }
+        case PRO_FIGHT: {
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.6f);  // (she's at the height of her powers tonight)
+            int left = 0;
+            for (const Ship& o : ships) left += o.active && o.alive && o.raider && Vector2Distance(me, {o.pos.x, o.pos.z}) < 3000.0f;
+            if ((left == 0 && campProT > 15.0f) || campProT > prologueFightMax) {  // the black sails, and the Dominion turns
+                for (int k = 0; k < 7; ++k) {
+                    const float a = hdg + (k - 3) * 0.55f + PI * (k % 2);
+                    SpawnRaider({me.x + sinf(a) * 620.0f, me.y + cosf(a) * 620.0f}, a + PI, k < 2 ? SC_LINE : SC_FRIGATE, 1.0f);
+                }
+                if (campProDominion >= 0 && campProDominion < ShipCount() && ships[campProDominion].active) {
+                    Ship& d = ships[campProDominion];
+                    d.team = 1;
+                    d.raider = true;
+                    d.npc = NPC_NONE;
+                }
+                stage(PRO_BETRAYAL);
+            }
+            break;
+        }
+        case PRO_BETRAYAL:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.3f);  // (not this way: the deep has her)
+            if (campProT > prologueBetrayal) {  // something vast, from below: it takes her down
+                Monster& m = monsters[MON_KRAKEN];
+                m = Monster{};
+                m.active = true;
+                m.type = MON_KRAKEN;
+                m.target = (int16_t)cap.id;
+                m.maxHp = m.hp = 1e7f;
+                m.side = 1;
+                m.depth = 8.0f;
+                m.pos = {cap.pos.x + r2.x * 12.0f, ocean.Height(cap.pos.x, cap.pos.z) - 8.0f, cap.pos.z + r2.y * 12.0f};
+                m.state = MS_STRIKE;
+                stage(PRO_DEEP);
+            }
+            break;
+        case PRO_DEEP:
+            if (cap.alive && campProT > 3.0f) MonsterDamage(cap, cap.maxHp * 0.1f * dt, MON_KRAKEN);  // (about ten seconds)
+            break;
+        default: break;
+    }
+    (void)around;
+}
+
+void World::EndPrologue(Ship& cap) {
+    using namespace campaign;
+    for (int i = 0; i < ShipCount(); ++i)  // (the night's ships: gone)
+        if (ships[i].active && i != cap.id && (ships[i].raider || ships[i].npc != NPC_NONE)) RemoveShip(i);
+    for (Monster& m : monsters) m = Monster{};
+    campProDominion = -1;
+    cap.cls = cap.nextCls = SC_CUTTER;  // (Old Tom's cutter, and nothing else: the career as a new one starts)
+    cap.fixedCls = true;
+    campHulls = 1u << SC_CUTTER;
+    campLoadCls = SC_CUTTER;
+    for (float& h : campHullFrac) h = 1.0f;
+    for (uint8_t& u : campUpg) u = 0;
+    for (uint8_t& o : campOfficer) o = 0;
+    for (uint16_t& o : campOfficerSeed) o = 0;
+    ApplyCampPerks(cap);
+    campPerkKey = -1;
+    campClock = dayLength * (floorf(campClock / dayLength) + 3.03f);  // (three days later, at dawn)
+    campSpawn = 75.0f;
+    campEventT = 120.0f;
+    campLastPort = (int8_t)homePort;
+    campPrologue = PRO_NONE;
+    campProT = 0.0f;
+    GameEvent e{EventType::CampEvent};
+    e.b = EV_PROLOGUE;
+    e.flags = PRO_ASHORE;
+    e.a = cap.id;
+    events.push_back(e);
+    campSaveDue = true;
+}
+
 void World::UpdateCampaign(float dt) {
     using namespace campaign;
     campClock += dt;
@@ -5054,6 +5187,7 @@ void World::UpdateCampaign(float dt) {
     for (Ship& s : ships)
         if (s.active && (!s.isBot || (campBotCaptain && !s.raider)) && s.leader < 0) { cap = &s; break; }
     if (!cap) return;
+    if (campPrologue != campaign::PRO_NONE) UpdatePrologue(dt, *cap);
     if (cap->cls < SC_PLAYABLE) campLoadCls = cap->cls;  // (her ship and hull as they are, for the save: she may be gone when it's written)
     if ((int)(campClock * 2.0f) != (int)((campClock - dt) * 2.0f)) SyncFleet(*cap);  // (twice a second)
     {  // her perks as her upgrades and officers make them (cheap to check: a sum)
@@ -6546,6 +6680,7 @@ bool World::SaveCampaign() const {
     if (!f) return false;
     fprintf(f, "broadside_campaign 1\nseed %u\ngold %d\nport %d\nseen %u\nclock %.1f\nsunk %d\n", seedUsed, (int)campGold, (int)campLastPort,
             (unsigned)campSeen, campClock, campSunk);
+    fprintf(f, "prologue %d\n", campPrologue != campaign::PRO_NONE ? 1 : 0);
     for (const Quest& q : campQuests)
         if (q.state == campaign::QS_ACTIVE || q.state == campaign::QS_RETURN)
             fprintf(f, "quest %d %d %d %d %.1f %.1f %d %.1f %u %d %d %d %d %d %d %d %d\n", q.type, q.state, q.from, q.to, q.x, q.z, (int)q.reward, q.deadline, (unsigned)q.seed,
@@ -6590,6 +6725,7 @@ bool World::LoadCampaign() {
     char key[64];
     while (fscanf(f, "%63s", key) == 1) {
         if (!strcmp(key, "gold")) { int v; if (fscanf(f, "%d", &v) == 1) campGold = v; }
+        else if (!strcmp(key, "prologue")) { int v; if (fscanf(f, "%d", &v) == 1) campPrologue = v ? campaign::PRO_BEGIN : campaign::PRO_NONE; }
         else if (!strcmp(key, "port")) { int v; if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < campaign::kPorts) campLastPort = (int8_t)v; }
         else if (!strcmp(key, "seen")) { unsigned v; if (fscanf(f, "%u", &v) == 1) campSeen = (uint16_t)v; }
         else if (!strcmp(key, "clock")) { float v; if (fscanf(f, "%f", &v) == 1) campClock = v; }

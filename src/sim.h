@@ -512,7 +512,8 @@ enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCE
                      ACT_BUY_ESCORT = 8,  // ...a ship for the fleet, arg = the class
                      ACT_SELL_ESCORT = 9, // ...arg = which of the fleet
                      ACT_PRIZE = 10,      // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
-                     ACT_HANDLING = 11 }; // arcade (arg 0) or realistic (arg 1) handling, whenever she likes
+                     ACT_HANDLING = 11,   // arcade (arg 0) or realistic (arg 1) handling, whenever she likes
+                     ACT_SKIPPROLOGUE = 12 };  // straight to Port Haverly
 // The fleet: up to three ships of her own sailing with her (bought, or taken as prizes); sunk, they're gone
 constexpr int fleetMax = 3;
 int ShipPrice(int cls);               // the shipwright's price for a hull of this class (escorts: the cutter and the gunboat only)
@@ -550,6 +551,12 @@ std::string OfficerName(uint16_t seed);
 // The story (docs/campaign.md): each region's story brings one of the Sovereign's officers home, at one of its steps,
 // under their own name (OfficerName of the seed): the bosun Jonah Stroud, the navigator Grace Fairweather, the master
 // gunner Silas Gage, the surgeon Amos Whitlock, the quartermaster Ruth Penhallow
+// The prologue (a new career): the Sovereign's last night, at the edge of the Ember Reach. Begin: her ship of the
+// line at full strength, her officers, a squadron; the fight: a pirate line to break; the betrayal: black sails and
+// the Dominion turning on her; the deep: the beast that drags her down. Then Port Haverly, a cutter, nothing else.
+enum Prologue : uint8_t { PRO_NONE = 0, PRO_BEGIN, PRO_FIGHT, PRO_BETRAYAL, PRO_DEEP, PRO_ASHORE };
+constexpr float prologueX = -7200.0f, prologueZ = 1500.0f;  // (open water at the Reach's edge: east is -x)
+constexpr float prologueFightMax = 100.0f, prologueBetrayal = 34.0f;  // s
 struct OldHand { uint8_t role, step; uint16_t seed; };
 inline constexpr OldHand kOldHand[BIOMES] = {{OF_BOSUN, 0, 6 + 16 * 12}, {OF_NAVIGATOR, 1, 5 + 16 * 8}, {OF_GUNNER, 0, 4 + 16 * 9},
                                              {OF_SURGEON, 1, 8 + 16 * 5}, {OF_QUARTERMASTER, 2, 15 + 16 * 3}};
@@ -640,7 +647,8 @@ enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SA
                           EV_WANTED,       // (she fired on a merchantman: the navy hunts her a while)
                           EV_OLDHAND,      // (the story: one of the Sovereign's officers back aboard, flags = the role)
                           EV_SOVEREIGN,    // (the Armada broken: the Sovereign is hers again)
-                          EV_MARA };       // (the Storm Caller beaten: Mara is free)
+                          EV_MARA,         // (the Storm Caller beaten: Mara is free)
+                          EV_PROLOGUE };   // (the prologue's next stage: flags = campaign::Prologue)
 // The Tropics' hurricane: a storm wandering the region on the campaign's clock (the same on every client): lightning
 // in it, the sea and sky wild. False when it has blown itself out (between storms)
 inline bool Hurricane(float clock, Vector2& c, float& r) {
@@ -1208,6 +1216,9 @@ public:
     int8_t campLastPort = 0;       // where she puts back to after a sinking
     uint16_t campSeen = 0;         // the ports put into (bits)
     float campClock = 0.0f;        // s of the campaign, all told (campaign::dayLength a day)
+    uint8_t campPrologue = 0;      // campaign::Prologue (a new career's, from the menu: the server sets PRO_BEGIN)
+    float campProT = 0.0f;         // s in its stage
+    int16_t campProDominion = -1;  // Ashgrave's flagship
     float campSpawn = 0.0f;        // s to the next band of pirates
     bool campWantFast = false;     // the captain asks for fast-sail...
     bool campFast = false;         // ...and has it (no enemy near, not in port)
@@ -1443,6 +1454,8 @@ private:
     void UpdateRace(float dt);
     void UpdateVoyage(float dt);
     void UpdateCampaign(float dt);
+    void UpdatePrologue(float dt, Ship& cap);
+    void EndPrologue(Ship& cap);  // (Port Haverly, a cutter: the career as a new one starts)
     void UpdateQuests(float dt, Ship& cap);
     void UpdateSeaLife(float dt, Ship& cap, float nearFoe);  // traffic, events, dread pirates
     void SeaEvent(Ship& cap);

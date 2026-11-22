@@ -27,7 +27,10 @@ bool GameServer::Start(uint16_t port, int bots, uint32_t seed, int timeOfDay, in
     world.Init(seed, (uint8_t)weather, (uint8_t)timeOfDay, (uint8_t)mode, fleets, (uint8_t)arena);
     if (mode == MODE_CAMPAIGN) {
         if (campaignContinue) world.LoadCampaign();
-        else world.SaveCampaign();  // (a new campaign: the old save goes)
+        else {  // (a new campaign: the old save goes, and her career begins with the Sovereign's last night)
+            if (!getenv("BS_NOPROLOGUE")) world.campPrologue = campaign::PRO_BEGIN;
+            world.SaveCampaign();
+        }
     }
     world.allowedCls = (allowedCls & SC_ALL) ? (uint8_t)(allowedCls & SC_ALL) : SC_ALL;
     world.deckOnly = deckOnly;

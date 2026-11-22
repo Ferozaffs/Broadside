@@ -276,7 +276,8 @@ struct Snapshot {
     int8_t campDocked = -1, campLastPort = 0;
     uint16_t campSeen = 0;
     float campClock = 0.0f;
-    bool campFast = false, campWantFast = false, campReal = false;  // (campReal: her handling, which she can change)
+    bool campFast = false, campWantFast = false, campReal = false;
+    uint8_t campPrologue = 0;  // (campaign::Prologue)  // (campReal: her handling, which she can change)
     uint16_t campSunk = 0;
     Quest campQuests[campaign::maxQuests];  // under way
     std::vector<Quest> campOffers;          // the tavern's (in port)
@@ -504,7 +505,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(world.campLastPort);
         w.Put(world.campSeen);
         w.Put(world.campClock);
-        w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0) | (world.realistic ? 4 : 0)));
+        w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0) | (world.realistic ? 4 : 0) | ((world.campPrologue & 7) << 3)));
         w.Put((uint16_t)world.campSunk);
         for (const Quest& q : world.campQuests) PutQuest(w, q);
         for (uint8_t c : world.campChain) w.Put(c);
@@ -736,6 +737,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         s.campFast = f & 1;
         s.campWantFast = (f & 2) != 0;
         s.campReal = (f & 4) != 0;
+        s.campPrologue = (uint8_t)((f >> 3) & 7);
         s.campSunk = r.Get<uint16_t>();
         for (Quest& q : s.campQuests) q = GetQuest(r);
         for (uint8_t& c : s.campChain) c = r.Get<uint8_t>();
