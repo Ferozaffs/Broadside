@@ -9393,10 +9393,11 @@ void Game::DrawSeaSay(float W, float H) {
 void Game::AddBark(const std::string& id, const std::string& name, const std::string& line, Color c) {
     for (const Bark& b : barks)
         if (b.line == line) return;  // (not twice at once)
+    if (campPrologueC != 0 && name == "the Dominion") return;  // (Ashgrave doesn't jeer like a common pirate)
     barks.push_back({id, name, line, c, GetTime()});
     if (getenv("BS_TALKLOG")) printf("[say] %.1f %s | %s | bark | %s\n", GetTime() - sessionStart, id.c_str(), name.c_str(), line.c_str());
     while (barks.size() > 3) barks.pop_front();
-    people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 7.0) + (uint32_t)barks.size());
+    people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 7.0) + (uint32_t)barks.size(), 0);  // (a bark: never over someone talking to her)
 }
 
 // Who says what: her fleet's captains between fights (now and then), when a fight starts, when they're badly hurt,

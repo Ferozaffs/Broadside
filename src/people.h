@@ -503,14 +503,14 @@ inline sfx::VoiceParams ParamsOf(const Voice& v) {
     p.rasp = v.rasp;
     return p;
 }
-inline void Voiced(const char* id, const char* line, uint32_t salt) {
+inline void Voiced(const char* id, const char* line, uint32_t salt, int prio = 1) {
     if (!line) return;
-    if (sfx::PlayVoice(TextFormat("data/voices/%s/%08x.ogg", id, sfx::LineHash(line)))) return;  // (spoken, where there's a recording)
+    if (sfx::PlayVoice(TextFormat("data/voices/%s/%08x.ogg", id, sfx::LineHash(line)), 0.85f, prio)) return;  // (spoken, where there's a recording)
     if (getenv("BS_VOICELOG")) printf("[voice] no recording: %s %08x %s\n", id, sfx::LineHash(line), line);
     const Voice* v = VoiceOf(id);
     if (!v) return;
     const uint32_t h = salt * 2654435761u + (uint32_t)strlen(line) * 40503u;
-    sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h);
+    sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h, prio);
 }
 
 // What a port's keepers say once it thinks well of her (Trusted, a friend of the port, its hero: campaign::RepTier

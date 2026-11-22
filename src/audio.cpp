@@ -1033,6 +1033,7 @@ Buf BabbleBuf(const VoiceParams& v, const char* line, int mood, uint32_t seed) {
 
 constexpr int kUtterSlots = 4;
 Sound utterSounds[kUtterSlots];
+int utterPrio = 0;  // (the priority of the line being said)
 int utterNext = 0;
 
 }  // namespace
@@ -1051,8 +1052,9 @@ void Utter(const VoiceParams& v, int kind, float vol, uint32_t seed) {
 
 Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed) { return ToWave(UtterBuf(v, kind, seed)); }
 
-void Babble(const VoiceParams& v, const char* line, int mood, float vol, uint32_t seed) {
-    if (!ready || muted) return;
+void Babble(const VoiceParams& v, const char* line, int mood, float vol, uint32_t seed, int prio) {
+    if (!ready || muted || VoiceBusy(prio)) return;
+    utterPrio = prio;
     for (Sound& o : utterSounds)  // (one voice at a time: a new line cuts the last one off)
         if (o.frameCount && IsSoundPlaying(o)) StopSound(o);
     Sound& s = utterSounds[utterNext];
@@ -1067,8 +1069,17 @@ void Babble(const VoiceParams& v, const char* line, int mood, float vol, uint32_
 
 Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed) { return ToWave(BabbleBuf(v, line, mood, seed)); }
 
-bool PlayVoice(const char* path, float vol) {
+bool VoiceBusy(int prio) {
+    if (prio >= utterPrio) return false;
+    for (Sound& o : utterSounds)
+        if (o.frameCount && IsSoundPlaying(o)) return true;
+    return false;
+}
+
+bool PlayVoice(const char* path, float vol, int prio) {
     if (!ready || muted || !path || !FileExists(path)) return false;
+    if (VoiceBusy(prio)) return true;  // (a bark over someone talking to her: not heard, and no babble either)
+    utterPrio = prio;
     for (Sound& o : utterSounds)  // (one voice at a time)
         if (o.frameCount && IsSoundPlaying(o)) StopSound(o);
     Sound& s = utterSounds[utterNext];

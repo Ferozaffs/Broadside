@@ -67,11 +67,14 @@ Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed = 1);  // (the same
 // vowels, so it has the line's rhythm), stress on the long words, the pitch falling through a clause, a pause at a
 // comma, a rise at a question, a lift at an exclamation, laughter at a "Ha!" - in a mood
 enum Mood { MOOD_PLAIN = 0, MOOD_CHEERFUL, MOOD_GRUFF, MOOD_EERIE, MOOD_ANGRY, MOOD_SCARED, MOOD_WEARY, MOOD_COUNT };
-void Babble(const VoiceParams& v, const char* line, int mood, float vol = 0.8f, uint32_t seed = 1);
+// (prio: 1 someone talking to her - the story, a hail, a keeper - which cuts off a bark; 0 a bark, which never cuts off
+// a line of priority and is skipped while one is being said)
+void Babble(const VoiceParams& v, const char* line, int mood, float vol = 0.8f, uint32_t seed = 1, int prio = 1);
 Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed = 1);
 // A line spoken for real: a voice file (data/voices/<who>/<hash>.ogg, made offline by an AI voice model) played
 // in the babble's place; false if it couldn't be (no file, no audio)
-bool PlayVoice(const char* path, float vol = 0.85f);
+bool PlayVoice(const char* path, float vol = 0.85f, int prio = 1);  // (false too when a line of priority is still being said)
+bool VoiceBusy(int prio);  // is a line that a voice of this priority mustn't cut off still being said?
 uint32_t LineHash(const char* line);  // (the file's name for a line: FNV-1a of its text)
 
 // Music: tracks streamed from data/music, one per state of the game, crossfaded as it changes. Each state's
