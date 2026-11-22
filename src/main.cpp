@@ -9889,12 +9889,13 @@ static int ExportLines(const char* path) {
     if (!f) return 1;
     std::set<std::string> seen;
     int n = 0;
-    auto put = [&](const std::string& id, const char* line) {
+    // (the fifth column: where the line is said, for the voices' acting directions)
+    auto put = [&](const std::string& id, const char* line, const std::string& ctx) {
         if (!line || !*line || strstr(line, "%s")) return;
         const std::string key = id + "|" + line;
         if (!seen.insert(key).second) return;
         const Voice* v = VoiceOf(id.c_str());
-        fprintf(f, "%s\t%08x\t%d\t%s\n", id.c_str(), sfx::LineHash(line), v ? MoodOf(*v, line) : 0, line);
+        fprintf(f, "%s\t%08x\t%d\t%s\t%s\n", id.c_str(), sfx::LineHash(line), v ? MoodOf(*v, line) : 0, line, ctx.c_str());
         ++n;
     };
     auto pool = [&](const std::string& base) {  // (the faces that speak for a kind)
@@ -9908,32 +9909,36 @@ static int ExportLines(const char* path) {
     for (int p = 0; p < campaign::kPorts; ++p)
         for (int sh = 0; sh < SHOPS; ++sh) {
             const Person& who = kPort[p][sh];
-            for (const char* l : who.hello) put(who.id, l);
-            put(who.id, who.special);
+            static const char* const kShopName[SHOPS] = {"harbour", "tavern", "wright"};
+            for (const char* l : who.hello) put(who.id, l, std::string("hello:") + kShopName[sh]);
+            put(who.id, who.special, std::string("special:") + kShopName[sh]);
             for (int t = 0; t < 3; ++t)
-                for (const char* l : kWarm[sh][t]) put(who.id, l);
-            if (sh == TAVERN) put(who.id, kBlackSails[p]);
+                for (const char* l : kWarm[sh][t]) put(who.id, l, std::string("warm:") + kShopName[sh] + ":" + std::to_string(t));
+            if (sh == TAVERN) put(who.id, kBlackSails[p], "blacksails");
         }
-    for (const SeaVoice& v : kSea)
-        for (const std::string& id : pool(v.id))
-            for (const char* l : v.lines) put(id, l);
+    static const char* const kSeaTalk[ST_COUNT] = {"hail", "navy", "distress", "saved", "castaway", "captive_f", "captive_m", "struck"};
+    for (int s = 0; s < ST_COUNT; ++s)
+        for (const std::string& id : pool(kSea[s].id))
+            for (const char* l : kSea[s].lines) put(id, l, std::string("sea:") + kSeaTalk[s]);
     for (const DreadVoice& d : kDread) {
-        put(d.id, d.line);
-        for (const char* l : d.more) put(d.id, l);
+        put(d.id, d.line, "dread");
+        for (const char* l : d.more) put(d.id, l, "dread");
     }
+    static const char* const kFB[FB_COUNT] = {"idle", "enemy", "hurt", "kill", "joined"};
     for (const char* id : kFleetPool)
-        for (auto& row : kFleetLines)
-            for (const char* l : row) put(id, l);
+        for (int r = 0; r < FB_COUNT; ++r)
+            for (const char* l : kFleetLines[r]) put(id, l, std::string("fleet:") + kFB[r]);
+    static const char* const kPB[PB_COUNT] = {"approach", "taunt", "sinking"};
     for (const char* id : kPiratePool)
-        for (auto& row : kPirateLines)
-            for (const char* l : row) put(id, l);
+        for (int r = 0; r < PB_COUNT; ++r)
+            for (const char* l : kPirateLines[r]) put(id, l, std::string("pirate:") + kPB[r]);
     for (const std::string& id : pool("rival"))
-        for (const char* l : kRivalLines) put(id, l);
+        for (const char* l : kRivalLines) put(id, l, "rival");
     for (const std::string& id : pool("smuggler"))
-        for (const char* l : kSmugglerLines) put(id, l);
+        for (const char* l : kSmugglerLines) put(id, l, "smuggler");
     for (const std::string& id : pool("sea_castaway")) {
-        for (const char* l : kAdriftLines) put(id, l);
-        for (const char* l : kAdriftThanks) put(id, l);
+        for (const char* l : kAdriftLines) put(id, l, "adrift");
+        for (const char* l : kAdriftThanks) put(id, l, "adrift_thanks");
     }
     // the passengers: every face of the kind, every tale it might tell
     auto tales = [&](const std::string& base, bool captive) {
@@ -9941,20 +9946,20 @@ static int ExportLines(const char* path) {
             for (int b = 0; b < campaign::BIOMES; ++b) {
                 for (int k = 0; k < (captive ? 3 : 4); ++k) {
                     const Tale& t = captive ? kCaptiveTales[b][k] : kCastawayTales[b][k];
-                    put(id, t.how);
-                    put(id, t.saw);
+                    put(id, t.how, "tale_how:" + std::to_string(b));
+                    put(id, t.saw, "tale_saw:" + std::to_string(b));
                 }
-                put(id, kStoryTale[b]);
+                put(id, kStoryTale[b], "story_tale:" + std::to_string(b));
             }
-            for (auto& row : kOmens)
-                for (const char* l : row) put(id, l);
+            for (int r = 0; r < 4; ++r)
+                for (const char* l : kOmens[r]) put(id, l, "omen:" + std::to_string(r));
         }
     };
     tales("sea_castaway", false);
     tales("sea_captive", true);
     tales("sea_captive_m", true);
     // the story's own lines (main.cpp: the prologue, the officers home, the end)
-    for (const ScriptedLine& l : kScripted) put(l.id, l.line);
+    for (const ScriptedLine& l : kScripted) put(l.id, l.line, std::string("scripted:") + l.key);
     fclose(f);
     printf("%d lines\n", n);
     return 0;
