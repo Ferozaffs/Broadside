@@ -30,6 +30,55 @@ how she earns the far seas. The HUD shows the danger against a rating of her shi
 - **Market**: sell cargo and plunder; buy supplies.
 - **Governor**: bounties, letters of marque later (reputation with each port: built, below).
 
+## The story (v0.24: the user's go-ahead on 2026-11-22; every region's story leads to the end)
+**Who she is.** Captain of the *Sovereign*, a 74-gun ship of the line of the Admiralty of the Isles, the pride of the
+squadron of **Lord Admiral Caspian Ashgrave** - her mentor, the most decorated man in the navy. Her first mate and
+oldest friend is **Mara Vell**, born on Lantern Rock, granddaughter of the Lamplighter.
+
+**What Ashgrave wants.** The Lamplighters keep an old story: the **Leviathan** sleeps at the end of the world, and
+whoever rings the **Tidebell** over it commands every sea. The bell was broken in five and sunk in the five seas long
+ago, and a beast lay down to sleep over each piece. Ashgrave found the pieces. His five captains - **the Five**,
+the dread pirates (Gentleman Corwin, Calypso Vane, Old Rime, Cinder Kate, the Grey Widow) - rang them, and the five
+beasts woke in one year. To ring the whole bell he needs a voice the sea answers: Mara's, the Lamplighters' blood.
+
+**The prologue** (a new campaign; playable, skippable). Night at the edge of the Ember Reach, the *Sovereign* at
+full strength (every upgrade, her officers, a squadron round her). A pirate line to break: the controls on a strong
+ship. Then a storm out of a clear sky, black sails all round, and Ashgrave's *Dominion* hoists one too and opens fire
+on his own squadron. "Forgive me, Captain. The sea needs a master." His boats take Mara; the five pieces are rung
+together, and something vast rises under the *Sovereign* and drags her down. Black.
+She wakes on the beach at Port Haverly. Old Tom Fennick pulled her out of the surf, with a dispatch case that washed
+up beside her: Ashgrave's orders to the Five, each told to keep a piece of the bell and its beast in its own sea until
+the Admiral's yard has the bell's cradle ready. The Admiralty lists the *Sovereign* as lost to pirates, with all
+hands. Old Tom lends her a cutter. That's where the campaign starts today.
+
+**Why she goes to each sea** (not just to get stronger). In every region's story:
+- **one of her officers**, scattered as prizes among the Five, is there to bring home (each joins her again, under
+  their own name: the officers system's five roles, one a region);
+- **a piece of the Tidebell** lies under its beast: she must have it before Ashgrave does;
+- **a lead** to the *Sovereign*, to Mara, to what the Admiral is building.
+
+| Region | Story (its steps stay the same kinds of quest) | Her officer | What she learns |
+|---|---|---|---|
+| Temperate Isles | *The Guns of the Grey Isle*: the *Merryweather* (a brig of her own squadron that got away) ashore; the purser taken by Corwin; Corwin's powder runner; the Sea Fortress - Ashgrave's old fort, rearmed over the first piece | Jonah Stroud, bosun (among the *Merryweather*'s survivors) | Ashgrave's flag flew over the fort; Corwin keeps a bell piece in its magazine |
+| The Tropics | *The Queen Beneath the Reef*: the pearl diver's map; the *Dolphin*'s crew; Calypso, the beast's keeper, feeding it ships; the Kraken Queen | Grace Fairweather, navigator (sold to Calypso, stranded with the *Dolphin*'s crew) | Mara was seen aboard a black ship, singing, and the reef sang back |
+| The Frozen North | *The Coil in the Ice*: the frozen whalers; their log; Old Rime's soundings (a road through the ice for a fleet); the Serpent | Silas Gage, master gunner (put on the ice by Old Rime) | the fleet will come south through the ice to a yard in the Ember Reach |
+| The Ember Reach | *The Iron Beast*: the foundry's ledger (iron for the Admiral's yard); her surgeon held aboard Kate's ship; the coal convoy; the Ironclad | Amos Whitlock, surgeon (made to tend the foundry's slaves) | the *Sovereign* was raised from the deep and is being rebuilt in iron plate as Ashgrave's flagship |
+| The Fog Banks | *The Ship Without a Crew*: lanterns on a beach; the drowned captain's chest (the Widow's bargain: the *Sovereign*'s dead for the Dutchman's crew); the last man off the ship; the Flying Dutchman | Ruth Penhallow, quartermaster (the last of the *Sovereign*'s crew off the Dutchman) | Mara is the Storm Caller now, bound by the Admiral's will |
+
+Each story's end hands her the piece and sends her to whichever seas are left. The dread pirates' hails know who she
+is ("The Admiral said you'd drowned"); passengers' tales and the taverns' rumours are about the Five, the black sails,
+the bell and the Admiral; the omens darken as she gathers the pieces.
+
+**The last story** (*The Last Voyage*, once she holds all five pieces): the Lamplighter recasts the bell, and
+Ashgrave comes for it.
+1. *The Black Sails*: his herald carries the Armada's orders through the Fog Banks. Sink it.
+2. *The Armada*, in the Ember Reach: his flagship is the iron-plated *Sovereign*. Break the line and **take her
+   back**: she's hers again (the ship of the line, her name, every upgrade she had in the prologue).
+3. *The Storm Caller*, in the far Fog Banks: Mara. Ring the bell over her and the Admiral's hold breaks: she's freed,
+   not sunk, and sails with her.
+4. *The Leviathan*: Ashgrave, beaten, wakes it anyway. At the end of the world, the *Sovereign* and Mara: ring it
+   back to sleep for good. Then the sea is hers.
+
 ## Quests
 Every quest is a template with a giver, a place, a goal and a reward, rolled for the biome:
 - **Treasure**: a map piece -> sail to the island marked -> drop anchor at the X (stop near it) -> chest.

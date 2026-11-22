@@ -3455,6 +3455,20 @@ void Game::PlayEvent(const GameEvent& e) {
                         "So it's done. The lights out there have gone dark, Captain, all but mine. Sail where you like now: the sea is yours.");
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.7f);
                     break;
+                case EV_SOVEREIGN:
+                    Notice("THE SOVEREIGN IS YOURS AGAIN", ui::kGold, 6.0f);
+                    Feed3("THE SOVEREIGN", "  in her iron, at the shipwright's for you: sail her from any port", "", ui::kGold, ui::kText);
+                    Say("officer_penhallow", "Ruth Penhallow", "Your quartermaster",
+                        "She's ours again, Captain. Iron on her sides and Ashgrave's stink in her cabins, but she's ours. The lads are already scrubbing.");
+                    sfx::PlayFlat(sfx::Treasure, 1.0f, 0.8f);
+                    break;
+                case EV_MARA:
+                    Notice("MARA IS FREE", ui::kGold, 6.0f);
+                    Feed3("MARA VELL", "  the bell rang, the storm broke, and she's aboard", "", ui::kGold, ui::kText);
+                    Say("story_mara", "Mara Vell", "Your first mate",
+                        "I could hear you the whole time, you know. Every broadside. I kept the storm off you as long as I could. Now let's finish him.");
+                    sfx::PlayFlat(sfx::Treasure, 1.0f, 0.9f);
+                    break;
                 case EV_JOINED:
                     if (e.value > 0.0f) Feed3("A SHIP", TextFormat("  a %s for your fleet, but no berth: her owners pay", ClassOf(e.flags % SC_COUNT).name), gold, ui::kGold, ui::kGold);
                     else {
@@ -3472,6 +3486,26 @@ void Game::PlayEvent(const GameEvent& e) {
                     sfx::PlayFlat(sfx::Treasure, 0.9f, 0.8f);
                     break;
                 case EV_OFFICERLOST: Feed3("YOUR " + std::string(TextToUpper(kOfficerNames[e.a % OFFICERS])), "  went down with the ship", "", ui::kRed, ui::kText); break;
+                case EV_OLDHAND: {  // (the story: one of the Sovereign's own, back aboard)
+                    const int role = e.flags % OFFICERS;
+                    std::string who;
+                    for (const OldHand& oh : kOldHand)
+                        if (oh.role == role) who = OfficerName(oh.seed);
+                    Feed3("YOUR " + std::string(TextToUpper(kOfficerNames[role])), "  " + who + ", off the Sovereign, is back aboard", "", ui::kGold, ui::kText);
+                    floats.push_back({Vector3Add(e.pos, {0, 18, 0}), TextFormat("%s RETURNS", TextToUpper(kOfficerNames[role])), ui::kGold, 4.0f});
+                    {
+                        static const char* const face[OFFICERS] = {"officer_gage", "officer_stroud", "officer_fairweather", "officer_whitlock", "officer_penhallow"};
+                        static const char* const line[OFFICERS] = {
+                            "Nine days on the ice, Captain, and every one of them I thought about the guns. Give me a deck and I'll give you a broadside.",
+                            "Thought you was dead, Captain! Thought we all was! Well, I'm not, and I've a rope in me hand. Where d'you want me?",
+                            "I kept a log the whole time, Captain. Every current, every reef, every one of Calypso's anchorages. I knew you'd want it.",
+                            "They had me patching up the men who built his iron, Captain. I saw what he means to do with her. Let's not let him.",
+                            "The Dutchman's crew are our lads, Captain. Drowned, but ours. I promised them we'd put it right."};
+                        Say(face[role], who, TextFormat("Your %s, off the Sovereign", kOfficerNames[role]), line[role]);
+                    }
+                    sfx::PlayFlat(sfx::Confirm, 0.8f, 0.8f);
+                    break;
+                }
                 default: break;
             }
             break;
@@ -8680,32 +8714,32 @@ struct StoryStep;
 struct StoryStep { const char* title; const char* brief; const char* captive; };
 // {where}: how far and which way; {region}; {pirate}: the step's pirate captain; {a} / {b}: a convoy's ports
 static const StoryStep kStory[campaign::BIOMES][campaign::chainSteps + 1] = {
-    {{"The Wreck of the Merryweather", "A navy brig, the Merryweather, drove ashore in {region} and nobody came home. Her survivors may still be on the beach, {where} of here. Take them off.", nullptr},
-     {"The Purser's Tale", "The survivors say pirates took the brig's purser, the only one who saw who fired on her. He's aboard {pirate}'s ship, {where} of here. Cripple it, free him, bring him back.", "the purser"},
-     {"The Powder Runner", "The purser swears the guns were on an island no chart shows, kept in powder by {pirate}'s ship. Sink it, {where} of here, and take its charts.", nullptr},
-     {"The Guns of the Grey Isle", "The charts mark an island of stone and cannon, {where} of here. Something has made a fortress of it. Sail into its guns.", nullptr}},
-    {{"The Pearl Diver's Map", "A diver's map marks pearl beds off a beach {where} of here, where the divers stopped coming back. Search the shore.", nullptr},
-     {"The Last of the Dolphin", "In the oyster shells, a carved message: the Dolphin's crew are stranded {where} of here, their ship dragged under by arms as long as masts. Take them off.", nullptr},
-     {"The Kraken's Keeper", "The survivors name {pirate}, who feeds ships to the thing in the deep and keeps the plunder. Sink that ship, last seen {where} of here.", nullptr},
-     {"The Queen Beneath the Reef", "With its keeper gone the beast will come up hungry. Its deep lies {where} of here. Go and meet it.", nullptr}},
-    {{"The Frozen Whalers", "A whaling crew is stranded on the ice {where} of here, their ship crushed. Take them off before the cold does.", nullptr},
-     {"The Whaler's Log", "The whalers hid their log ashore {where} of here. It tells of a serpent longer than a convoy. Find it.", nullptr},
-     {"The Ice Pirate", "{pirate} hunts the serpent's leavings and knows its waters. Sink the ship, last seen {where} of here, and take its soundings.", nullptr},
-     {"The Coil in the Ice", "The soundings mark the serpent's coil, {where} of here. Bring everything you have.", nullptr}},
-    {{"The Foundry Ledger", "Ash covers a burned-out foundry on an island {where} of here. Its ledger is buried by the shore: iron, steam, a ship that needs no wind.", nullptr},
-     {"The Engineer", "The ledger names an engineer, taken to keep the beast's fires lit, now aboard {pirate}'s ship {where} of here. Cripple it and free them.", "the engineer"},
-     {"Coal for the Furnace", "The engineer says it burns coal by the shipload. A coal convoy sails from {a} for {b}: sink it and starve the fires.", nullptr},
-     {"The Iron Beast", "Starved of coal, it has come out to hunt, {where} of here. Iron plate and steam: find a way through.", nullptr}},
-    {{"A Light in the Fog", "Lanterns have been seen on a beach {where} of here, where nobody lives. If anyone is there, take them off.", nullptr},
-     {"The Drowned Captain's Chest", "The castaways speak of a captain who made a bargain with the sea. His chest is buried {where} of here. Dig it up.", nullptr},
-     {"The Last of His Crew", "The chest's papers name the one man who left that ship alive, now held aboard {pirate}'s ship {where} of here. Free him.", "the last of his crew"},
-     {"The Ship Without a Crew", "He knows where it comes through the fog: {where} of here. It sails through shot like mist; strike when it's solid.", nullptr}},
+    {{"The Wreck of the Merryweather", "The Merryweather, a brig of your own squadron, got away from the Admiral's ambush and drove ashore in {region}. Nobody came home. Her survivors may still be on the beach, {where} of here - your bosun with them, if he lived. Take them off.", nullptr},
+     {"The Purser's Tale", "The Merryweather's purser saw whose flag flew over the guns that finished her. Gentleman Corwin's people took him for it: he's aboard {pirate}'s ship, {where} of here. Cripple it, free him, bring him back.", "the purser"},
+     {"The Powder Runner", "The purser swears the guns were on an island no chart shows, under the Admiral's own flag, kept in powder by {pirate}'s ship. Sink it, {where} of here, and take its charts.", nullptr},
+     {"The Guns of the Grey Isle", "The charts mark Ashgrave's old fortress on the Grey Isle, {where} of here, rearmed - and in its magazine, Corwin keeps the first piece of the Tidebell. Sail into its guns.", nullptr}},
+    {{"The Pearl Diver's Map", "A diver's map marks pearl beds off a beach {where} of here, where the divers stopped coming back. Calypso Vane's ships have been seen there. Search the shore.", nullptr},
+     {"The Last of the Dolphin", "In the oyster shells, a carved message: the Dolphin's crew are stranded {where} of here, their ship dragged under by arms as long as masts - and a navigator off the Sovereign with them. Take them off.", nullptr},
+     {"The Kraken's Keeper", "Your navigator knows the ship that feeds the beast: {pirate}'s, Calypso's own, last seen {where} of here. Its hold keeps what the Admiral pays her with. Sink it.", nullptr},
+     {"The Queen Beneath the Reef", "With its keeper gone the Kraken Queen will come up hungry, and the second piece of the bell lies in its deep, {where} of here. Go and take it.", nullptr}},
+    {{"The Frozen Whalers", "A whaling crew is stranded on the ice {where} of here, their ship crushed - and Old Rime put a gunner off the Sovereign on the ice with them. Take them off before the cold does.", nullptr},
+     {"The Whaler's Log", "The whalers hid their log ashore {where} of here. It tells of a serpent longer than a convoy, and of black ships charting the ice. Find it.", nullptr},
+     {"The Ice Pirate", "{pirate} sails for Old Rime, sounding a road through the ice for a fleet. Sink the ship, last seen {where} of here, and take the soundings before the Admiral has them.", nullptr},
+     {"The Coil in the Ice", "The soundings mark the serpent's coil, {where} of here, and the third piece of the bell beneath it. Bring everything you have.", nullptr}},
+    {{"The Foundry Ledger", "Ash covers a burned-out foundry on an island {where} of here. Its ledger is buried by the shore: iron plate, steam, and one buyer for all of it - the Admiral's yard.", nullptr},
+     {"The Surgeon", "The ledger lists the foundry's slaves - and among them your own surgeon, Amos Whitlock, made to tend them, now aboard {pirate}'s ship {where} of here. Cripple it and bring him home.", "your surgeon Amos Whitlock"},
+     {"Coal for the Furnace", "Whitlock saw the yard: the Sovereign, raised from the deep, rebuilt in iron, and a beast of iron guarding the fourth piece of the bell. It burns coal by the shipload. A coal convoy sails from {a} for {b}: sink it and starve the fires.", nullptr},
+     {"The Iron Beast", "Starved of coal, Cinder Kate's iron beast has come out to hunt, {where} of here, with the fourth piece aboard. Iron plate and steam: find a way through.", nullptr}},
+    {{"A Light in the Fog", "Lanterns have been seen on a beach {where} of here, where nobody lives - lanterns from a ship of the line. If anyone from the Sovereign is there, take them off.", nullptr},
+     {"The Drowned Captain's Chest", "The castaways speak of the Grey Widow's bargain with a drowned captain: the Sovereign's dead, for a crew that never rests. His chest is buried {where} of here. Dig it up.", nullptr},
+     {"The Last of Her Crew", "The chest's papers name the last of the Sovereign's people to leave the Dutchman alive - your quartermaster, Ruth Penhallow - held aboard {pirate}'s ship {where} of here. Free her.", "your quartermaster Ruth Penhallow"},
+     {"The Ship Without a Crew", "Ruth knows where the Dutchman comes through the fog, {where} of here, with the last piece of the bell. It sails through shot like mist; strike when it's solid.", nullptr}},
 };
 static const StoryStep kFinalStory[campaign::chainSteps + 1] = {
-    {"The Black Sails", "Five beasts woken in five seas, all in one year. The Lamplighter of Lantern Rock says it was no chance: a fleet under black sails gathers, and its herald, {pirate}, carries its orders through {region}. Find the ship, {where} of here, and sink it.", nullptr},
-    {"The Armada", "The herald's orders name a gathering place in {region}: an armada, every pirate who ever flew black, in line of battle. Break it, {where} of here.", nullptr},
-    {"The Storm Caller", "The Armada's survivors speak of the one who called them: a ship that walks in its own storm, out in {region}. Sail into the weather, {where} of here, and end it.", nullptr},
-    {"The Leviathan", "With its caller gone, the thing it called is loose: the Leviathan, a man-o'-war three times over, coming up out of the deep at the end of the world, past the last of the Ember Reach. It lies {where} of here. This is the last voyage.", nullptr},
+    {"The Black Sails", "All five pieces of the Tidebell are yours, and the Lamplighter of Lantern Rock has made it whole. Ashgrave knows. His herald, {pirate}, carries the Armada's orders through {region}: find the ship, {where} of here, and sink it.", nullptr},
+    {"The Armada", "The herald's orders name the gathering place in {region}: every pirate who ever flew black, in line of battle, and at its head the Admiral's flagship - the Sovereign, in iron. Break the line and take her back, {where} of here.", nullptr},
+    {"The Storm Caller", "Ashgrave fled into the weather. Out in {region} a ship walks in its own storm, and the voice calling it is Mara's. Sail into it, {where} of here, and ring the bell over her: break his hold, don't sink her.", nullptr},
+    {"The Leviathan", "Beaten, the Admiral rang what he had left. The Leviathan, a man-o'-war three times over, is coming up out of the deep at the end of the world, past the last of the Ember Reach, {where} of here. The Sovereign, Mara and the bell: this is the last voyage.", nullptr},
 };
 static const StoryStep* StoryOf(const Quest& q) {
     if (q.chain < 1 || q.chain > campaign::CHAINS || q.step > campaign::chainSteps) return nullptr;

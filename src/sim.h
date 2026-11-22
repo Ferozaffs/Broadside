@@ -547,6 +547,13 @@ const char* FleetName(uint16_t seed);  // a ship of her fleet's name
 enum Officer : uint8_t { OF_GUNNER = 0, OF_BOSUN, OF_NAVIGATOR, OF_SURGEON, OF_QUARTERMASTER, OFFICERS };
 inline const char* const kOfficerNames[OFFICERS] = {"Master Gunner", "Bosun", "Navigator", "Surgeon", "Quartermaster"};
 std::string OfficerName(uint16_t seed);
+// The story (docs/campaign.md): each region's story brings one of the Sovereign's officers home, at one of its steps,
+// under their own name (OfficerName of the seed): the bosun Jonah Stroud, the navigator Grace Fairweather, the master
+// gunner Silas Gage, the surgeon Amos Whitlock, the quartermaster Ruth Penhallow
+struct OldHand { uint8_t role, step; uint16_t seed; };
+inline constexpr OldHand kOldHand[BIOMES] = {{OF_BOSUN, 0, 6 + 16 * 12}, {OF_NAVIGATOR, 1, 5 + 16 * 8}, {OF_GUNNER, 0, 4 + 16 * 9},
+                                             {OF_SURGEON, 1, 8 + 16 * 5}, {OF_QUARTERMASTER, 2, 15 + 16 * 3}};
+constexpr uint8_t oldHandLevel = 2;  // (they come back as good as they were: at least this)
 int OfficerCost(int level);
 struct OfficerPerk { uint8_t perk, per; };  // (per level)
 inline constexpr OfficerPerk kOfficerPerks[OFFICERS][2] = {
@@ -630,7 +637,10 @@ enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SA
                           EV_PRICE,        // (a rival, a ghost or a smuggler sunk: value = the gold, flags = which (Npc))
                           EV_BOMBWARN,     // (the Ember Reach: a volcanic bomb coming down here: value = s until it lands)
                           EV_BOMB,         // (...landed)
-                          EV_WANTED };     // (she fired on a merchantman: the navy hunts her a while)
+                          EV_WANTED,       // (she fired on a merchantman: the navy hunts her a while)
+                          EV_OLDHAND,      // (the story: one of the Sovereign's officers back aboard, flags = the role)
+                          EV_SOVEREIGN,    // (the Armada broken: the Sovereign is hers again)
+                          EV_MARA };       // (the Storm Caller beaten: Mara is free)
 // The Tropics' hurricane: a storm wandering the region on the campaign's clock (the same on every client): lightning
 // in it, the sea and sky wild. False when it has blown itself out (between storms)
 inline bool Hurricane(float clock, Vector2& c, float& r) {

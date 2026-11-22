@@ -1290,6 +1290,12 @@ static int ChainTest() {
         printf("   %s: %s, back on the campaign's sea: %s, gold %d -> %d (the boss: %d)%s\n", storyName(b), done ? "the story is told" : "NOT TOLD", back ? "yes" : "NO",
                gold0, g.campGold, b < BIOMES ? ChainReward(b) : 0, done && back ? "" : "   <-- PROBLEM");
         problems += !(done && back);
+        if (b < BIOMES) {  // (the story: one of the Sovereign's officers back aboard, under their own name)
+            const OldHand& oh = kOldHand[b];
+            const bool home = g.campOfficer[oh.role] >= oldHandLevel && g.campOfficerSeed[oh.role] == oh.seed;
+            printf("      %s back aboard: %s%s\n", OfficerName(oh.seed).c_str(), home ? "yes" : "NO", home ? "" : "   <-- PROBLEM");
+            problems += !home;
+        }
         for (int k = 0; k < maxQuests; ++k) g.ClearQuest(k);
     }
     printf("stories: %d problem(s)\n", problems);

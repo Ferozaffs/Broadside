@@ -5778,6 +5778,19 @@ void World::CampaignBack(bool won) {
             if (q.chain >= 1 && q.chain <= BIOMES) campChain[q.chain - 1] = chainSteps + 1;
             if (q.chain == FINAL + 1) {
                 campChain[FINAL] = (uint8_t)std::max<int>(campChain[FINAL], q.step + 1);
+                if (q.step == 1) {  // the Armada broken: the Sovereign, in her iron, is hers again - a ship of the line as she was
+                    campHulls |= (uint8_t)(1u << SC_LINE);
+                    campHullFrac[SC_LINE] = 1.0f;
+                    for (int u = 0; u < kUpgradeCount; ++u) campUpg[u] = std::max<uint8_t>(campUpg[u], (uint8_t)std::max(0, kUpgrades[u].max - 1));
+                    GameEvent se{EventType::CampEvent};
+                    se.b = EV_SOVEREIGN;
+                    events.push_back(se);
+                }
+                if (q.step == 2) {  // the Storm Caller: the bell rung over her, the Admiral's hold broken
+                    GameEvent me{EventType::CampEvent};
+                    me.b = EV_MARA;
+                    events.push_back(me);
+                }
                 if (q.step >= chainSteps) {  // the Leviathan: the last story told
                     campChain[FINAL] = chainSteps + 1;
                     GameEvent fe{EventType::CampEvent};
@@ -5890,6 +5903,18 @@ void World::UpdateQuests(float dt, Ship& cap) {
             if (q.t > 8.0f) {
                 const Quest was = q;
                 ClearQuest(slot);
+                if (was.chain >= 1 && was.chain <= BIOMES && was.state == QS_DONE && kOldHand[was.chain - 1].step == was.step) {  // one of her own, back aboard
+                    const OldHand& oh = kOldHand[was.chain - 1];
+                    campOfficer[oh.role] = std::max<uint8_t>(campOfficer[oh.role], oldHandLevel);
+                    campOfficerSeed[oh.role] = oh.seed;
+                    GameEvent ev{EventType::CampEvent};
+                    ev.b = EV_OLDHAND;
+                    ev.flags = oh.role;
+                    ev.a = (uint16_t)cap.id;
+                    ev.pos = cap.pos;
+                    events.push_back(ev);
+                    campSaveDue = true;
+                }
                 if (was.chain && was.state == QS_DONE && (was.type != Q_LAIR || (was.chain == FINAL + 1 && was.step < chainSteps))) {  // the story goes on: its next step
                     const int b = was.chain - 1;
                     campChain[b] = (uint8_t)std::max<int>(campChain[b], was.step + 1);

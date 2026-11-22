@@ -411,11 +411,11 @@ inline const SeaVoice kSea[ST_COUNT] = {
 // each region's dread pirate, when she finds the captain
 struct DreadVoice { const char* id; const char* line; const char* more[2]; };  // (her hail: line, or one of more)
 inline const DreadVoice kDread[campaign::BIOMES] = {
-    {"dread_corwin", "Ah, a guest. How tiresome. I shall have to ruin a perfectly good coat with you.", {"Do try to sink gracefully. One has standards.", "Your ship. My collection. How lovely."}},
-    {"dread_calypso", "These are my waters, sweetness. Everything in them belongs to me. Soon that includes you.", {"Swim, little one. The sharks are hungry and so am I.", "Every wave out here sings my name. Listen."}},
-    {"dread_rime", "The cold takes everything in the end. Today it takes you.", {"Your sails will freeze. Your guns will freeze. Your heart will freeze last.", "I have sailed the ice for fifty winters. You won't see one."}},
-    {"dread_kate", "Smell that? That's your ship burning. Not yet. Soon.", {"Burn, burn, burn! Ha!", "I lit the Reach on fire once. You're a much smaller match."}},
-    {"dread_widow", "I buried every captain who ever sailed against me. I have room for one more.", {"The fog keeps my secrets. Soon it will keep yours.", "My husband sank here. I make sure he has company."}},
+    {"dread_corwin", "Captain of the Sovereign, as I live. The Admiral said you'd drowned. How very untidy of you.", {"Do try to sink gracefully this time. One has standards.", "Ashgrave sends his regards. I'm to deliver them with the guns."}},
+    {"dread_calypso", "The drowned captain, back from the deep. The Queen will be so pleased, sweetness. She hates to waste a meal.", {"Your Mara sang so prettily on the Admiral's deck. The reef sang back.", "Every wave out here sings my name. Listen."}},
+    {"dread_rime", "Ashgrave's ghost. The cold takes everything in the end, captain. It forgot you once. Not today.", {"Your gunner lasted nine days on the ice. You won't see one.", "I have sailed the ice for fifty winters. The Admiral pays better than the cold."}},
+    {"dread_kate", "Oh, it's YOU. The one that wouldn't burn. Let's try again, shall we?", {"Burn, burn, burn! Ha!", "Your ship looks lovely in iron, captain. I'll tell her you said hello."}},
+    {"dread_widow", "I buried every captain who sailed against me. I buried your crew too. I have room for one more.", {"The Sovereign's dead sail with the Dutchman now. They miss you.", "The fog keeps my secrets. Soon it will keep yours."}},
 };
 
 // Their voices: no words, a hum or an ah or a laugh as each line comes up (sfx::Utter). Pitch (Hz), formant scale,
@@ -461,6 +461,10 @@ inline const Voice kVoices[] = {
     {"captive_m_3", 145, 1.04f, 0.12f, 0.00f, 0}, {"captive_m_4", 95, 0.93f, 0.15f, 0.35f, 2}, {"merchant_6", 215, 1.15f, 0.15f, 0.00f, 1},
     {"merchant_7", 90, 0.92f, 0.12f, 0.10f, 0}, {"navy_5", 120, 0.98f, 0.08f, 0.05f, 0}, {"navy_6", 180, 1.08f, 0.08f, 0.05f, 2},
     {"smuggler_6", 125, 1.00f, 0.15f, 0.15f, 1}, {"smuggler_7", 210, 1.14f, 0.20f, 0.00f, 1},
+    // the story's people
+    {"story_mara", 205, 1.13f, 0.12f, 0.00f, 0}, {"story_mara_storm", 190, 1.10f, 0.45f, 0.05f, 3}, {"story_ashgrave", 105, 0.95f, 0.08f, 0.05f, 0},
+    {"officer_stroud", 85, 0.90f, 0.10f, 0.35f, 1}, {"officer_fairweather", 215, 1.15f, 0.08f, 0.00f, 0}, {"officer_gage", 95, 0.93f, 0.15f, 0.30f, 2},
+    {"officer_whitlock", 130, 1.01f, 0.20f, 0.00f, 0}, {"officer_penhallow", 175, 1.07f, 0.12f, 0.20f, 2},
 };
 
 // How they say a line (sfx::Babble: the line's own syllables, without words): their manner's mood - plain, cheerful,
@@ -719,30 +723,30 @@ inline const Tale kCaptiveTales[campaign::BIOMES][3] = {
 };
 // a story's own passengers (a step of the region's story): what they know of its mystery, in place of what they saw
 inline const char* const kStoryTale[campaign::BIOMES] = {
-    "That fortress is real, Captain. I've seen it. Guns cut into the rock, and a flag nobody's flown in fifty years.",
-    "The Queen, the divers call it. They won't say it above water. It lives under the reef, and it's waking.",
-    "The serpent lies coiled round the whole north, Captain. Every hole in the ice is a place it's breathed.",
-    "Iron that floats and fire that sails. The Reach has made a beast of its own, and someone's paying for it.",
-    "The Dutchman's back. She sails the fog with no crew, and every ship she sinks adds to it.",
+    "That fortress on the Grey Isle flies the Admiral's own flag, Captain. I saw it with my own eyes, the night the guns opened up.",
+    "The Queen, the divers call it. Calypso feeds it ships, and the Admiral pays her for every one. Something of his is down there with it.",
+    "Old Rime was charting the ice for somebody's fleet. He made us sound the channels for him. A road south, he called it.",
+    "There's a yard past the last of the Reach, Captain. Iron plate going up on a hull that came out of the sea. A big one. Yours, maybe.",
+    "The Widow made a bargain for your drowned, Captain. They crew the Dutchman now. I heard them singing your ship's old songs.",
 };
 // the last story's omens, darker the more she's told: none yet; one or two; three or four; all five
 inline const char* const kOmens[4][4] = {
-    {"The old sailors say the sea's restless this year. Beasts in every corner of it, all waking at once. That's not natural, Captain.",
-     "Five monsters in five seas, the taverns say. One a region, as if somebody shared them out.",
+    {"Five beasts woke in five seas the night you went down, Captain. That's no chance. Someone rang for them.",
+     "They say the Admiral's five captains each took something away from that night. Something they guard with their lives.",
      "My gran used to say the deep sleeps until someone calls it. Somebody's calling, I think.",
-     "Have you noticed? The beasts all woke the same season. Like a bell was rung."},
-    {"They say you've killed one of the beasts. Good. But a man on the island told me they were brought, Captain. Not born.",
-     "Somebody's paying the pirates to stir up the deep. Nobody who says the name lives long.",
-     "You beat one; the others will know. Things that big talk to each other. And somebody listens.",
-     "They talk of you in every port now. Somebody else is listening to that talk. Be careful."},
-    {"Black sails, Captain. I saw them from the beach. A long line of them, heading east, not a lantern lit.",
-     "The pirates are gathering. All of them, even the ones who hate each other. Somebody's flying a flag they all bow to.",
-     "They call him the Admiral. He was navy once, they say. Now he's something else.",
+     "The navy says the Sovereign went down to pirates, with all hands. You don't look like all hands, Captain."},
+    {"They say you've taken a piece of something from one of the beasts. Good. The Admiral's people are asking after it in every port.",
+     "One of the Five is down. The other four have doubled their watches. They know who's coming.",
+     "A bell, they say. Broken in five. I don't know what a bell has to do with monsters, Captain, but the sailors won't stop talking about it.",
+     "They talk of you in every port now. The Admiral's spies listen to that talk. Be careful."},
+    {"Black sails, Captain. I saw them from the beach. A long line of them, heading east for the Admiral's yard, not a lantern lit.",
+     "The pirates are gathering. All of them, even the ones who hate each other. They're flying Ashgrave's flag now.",
+     "They say the Admiral has a woman aboard who calls up storms. They say she was your first mate.",
      "The black sails were there every time a beast rose. Watching. Like a shepherd with his flock."},
-    {"With the five beasts gone, the black sails have come out of hiding. They're coming for you, Captain. I'd bet my life on it. I'd rather not.",
-     "There's a woman with them who calls up storms. I saw her. She stood on the deck and the sky came down to listen.",
-     "Something bigger than all five still sleeps at the end of the world. The beasts were only its dreams.",
-     "The Lamplighter on Lantern Rock knows. He's always known. Ask him, Captain, before the light goes out."},
+    {"With the Five broken, the black sails have come out of hiding. They're coming for the bell, Captain. I'd bet my life on it. I'd rather not.",
+     "There's a woman with them who calls up storms. I saw her. She stood on the deck and the sky came down to listen. She looked so sad.",
+     "Something bigger than all five still sleeps at the end of the world. The beasts were only its dreams. The Admiral wants to wake it.",
+     "The Lamplighter on Lantern Rock knows what the bell is for. He's always known. Ask him, Captain, before the light goes out."},
 };
 // line `n` (0..2) of a passenger's talk: a castaway (captive false) or a captive, from region `biome`, the quest's seed;
 // storyStep: the quest is a step of the region's story; told: how many of the five stories she's finished
@@ -757,7 +761,7 @@ inline const char* PassengerLine(bool captive, int biome, uint16_t seed, int n, 
 
 // is a captive (campaign::CaptiveName, a story's) a woman? (for the portrait)
 inline bool CaptiveIsWoman(const std::string& c) {
-    for (const char* w : {"daughter", "wife", "sister", "niece", "heiress", "lady", "widow", "girl", "queen", "mother"})
+    for (const char* w : {"daughter", "wife", "sister", "niece", "heiress", "lady", "widow", "girl", "queen", "mother", "Ruth", "Grace"})
         if (c.find(w) != std::string::npos) return true;
     return false;
 }
