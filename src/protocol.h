@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 33;  // 33: the campaign's handling switch, a new paint mid-game (MSG_LIVERY); 32: carved figureheads (the livery's figure goes to 7); 31: the regions' own quests and hazards, the sea's new people; 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 33;  // 33: the campaign's handling switch, a new paint mid-game (MSG_LIVERY), the anchor; 32: carved figureheads (the livery's figure goes to 7); 31: the regions' own quests and hazards, the sea's new people; 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -123,6 +123,7 @@ inline void WriteInput(ByteWriter& w, const PlayerInput& in) {
     w.Put(in.fireSeq);
     w.Put(in.dashSeq);
     w.Put(in.hookSeq);
+    w.Put(in.anchorSeq);
     w.Put(in.hookTarget);
     w.PutVec3(in.hookPoint);
 }
@@ -136,6 +137,7 @@ inline bool ReadInput(ByteReader& r, PlayerInput& in) {
     in.fireSeq = r.Get<uint8_t>();
     in.dashSeq = r.Get<uint8_t>();
     in.hookSeq = r.Get<uint8_t>();
+    in.anchorSeq = r.Get<uint8_t>();
     in.hookTarget = r.Get<uint16_t>();
     in.hookPoint = r.GetVec3();
     return r.ok;
@@ -178,6 +180,10 @@ struct NetShip {
     uint8_t cls = SC_FRIGATE;
     int16_t hooked = -1;
     Vector3 hookAnchor{};  // when hooked == HOOK_ROCK
+    uint8_t anchored = 0;  // 1 lying to her anchor, 2 club-hauling
+    Vector3 anchorPos{};
+    float anchorT = 0, anchorCd = 0;
+    int8_t anchorSide = 0;
     float dashCd = 0, hookCd = 0, hookTimer = 0;
     float deadTimer = 0;
     float buoyMul = 1;
@@ -350,6 +356,9 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         for (int k = 0; k < 3; ++k) w.PutU8f(s.reload[k] / tune::reloadMax);
         w.Put(s.hooked);
         if (s.hooked == HOOK_ROCK) w.PutVec3(s.hookAnchor);
+        w.Put((uint8_t)(s.anchored | ((s.anchorSide + 1) << 4)));
+        if (s.anchored) { w.PutVec3(s.anchorPos); w.PutU8f(s.anchorT / tune::anchorHaulTime); }
+        w.PutU8f(s.anchorCd / tune::anchorCooldown);
         w.PutU8f(s.dashCd / tune::dashCooldown);
         w.PutU8f(s.hookCd / tune::hookCooldown);
         w.PutU8f(s.hookTimer / tune::hookTime);
@@ -597,6 +606,11 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         for (int k = 0; k < 3; ++k) sh.reload[k] = r.GetU8f() * tune::reloadMax;
         sh.hooked = r.Get<int16_t>();
         if (sh.hooked == HOOK_ROCK) sh.hookAnchor = r.GetVec3();
+        sh.anchored = r.Get<uint8_t>();
+        sh.anchorSide = (int8_t)((sh.anchored >> 4) - 1);
+        sh.anchored &= 15;
+        if (sh.anchored) { sh.anchorPos = r.GetVec3(); sh.anchorT = r.GetU8f() * tune::anchorHaulTime; }
+        sh.anchorCd = r.GetU8f() * tune::anchorCooldown;
         sh.dashCd = r.GetU8f() * tune::dashCooldown;
         sh.hookCd = r.GetU8f() * tune::hookCooldown;
         sh.hookTimer = r.GetU8f() * tune::hookTime;

@@ -22,6 +22,7 @@
 #include "sim.h"
 #include "people.h"
 #include <map>
+#include <functional>
 #include <set>
 
 #include <cstdio>
@@ -262,7 +263,7 @@ public:
     bool predValid = false;
     double predTime = 0.0;      // sim time of predShip ("present")
     uint32_t inputSeq = 0;
-    uint8_t ackedFireSeq = 0, ackedDashSeq = 0, ackedHookSeq = 0;
+    uint8_t ackedFireSeq = 0, ackedDashSeq = 0, ackedHookSeq = 0, ackedAnchorSeq = 0;
     struct Hist { uint32_t seq; PlayerInput in; };
     std::deque<Hist> history;
     bool needReconcile = false;
@@ -555,7 +556,7 @@ public:
     void DrawCrewHUD(float W, float H);
     int curArena = ARENA_ISLES, oceanArena = -1, menuArena = -1;
     bool InEye(Vector3 p) const { return curArena == ARENA_MAELSTROM && p.x * p.x + p.z * p.z < maelstrom::eye * maelstrom::eye * 2.25f; }
-    uint8_t dashSeq = 0, hookSeq = 0;
+    uint8_t dashSeq = 0, hookSeq = 0, anchorSeq = 0;
     uint16_t hookAim = NO_SHIP;
     Vector3 hookPoint{};
     int HookCandidate(Vector3 dir) const;
@@ -1538,6 +1539,7 @@ void Game::UpdateInput(float dt) {
         }
         if (IsKeyPressed(KEY_E) && campDocked >= 0) {
             portOpen = !portOpen;
+            if (myId >= 0 && view[myId].present && (portOpen ? !view[myId].s.anchored : view[myId].s.anchored == 1)) anchorSeq++;  // (ashore: she lies to her anchor; away: weighed)
             talkKey = talkVoiced = -1;  // (ashore again: they greet you again)
             chartOpen = false;
             if (portOpen) EnableCursor();
@@ -1588,6 +1590,10 @@ void Game::UpdateInput(float dt) {
         in.rudder = (IsKeyDown(KEY_A) ? -1.0f : 0.0f) + (IsKeyDown(KEY_D) ? 1.0f : 0.0f);
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) fireSeq++;
         if (curSkills && (IsKeyPressed(KEY_LEFT_SHIFT) || IsKeyPressed(KEY_RIGHT_SHIFT))) dashSeq++;
+        if (IsKeyPressed(KEY_Q) && myId >= 0 && view[myId].present) {  // the anchor: let go (a club-haul at speed), or weigh it
+            if (view[myId].s.anchored || view[myId].s.anchorCd <= 0.0f) anchorSeq++;
+            else Feed(TextFormat("No anchor ready: %.0f s", ceilf(view[myId].s.anchorCd)), ui::kDim);
+        }
         for (int o = 0; o < ORDER_COUNT; ++o)  // orders to the crew aboard
             if (IsKeyPressed(o == 0 ? KEY_Z : o == 1 ? KEY_X : KEY_C)) {
                 ByteWriter w;
@@ -1610,6 +1616,10 @@ void Game::UpdateInput(float dt) {
     aimZoom += ((active && (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) || getenv("BS_AIMZOOM")) ? 1.0f : 0.0f) - aimZoom) * fminf(1.0f, dt * 10.0f);  // (BS_AIMZOOM: screenshots)
 
     // scripted inputs for automated test runs
+    if (const char* at = getenv("BS_ANCHORAT")) {  // (testing: let go the anchor at this many seconds in)
+        static bool done = false;
+        if (!done && GetTime() - sessionStart > atof(at)) { done = true; anchorSeq++; }
+    }
     if (opt.demo) {
         float t = (float)(GetTime() - sessionStart);
         sailTarget = 1.0f;
@@ -1639,6 +1649,7 @@ void Game::UpdateInput(float dt) {
     in.fireSeq = fireSeq;
     in.dashSeq = dashSeq;
     in.hookSeq = hookSeq;
+    in.anchorSeq = anchorSeq;
     in.hookTarget = hookAim;
     in.hookPoint = hookPoint;
     in.aim = SolveAim(Vector3Normalize(Vector3Subtract(rv.target, rv.pos)));
@@ -2242,6 +2253,41 @@ void Game::DrawHookLines() {
         col(k1); rlVertex3f(p1.x + side.x, p1.y + side.y, p1.z + side.z);
     };
     const float pitch = 0.9f;  // m along the chain per link
+    // the links along at(0..1), `shown` m of them (real links up close, a beaded band far off)
+    auto drawLinks = [&](const std::function<Vector3(float)>& at, float shown) {
+        const int links = std::max(1, (int)(shown / pitch));
+            for (int i = 0; i < links; ++i) {
+                float u0 = (float)i / links, u1 = (float)(i + 1) / links;
+                Vector3 p0 = at(u0), p1 = at(u1), c = Vector3Lerp(p0, p1, 0.5f);
+                float d = Vector3Distance(rv.pos, c);
+                if (d > 70.0f) {  // far: a beaded band, wide enough to see
+                    float w = 0.16f + 0.0036f * d;
+                    strip(p0, p1, w, i % 2 ? 0.7f : 1.1f, i % 2 ? 0.7f : 1.1f);
+                    continue;
+                }
+                // near: the link itself, an oval ring of round bar, turned a quarter round from its neighbours
+                Vector3 tv = Vector3Normalize(Vector3Subtract(p1, p0));
+                Vector3 ref = fabsf(tv.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+                Vector3 n0 = Vector3Normalize(Vector3CrossProduct(tv, ref));  // flat (lying sideways)
+                Vector3 n1 = Vector3CrossProduct(n0, tv);                       // upright
+                Vector3 bw = i % 2 ? n0 : n1;
+                const float hl = pitch * 0.72f, hw = 0.36f, bar = 0.13f;  // half length (they overlap), half width, bar
+                const int SEG = 14;
+                Vector3 prevP{};
+                float prevK = 1.0f;
+                for (int k = 0; k <= SEG; ++k) {
+                    float th = (float)k / SEG * 2.0f * PI;
+                    Vector3 rad = Vector3Add(Vector3Scale(tv, cosf(th) * hl), Vector3Scale(bw, sinf(th) * hw));
+                    Vector3 q = Vector3Add(c, rad);
+                    // lit along the top of the ring, darker underneath and on the far side of it
+                    float up = Vector3DotProduct(Vector3Normalize(rad), {0, 1, 0});
+                    float kk = 0.65f + 0.6f * fmaxf(0.0f, up) + 0.1f * (i % 2 ? 1.0f : 0.0f);
+                    if (k > 0) strip(prevP, q, bar, prevK, kk);
+                    prevP = q;
+                    prevK = kk;
+                }
+            }
+    };
     for (int id = 0; id < NumShips(); ++id) {
         if (!view[id].present) continue;
         const NetShip& s = view[id].s;
@@ -2263,40 +2309,18 @@ void Game::DrawHookLines() {
             p.y += sinf(u * PI) * sinf(now * 38.0f + id) * 0.06f * taut;  // thrum while hauled taut
             return p;
         };
-        const float shown = len * out;
-        const int links = std::max(1, (int)(shown / pitch));
-        for (int i = 0; i < links; ++i) {
-            float u0 = (float)i / links, u1 = (float)(i + 1) / links;
-            Vector3 p0 = at(u0), p1 = at(u1), c = Vector3Lerp(p0, p1, 0.5f);
-            float d = Vector3Distance(rv.pos, c);
-            if (d > 70.0f) {  // far: a beaded band, wide enough to see
-                float w = 0.16f + 0.0036f * d;
-                strip(p0, p1, w, i % 2 ? 0.7f : 1.1f, i % 2 ? 0.7f : 1.1f);
-                continue;
-            }
-            // near: the link itself, an oval ring of round bar, turned a quarter round from its neighbours
-            Vector3 tv = Vector3Normalize(Vector3Subtract(p1, p0));
-            Vector3 ref = fabsf(tv.y) < 0.9f ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
-            Vector3 n0 = Vector3Normalize(Vector3CrossProduct(tv, ref));  // flat (lying sideways)
-            Vector3 n1 = Vector3CrossProduct(n0, tv);                       // upright
-            Vector3 bw = i % 2 ? n0 : n1;
-            const float hl = pitch * 0.72f, hw = 0.36f, bar = 0.13f;  // half length (they overlap), half width, bar
-            const int SEG = 14;
-            Vector3 prevP{};
-            float prevK = 1.0f;
-            for (int k = 0; k <= SEG; ++k) {
-                float th = (float)k / SEG * 2.0f * PI;
-                Vector3 rad = Vector3Add(Vector3Scale(tv, cosf(th) * hl), Vector3Scale(bw, sinf(th) * hw));
-                Vector3 q = Vector3Add(c, rad);
-                // lit along the top of the ring, darker underneath and on the far side of it
-                float up = Vector3DotProduct(Vector3Normalize(rad), {0, 1, 0});
-                float kk = 0.65f + 0.6f * fmaxf(0.0f, up) + 0.1f * (i % 2 ? 1.0f : 0.0f);
-                if (k > 0) strip(prevP, q, bar, prevK, kk);
-                prevP = q;
-                prevK = kk;
-            }
-        }
+        drawLinks(at, len * out);
         if (Vector3Distance(rv.pos, end) < 400.0f) hooks.push_back({end, Vector3Normalize(Vector3Subtract(end, a))});
+    }
+    for (int id = 0; id < NumShips(); ++id) {  // anchors: the cable from the hawse, down into the sea
+        if (!view[id].present || !view[id].s.anchored) continue;
+        const NetShip& s = view[id].s;
+        const float sc = ClassOf(s.cls).scale;
+        const Vector3 a = HullToWorld(s.pos, s.rot, {-s.anchorSide * hull::maxHalfBeam * 0.75f, 1.6f, hull::halfLength * 0.85f}, sc);  // (the hawse it went from)
+        if (Vector3Distance(rv.pos, a) > 600.0f) continue;
+        const Vector3 b = {s.anchorPos.x, Ocean().Height(s.anchorPos.x, s.anchorPos.z) - 16.0f, s.anchorPos.z};
+        const float len = Vector3Distance(a, b);
+        drawLinks([&](float u) { Vector3 p = Vector3Lerp(a, b, u); p.y -= sinf(u * PI) * fminf(0.03f * len, 1.2f); return p; }, len);
     }
     rlEnd();
     rlDrawRenderBatchActive();
@@ -2620,6 +2644,7 @@ void Game::Reconcile() {
         ackedFireSeq = history.front().in.fireSeq;
         ackedDashSeq = history.front().in.dashSeq;
         ackedHookSeq = history.front().in.hookSeq;
+        ackedAnchorSeq = history.front().in.anchorSeq;
         history.pop_front();
     }
     // start from the authoritative state...
@@ -2650,6 +2675,12 @@ void Game::Reconcile() {
     s.hookTimer = ns->hookTimer;
     s.lastDashSeq = ackedDashSeq;
     s.lastHookSeq = ackedHookSeq;
+    s.lastAnchorSeq = ackedAnchorSeq;
+    s.anchored = ns->anchored;
+    s.anchorPos = ns->anchorPos;
+    s.anchorT = ns->anchorT;
+    s.anchorCd = ns->anchorCd;
+    s.anchorSide = ns->anchorSide;
     for (int i = 0; i < PU_COUNT; ++i) s.power[i] = ns->power[i];
     s.pirate = (ns->flags & SF_PIRATE) != 0;
     s.slowTimer = ns->slowTimer;
@@ -3655,6 +3686,16 @@ void Game::PlayEvent(const GameEvent& e) {
                 if (e.a == myId) Feed("Line fast to the rocks: haul away!", ui::kText);
             } else if (e.a == myId && (e.flags & 1)) {
                 Feed("The line is off", ui::kDim);
+            }
+            break;
+        case EventType::Anchor:
+            if (e.a >= NumShips()) break;
+            if (e.flags == 0 || e.flags == 2) sfx::Play(sfx::Splash, e.pos, e.flags == 2 ? 0.9f : 0.6f, 0.7f);
+            sfx::Play(sfx::Hit, e.pos, e.flags == 1 ? 0.2f : 0.3f, e.flags == 2 ? 0.9f : 1.3f);  // (the chain running out, or in)
+            if (e.a == myId) {
+                static const char* const say[4] = {"Anchor's down: she lies to it  (Q weighs it)", "Anchor's aweigh", "Club-haul! The chain snubs her round",
+                                                   "Chain slipped"};
+                Feed(say[e.flags & 3], e.flags == 2 ? ui::kGold : ui::kDim);
             }
             break;
         case EventType::OrderGiven:
@@ -5815,6 +5856,20 @@ void Game::DrawHUD() {
             }
         }
     }
+    // ---- the anchor (any mode) ----
+    if (me && alive && !IsCrew()) {
+        const Rectangle r = {24.0f + 346.0f + (curSkills ? 2 : 0) * 112.0f, H - 24 - 58, 104, 58};
+        Panel(r, kPanel, 10);
+        const bool ready = me->anchored || me->anchorCd <= 0.0f;
+        const float spd = Vector2Length({me->vel.x, me->vel.z});
+        Keycap("Q", r.x + 10, r.y + 8, 13);
+        const char* name = me->anchored == 2 ? "HAULING" : me->anchored ? "WEIGH" : spd > tune::anchorHaulSpeed ? "CLUB-HAUL" : "ANCHOR";
+        Text(name, r.x + 10, r.y + 30, me->anchored == 0 && spd > tune::anchorHaulSpeed ? 14 : 16, ready ? kGold : kDim, true);
+        if (!ready) {
+            Bar({r.x + 10, r.y + 50, r.width - 20, 3}, 1.0f - me->anchorCd / tune::anchorCooldown, kText, {0, 0, 0, 120});
+            Text(TextFormat("%.0f", ceilf(me->anchorCd)), r.x + r.width - 12, r.y + 8, 15, kDim, true, Right);
+        }
+    }
     // ---- crew at the jobs (captain) ----
     if (me && !IsCrew() && (me->flags & (SF_HELM | SF_TRIM))) {
         std::string t = std::string((me->flags & SF_HELM) ? "HELMSMAN  +15% TURN" : "") + ((me->flags & (SF_HELM)) && (me->flags & SF_TRIM) ? "   \xC2\xB7   " : "") +
@@ -6041,7 +6096,7 @@ void Game::DrawHUD() {
     if (showHelp) {
         struct K { const char* k1; const char* k2; const char* what; };
         const K keys[] = {{"W", "S", "Ahead / astern"}, {"A", "D", "Rudder"},  {"LMB", nullptr, "Fire broadside"},
-                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"SHIFT", nullptr, "Dash (skills)"}, {"E", nullptr, "Hook (skills)"}, {"TAB", nullptr, "Scores"},
+                          {"RMB", nullptr, "Zoom"},      {"V", nullptr, "Deck view"}, {"M", nullptr, "Sound on / off"}, {"1-3", nullptr, "Next ship"}, {"SHIFT", nullptr, "Dash (skills)"}, {"E", nullptr, "Hook (skills)"}, {"Q", nullptr, "Anchor / club-haul"}, {"TAB", nullptr, "Scores"},
                           {"Z", "X", "Crew: port / stbd guns"}, {"C", nullptr, "Crew: patch holes"}, {"CTRL", "+/-", "HUD size"}, {"F1", nullptr, "Hide"}};
         const K crewKeys[] = {{"W", "S", "Walk"}, {"A", "D", "Sidestep"}, {"SHIFT", nullptr, "Run"}, {"E", nullptr, "Gun / helm / sails / lookout"},
                               {"LMB", nullptr, "Fire your gun"}, {"RMB", nullptr, "Zoom"}, {"F", nullptr, "Patch a hole (hold)"},
@@ -9638,6 +9693,7 @@ void Game::DrawPort(float W, float H) {
     }
     if (Button({r.x + 30, r.y + ph - 64, pw - 60, 44}, "Set sail  (E)", true)) {
         portOpen = false;
+        if (myId >= 0 && view[myId].present && view[myId].s.anchored == 1) anchorSeq++;  // (weigh anchor)
         DisableCursor();
     }
 }

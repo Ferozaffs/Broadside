@@ -2223,6 +2223,30 @@ void World::ShipControls(Ship& s, float dt, bool authoritative) {
     // skills
     s.dashCd = fmaxf(0.0f, s.dashCd - dt);
     s.hookCd = fmaxf(0.0f, s.hookCd - dt);
+    s.anchorCd = fmaxf(0.0f, s.anchorCd - dt);
+    if (in.anchorSeq != s.lastAnchorSeq) {  // the anchor: let it go, or weigh it
+        s.lastAnchorSeq = in.anchorSeq;
+        int ev = -1;
+        if (s.anchored) { s.anchored = 0; ev = 1; }
+        else if (s.alive && s.anchorCd <= 0.0f) {
+            const bool haul = Vector2Length({s.vel.x, s.vel.z}) > (Real() ? tune::anchorHaulSpeedReal : tune::anchorHaulSpeed);
+            // a club-haul goes from the bow on the side she's steering to (starboard if she isn't): the snub swings her that way
+            const float helm = fabsf(in.rudder) > 0.1f ? in.rudder : s.rudder;
+            s.anchorSide = (int8_t)(haul ? (helm < -0.1f ? -1 : 1) : 0);
+            s.anchorPos = HullToWorld(s.pos, s.rot, {-s.anchorSide * hull::maxHalfBeam * 0.75f, 0.0f, hull::halfLength * 0.85f}, ClassOf(s.cls).scale);
+            s.anchored = haul ? 2 : 1;
+            s.anchorT = 0.0f;
+            s.anchorCd = haul ? tune::anchorCooldown : 1.0f;
+            ev = haul ? 2 : 0;
+        }
+        if (authoritative && ev >= 0) {
+            GameEvent e{EventType::Anchor};
+            e.a = s.id;
+            e.flags = (uint8_t)ev;
+            e.pos = HullToWorld(s.pos, s.rot, {0.0f, 1.5f, hull::halfLength * 0.9f}, ClassOf(s.cls).scale);
+            events.push_back(e);
+        }
+    }
     if (in.dashSeq != s.lastDashSeq) {
         s.lastDashSeq = in.dashSeq;
         if (skills && s.dashCd <= 0.0f && matchState == 0) {
@@ -2603,6 +2627,43 @@ void World::StepShip(Ship& s, float dt) {
     if (s.alive && s.dashTimer > 0.0f) {
         s.dashTimer = fmaxf(0.0f, s.dashTimer - dt);
         F = Vector3Add(F, Vector3Scale(Vector3Normalize({fwd.x, fwd.y * 0.3f, fwd.z}), tune::dashAccel * P.mass));
+    }
+    // the anchor: its chain from the hawse pulls the bow (never pushes). Lying to it, her drift dies away; a club-haul
+    // snubs her bow hard and swings her round it, then the chain's slipped
+    if (s.anchored && !s.alive) s.anchored = 0;
+    if (s.anchored) {
+        s.anchorT += dt;
+        const bool haul = s.anchored == 2;
+        if (haul && s.anchorT > tune::anchorHaulTime) {
+            s.anchored = 0;
+            s.angVel.y *= 0.35f;  // (the chain's last check as it's slipped: round she comes, and away, not spinning on)
+            if (!predicting) {
+                GameEvent e{EventType::Anchor};
+                e.a = s.id;
+                e.flags = 3;
+                e.pos = s.pos;
+                events.push_back(e);
+            }
+        } else {
+            const Vector3 bow = HullToWorld(s.pos, s.rot, {-s.anchorSide * hull::maxHalfBeam * 0.75f, 0.0f, hull::halfLength * 0.85f}, C.scale);  // (+x is port)
+            const Vector3 d = {s.anchorPos.x - bow.x, 0.0f, s.anchorPos.z - bow.z};
+            const float len = sqrtf(d.x * d.x + d.z * d.z), rest = haul ? 2.0f : tune::anchorHoldLen;
+            if (len > rest && len > 1e-3f) {
+                const Vector3 n = Vector3Scale(d, 1.0f / len);
+                const Vector3 r = {bow.x - s.pos.x, 0.0f, bow.z - s.pos.z};
+                const Vector3 vb = Vector3Add(s.vel, Vector3CrossProduct(s.angVel, r));
+                const float vout = -Vector3DotProduct(vb, n);
+                const float a = Clamp((len - rest) * tune::anchorStiff + vout * tune::anchorDamp * (haul ? 3.0f : 1.0f), 0.0f,
+                                      haul ? tune::anchorHaulAccel : tune::anchorHoldAccel);
+                F = Vector3Add(F, Vector3Scale(n, a * P.mass * (haul ? tune::anchorHaulKeep : 1.0f)));
+                const float gyr = 0.6f * hull::halfLength * C.scale;  // (her radius of gyration about the mast)
+                alpha = Vector3Add(alpha, {0.0f, (r.z * n.x - r.x * n.z) * a / (gyr * gyr) * (haul ? C.scale * C.scale : 1.0f), 0.0f});  // (r x pull).y: the swing (a club-haul's about as quick whatever her size)
+            }
+            if (!haul) {
+                F = Vector3Add(F, {-s.vel.x * tune::anchorHoldDrag * P.mass, 0.0f, -s.vel.z * tune::anchorHoldDrag * P.mass});
+                alpha = Vector3Add(alpha, {0.0f, -s.angVel.y * 0.8f, 0.0f});
+            }
+        }
     }
     // prediction: a line to the rocks (same pull as UpdateHooks), or our end of one to another ship
     if (predicting && s.hooked == HOOK_ROCK && s.alive) {

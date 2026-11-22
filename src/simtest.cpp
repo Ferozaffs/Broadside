@@ -2718,6 +2718,56 @@ int RunSimTest() {
     }
     if (getenv("BS_ROLLTEST")) return RollTest();
     if (getenv("BS_ONLYDUELS")) goto duels;
+    if (getenv("BS_ANCHORTEST")) {  // the anchor: a club-haul at full speed (each class, arcade and real), and lying to it
+        for (int real = 0; real < 2; ++real)
+            for (int cls : {SC_CUTTER, SC_FRIGATE, SC_LINE}) {
+                World g;
+                g.rounds = false;
+                g.realistic = real != 0;
+                g.Init(5);
+                const int a = g.AddShip("a", false, cls);
+                g.ships[a].pos = {0, g.ocean.Height(0, 0), 0};
+                g.ships[a].input.sail = 1.0f;
+                for (int i = 0; i < 60 * (real ? 40 : 10); ++i) { g.Step(); g.events.clear(); }
+                Ship& s = g.ships[a];
+                auto hdg = [&] { Vector3 f = Vector3RotateByQuaternion({0, 0, 1}, s.rot); return atan2f(f.x, f.z) * RAD2DEG; };
+                const float h0 = hdg(), v0 = Vector2Length({s.vel.x, s.vel.z});
+                s.input.anchorSeq++;
+                printf("%s %s club-haul from %.1f m/s:", real ? "REAL  " : "ARCADE", ClassOf(cls).name, v0);
+                float turned = 0, prev = h0;
+                for (int i = 1; i <= 60 * 4; ++i) {
+                    g.Step();
+                    g.events.clear();
+                    float h = hdg(), dh = h - prev;
+                    if (dh > 180) dh -= 360;
+                    if (dh < -180) dh += 360;
+                    turned += dh;
+                    prev = h;
+                    if (i % 30 == 0) printf("  %.1fs %+.0f deg %.1f m/s%s", i / 60.0f, turned, Vector2Length({s.vel.x, s.vel.z}), s.anchored ? "" : " (slipped)");
+                }
+                printf("\n");
+            }
+        for (int anchor = 0; anchor < 2; ++anchor) {  // lying still for 90 s (sails in), with and without it
+            World g;
+            g.rounds = false;
+            g.Init(5, 1);  // (a storm: the most drift)
+            const int a = g.AddShip("a", false, SC_FRIGATE);
+            g.ships[a].pos = {0, g.ocean.Height(0, 0), 0};
+            g.ships[a].vel = {0, 0, 0};
+            g.ships[a].input.sail = 0.0f;
+            const Vector3 p0 = g.ships[a].pos;
+            if (anchor) g.ships[a].input.anchorSeq++;
+            float most = 0;
+            for (int i = 0; i < 60 * 90; ++i) {
+                g.Step();
+                g.events.clear();
+                most = fmaxf(most, Vector2Distance({p0.x, p0.z}, {g.ships[a].pos.x, g.ships[a].pos.z}));
+            }
+            printf("lying %s anchor, 90 s in a storm: %.0f m off at the end, %.0f m at most\n", anchor ? "to her" : "without an",
+                   Vector2Distance({p0.x, p0.z}, {g.ships[a].pos.x, g.ships[a].pos.z}), most);
+        }
+        return 0;
+    }
     if (getenv("BS_HOOKTEST")) {  // a frigate hooks a ship of the line (and a cutter) 120 m off; both sit still
         for (int tc : {SC_LINE, SC_CUTTER}) {
             World g;

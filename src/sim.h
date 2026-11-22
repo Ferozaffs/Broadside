@@ -139,6 +139,19 @@ constexpr float hookMinLen = 24.0f;        // m (hull lengths are added on top)
 constexpr float hookStiff = 4.5f;          // m/s^2 per metre of stretch
 constexpr float hookMaxAccel = 45.0f;
 constexpr float hookCooldown = 12.0f;
+// the anchor (Q, any mode): let go slowly it holds her (in harbour she lies to it instead of drifting off); let go at
+// speed it's a club-haul - the chain snubs her bow, she swings round it with most of her way, and it's slipped
+constexpr float anchorHaulSpeed = 6.0f;   // m/s: faster than this when let go, a club-haul
+constexpr float anchorHaulSpeedReal = 2.5f;  // ...with realistic handling
+constexpr float anchorHoldLen = 7.0f;     // m of chain from the hawse when she lies to it (her bow swings round it)
+constexpr float anchorStiff = 3.0f;       // m/s^2 per metre past it
+constexpr float anchorDamp = 1.2f;        // ...and per m/s pulling away
+constexpr float anchorHoldAccel = 9.0f;   // m/s^2 the most it holds against (more sail than that and she drags it)
+constexpr float anchorHoldDrag = 0.5f;    // 1/s: lying to it, her drift dies away
+constexpr float anchorHaulAccel = 30.0f;  // m/s^2 at the bow when it snubs her
+constexpr float anchorHaulKeep = 0.35f;   // the share of that snub that stops her (the rest swings her round)
+constexpr float anchorHaulTime = 1.7f;    // s before the chain's slipped
+constexpr float anchorCooldown = 10.0f;   // s after a club-haul before she has another anchor ready
 // crew mode: players aboard someone else's ship, working guns and patching holes
 constexpr float crewReach = 3.2f;          // m: how close a crewman must stand to a gun or a hole
 constexpr float leakDrain = 0.35f;         // hp per second per open hole (only on ships with human crew)
@@ -844,6 +857,7 @@ struct PlayerInput {
     uint8_t fireSeq = 0;
     uint8_t dashSeq = 0;      // skills: each new value is one press
     uint8_t hookSeq = 0;
+    uint8_t anchorSeq = 0;    // each new value: let go the anchor, or weigh it
     uint16_t hookTarget = NO_SHIP; // the ship the hook is fired at (client picks it from the reticle), or HOOK_ROCK...
     Vector3 hookPoint{};      // ...and then the spot on the rock
     uint32_t seq = 0;  // client input sequence number (acked back in snapshots for prediction)
@@ -1002,7 +1016,11 @@ struct Ship {
     int statSpin = 0, statGround = 0;
     uint8_t lastFireSeq = 0;
     // skills
-    uint8_t lastDashSeq = 0, lastHookSeq = 0;
+    uint8_t lastDashSeq = 0, lastHookSeq = 0, lastAnchorSeq = 0;
+    uint8_t anchored = 0;            // 1: lying to her anchor, 2: club-hauling on it
+    Vector3 anchorPos{};             // where it went down (its chain runs from the hawse)
+    float anchorT = 0, anchorCd = 0;
+    int8_t anchorSide = 0;           // the bow it went from: +1 starboard, -1 port (a club-haul: the way she's steering), 0 the stem
     float dashTimer = 0, dashCd = 0, hookCd = 0, hookTimer = 0, hookRest = 0;
     int16_t hooked = -1;             // the ship our line is fast to (HOOK_ROCK: the rocks, at hookAnchor)
     Vector3 hookAnchor{};
@@ -1081,6 +1099,7 @@ enum class EventType : uint8_t {
     Quest = 39,      // the campaign: a = the quest's slot, flags 1 taken / 2 done / 3 failed / 4 a step (aboard, freed, struck), value = gold
     CampEvent = 40,  // the campaign's sea: b = campaign::SeaEvent, a = the ship (or slot), pos, value = gold
     PerkFx = 38,     // an upgrade at work: a = whose, b = on whom (or the combo), flags = PerkFxKind, pos
+    Anchor = 41,     // a = ship, flags 0 let go / 1 weighed / 2 a club-haul / 3 its chain slipped, pos = the hawse
     Repaired = 35,   // a = ship, the harbour's done with her (b = 1: she sailed before they'd finished); the cooldown starts
 };
 constexpr uint8_t EF_DOWNED = 32;   // (Kill in boss mode: disabled, not sunk - a friend can bring her round; EF_ROCK's bit, which only Ram uses)
