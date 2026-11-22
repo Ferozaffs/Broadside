@@ -3,7 +3,7 @@ so the game can sway, light and paint the sails (material names: sail_*, rope_*)
 pipeline: the hull comes from TRELLIS.2 (tools/prep_part.py --align --length L), the rig from this.
 
   blender -b --factory-startup --python tools/rig_ship.py -- hull.glb out.glb [--type brig|cutter|ship]
-          [--masts 0.30 0.58] [--rig-scale 1.0] [--preview out_dir] [--lite]
+          [--masts 0.30 0.58] [--rig-scale 1.0] [--preview out_dir] [--lite] [--no-course]
 
 The hull: Blender space with the bow toward -Y (glTF +z, the game's forward), the keel at z = 0, any length. The
 deck height and the beam come from the mesh itself (the top of the centreline, the widest point of each station),
@@ -26,6 +26,7 @@ _rag = _random.Random(13)
 _hc = [(_rag.random(), _rag.random(), 0.06 + 0.08 * _rag.random()) for _ in range(5)]  # (a few rents in each sail)
 def _holes(u, v):
     return max((1.0 - min(1.0, ((u - x) ** 2 + (v - y) ** 2) ** 0.5 / r) for x, y, r in _hc), default=0.0)
+no_course = "--no-course" in argv  # (no course, the lowest square sail: two a mast, the yard left bare)
 lite = "--lite" in argv   # (the far level of detail, ship_lo: no ratlines, lifts or braces; coarser sails)
 rs = float(opt("--rig-scale", 1.0))
 preview = opt("--preview", None)
@@ -295,7 +296,8 @@ for k, f in enumerate(masts_f):
         tube(spars, (-w / 2, y - 0.4, yz), (w / 2, y - 0.4, yz), r * 0.45, r * 0.45, 8)
     foot = deck + 0.18 * h
     belly = 0.045 * L
-    square_sail(f"sail_course_{k}", Vector((0, y - 0.5, yards[0][0] - 0.2)), yards[0][1] * 0.94, Vector((0, y - 0.5, foot)), yards[0][1] * 1.0, belly)
+    if not no_course:
+        square_sail(f"sail_course_{k}", Vector((0, y - 0.5, yards[0][0] - 0.2)), yards[0][1] * 0.94, Vector((0, y - 0.5, foot)), yards[0][1] * 1.0, belly)
     square_sail(f"sail_top_{k}", Vector((0, y - 0.5, yards[1][0] - 0.2)), yards[1][1] * 0.94, Vector((0, y - 0.5, yards[0][0] + 0.3)), yards[0][1] * 0.95, belly * 0.85)
     square_sail(f"sail_tg_{k}", Vector((0, y - 0.5, yards[2][0] - 0.2)), yards[2][1] * 0.94, Vector((0, y - 0.5, yards[1][0] + 0.3)), yards[1][1] * 0.95, belly * 0.7)
 

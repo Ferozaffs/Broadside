@@ -4331,7 +4331,7 @@ void Game::DrawTrajectory() {
 // Lantern spots in hull space: two stern lanterns, the bow, and the main masthead. They were placed for the frigate; a
 // model of another length takes them along to its own stern and stem (where the Shipwright's parts go: the frigate's
 // are at the constants below, so she keeps them where they were).
-static void LanternSpots(const ShipModel& model, Vector3 out[4]) {
+static void LanternSpots(const ShipModel& model, Vector3 out[4], bool kitbash = false) {
     out[0] = {1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[1] = {-1.7f, hull::DeckHeight(-15.5f) + 5.2f, -16.2f};
     out[2] = {0.0f, hull::DeckHeight(15.0f) + 1.8f, 16.4f};
@@ -4342,6 +4342,13 @@ static void LanternSpots(const ShipModel& model, Vector3 out[4]) {
     out[0] = Vector3Add(out[0], dst);
     out[1] = Vector3Add(out[1], dst);
     out[2] = Vector3Add(out[2], dbow);
+    if (kitbash) {  // (the offsets above put a lantern where the frigate's own carved ones are; a kitbashed hull has none, and
+                    // a small low one, the gunboat, had them hanging in the air: hang them just over her own stern and stem)
+        out[0] = {0.6f, st.y + 0.1f, st.z + 0.35f};  // (either side of the sternpost's head)
+        out[1] = {-0.6f, st.y + 0.1f, st.z + 0.35f};
+        const float d = model.DeckAt(0.0f, bow.z - 0.6f);
+        out[2] = {0.0f, (d > -50.0f ? d : bow.y) + 0.9f, bow.z - 0.6f};
+    }
 }
 
 std::vector<Vector3> Game::HitPointsWorld(int id, const NetShip& s) const {
@@ -4373,7 +4380,7 @@ void Game::DrawShip(int cls, int id, const Matrix& m, const NetShip* ns, float s
     Vector4 lights[4];
     int nl = 0;
     Vector3 spots[4];
-    LanternSpots(model, spots);
+    LanternSpots(model, spots, &model != &shipModel && (cls == SC_CUTTER || cls == SC_GUNBOAT || cls == SC_GHOST));  // (the kitbashed hulls)
     spots[3] = model.RigPoint(spots[3], liv);  // (the masthead lantern goes where her masthead is)
     const bool greatLantern = liv && liv->on && liv->stern == STERN_LANTERN;
     const Vector3 greatAt = Vector3Add(model.PartAnchor(1), {0.0f, 1.45f, 0.0f});
@@ -8235,6 +8242,18 @@ void Game::DrawGhostShip(float dt) {
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         ModelOf(SC_GHOST).alpha = a;
+        {  // depth first (no colour), so only her nearest surface blends over the sea: no back faces and far masts through near ones, whatever order her triangles come in
+            const bool fxOff = lanternFxOff;
+            lanternFxOff = true;
+            rlEnableDepthMask();  // (the see-through pass otherwise writes no depth)
+            rlColorMask(false, false, false, false);
+            DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), 0.0f, s.hp / fmaxf(s.maxHp, 1.0f),
+                     (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
+            rlDrawRenderBatchActive();
+            rlColorMask(true, true, true, true);
+            rlDisableDepthMask();  // (then her colour at the depth just laid: LEQUAL passes only her nearest surface)
+            lanternFxOff = fxOff;
+        }
         DrawShip(s.cls, id, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), &s, fabsf(s.sail), ColorOf(id), 0.05f + hitFlash[id] * 0.6f,
                  s.hp / fmaxf(s.maxHp, 1.0f), (s.flags & SF_ALIVE) != 0, s.pos, s.rot, id * 1.7f, ScaleOf(id));
         ModelOf(SC_GHOST).alpha = 1.0f;
