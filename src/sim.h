@@ -487,6 +487,7 @@ constexpr float dockRadius = 90.0f;   // m from the anchorage a ship counts as i
 constexpr float portSafe = 1500.0f;   // m round a port no pirate is found (its forts), nor comes
 constexpr float dayLength = 600.0f;   // s
 constexpr float fastSail = 2.6f;      // x top speed under fast-sail
+constexpr float fastSailReal = 5.0f;  // ...with realistic handling: x her real top speed (a frigate ~31 m/s: still fast, not the arcade's 78)
 constexpr float fastClear = 1400.0f;  // m: no enemy nearer than this for fast-sail
 constexpr int startGold = 300;
 constexpr float repairPerHp = 1.5f;   // gold
@@ -497,7 +498,8 @@ enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCE
                      ACT_FLAGSHIP = 7,    // the shipwright: a new ship for the captain, arg = the class
                      ACT_BUY_ESCORT = 8,  // ...a ship for the fleet, arg = the class
                      ACT_SELL_ESCORT = 9, // ...arg = which of the fleet
-                     ACT_PRIZE = 10 };    // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
+                     ACT_PRIZE = 10,      // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
+                     ACT_HANDLING = 11 }; // arcade (arg 0) or realistic (arg 1) handling, whenever she likes
 // The fleet: up to three ships of her own sailing with her (bought, or taken as prizes); sunk, they're gone
 constexpr int fleetMax = 3;
 int ShipPrice(int cls);               // the shipwright's price for a hull of this class (escorts: the cutter and the gunboat only)

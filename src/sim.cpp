@@ -2508,7 +2508,8 @@ void World::StepShip(Ship& s, float dt) {
             top = fmaxf(C.topSpeed, ClassOf(ships[s.leader].cls).topSpeed) * (tune::escortSpeed + s.catchUp);
         if (s.pirate) top = fminf(top * tune::pirateSpeed, tune::pirateMaxSpeed);
         if (s.raider) top *= 1.0f + s.catchUp;  // (voyage: a pirate far from its prey)
-        if (campFast && !s.raider && s.team == 0) top *= campaign::fastSail;  // (the campaign: fast-sail, the captain and her fleet)
+        const bool fastNow = campFast && !s.raider && s.team == 0;
+        if (fastNow) top *= real ? campaign::fastSailReal : campaign::fastSail;  // (the campaign: fast-sail, the captain and her fleet)
         if (campCargo && !s.isBot && s.leader < 0) top *= 0.9f;  // (a full hold)
         if (s.merchant) top *= 0.72f;  // (raid: laden merchantmen; any pirate can run them down)
         if (s.chainT > 0.0f) top *= 0.65f;  // (Chain Shot: her rigging in tatters)
@@ -2523,7 +2524,7 @@ void World::StepShip(Ship& s, float dt) {
         float boost = s.power[PU_SPEED] > 0.0f && !s.pirate ? tune::speedBoost : 1.0f;
         float vmax = (s.sail >= 0.0f ? top * (0.92f + 0.08f * fmaxf(0.0f, windDot)) : real ? tune::realReverse : C.reverseSpeed) * boost;
         if (fabsf(s.sail) > 0.02f) {
-            float acc = (real ? tune::realAccel / (C.scale * C.scale) : tune::driveAccel) * boost;
+            float acc = (real ? tune::realAccel / (C.scale * C.scale) * (fastNow ? campaign::fastSailReal : 1.0f) : tune::driveAccel) * boost;
             if (swinging) acc *= 0.25f;  // let the swing carry the way round instead of braking it dead
             float a = Clamp((s.sail * vmax - vf) * (real ? tune::realGain : tune::driveGain), -acc, acc);
             F = Vector3Add(F, Vector3Scale(fwdH, a * P.mass * inWater * sailsUp));
@@ -4977,6 +4978,7 @@ bool World::CampaignAct(int shipId, int act, int arg) {
         }
         case campaign::ACT_FAST_ON: campWantFast = true; return true;
         case campaign::ACT_FAST_OFF: campWantFast = false; return true;
+        case campaign::ACT_HANDLING: realistic = arg != 0; return true;  // (the solo campaign: hers to change at any time)
     }
     return false;
 }

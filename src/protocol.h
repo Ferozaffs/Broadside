@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr uint16_t PROTOCOL_VERSION = 32;  // 32: carved figureheads (the livery's figure goes to 7); 31: the regions' own quests and hazards, the sea's new people; 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
+constexpr uint16_t PROTOCOL_VERSION = 33;  // 33: the campaign's handling switch, a new paint mid-game (MSG_LIVERY); 32: carved figureheads (the livery's figure goes to 7); 31: the regions' own quests and hazards, the sea's new people; 30: the campaign's port reputation; 29: the campaign's ship parts (quests carry one, or a ship for the fleet; her hold and her hulls); 28: the campaign (its block in the snapshot, MSG_CAMPAIGN); 27: a second haven on the Passage (the Odyssey's three legs), two picks to start a run; 26: the Odyssey (perks as a list, rallies, its block with the mines), revives, harbour cooldown; 15: race mode, 16: the strait, 17: more courses, 18: liveries, 19: realistic, no ship limit (16-bit ids), 20: wider Shipwright sliders, rooms out again, 21: friendly fire, lookout, 22: voyage (co-op), 23: raid (the convoy's size in the snapshot), 24: boss mode, 25: more bosses (a boss block in the snapshot)
 constexpr uint16_t DEFAULT_PORT = 27615;
 constexpr int SNAPSHOT_EVERY_TICKS = 2;  // 30 Hz snapshots
 
@@ -28,6 +28,7 @@ enum MsgType : uint8_t {
     MSG_ORDER = 15,       // C->S  the captain's order to the crew (Order)
     MSG_PICK_PERK = 16,   // C->S  the Odyssey: which of the three upgrades on offer (0..2)
     MSG_CAMPAIGN = 17,    // C->S  the campaign: a port's service, fast-sail (campaign::Act)
+    MSG_LIVERY = 18,      // C->S  a new paint for her ship (u16 length + Livery::Encode): the campaign's shipwright
 };
 enum Role : uint8_t { ROLE_CAPTAIN = 0, ROLE_CREW = 1 };
 
@@ -269,7 +270,7 @@ struct Snapshot {
     int8_t campDocked = -1, campLastPort = 0;
     uint16_t campSeen = 0;
     float campClock = 0.0f;
-    bool campFast = false, campWantFast = false;
+    bool campFast = false, campWantFast = false, campReal = false;  // (campReal: her handling, which she can change)
     uint16_t campSunk = 0;
     Quest campQuests[campaign::maxQuests];  // under way
     std::vector<Quest> campOffers;          // the tavern's (in port)
@@ -494,7 +495,7 @@ inline void WriteSnapshot(ByteWriter& w, const World& world) {
         w.Put(world.campLastPort);
         w.Put(world.campSeen);
         w.Put(world.campClock);
-        w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0)));
+        w.Put((uint8_t)((world.campFast ? 1 : 0) | (world.campWantFast ? 2 : 0) | (world.realistic ? 4 : 0)));
         w.Put((uint16_t)world.campSunk);
         for (const Quest& q : world.campQuests) PutQuest(w, q);
         for (uint8_t c : world.campChain) w.Put(c);
@@ -720,6 +721,7 @@ inline bool ReadSnapshot(ByteReader& r, Snapshot& s) {
         const uint8_t f = r.Get<uint8_t>();
         s.campFast = f & 1;
         s.campWantFast = (f & 2) != 0;
+        s.campReal = (f & 4) != 0;
         s.campSunk = r.Get<uint16_t>();
         for (Quest& q : s.campQuests) q = GetQuest(r);
         for (uint8_t& c : s.campChain) c = r.Get<uint8_t>();

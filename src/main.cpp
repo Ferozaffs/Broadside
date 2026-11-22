@@ -294,6 +294,9 @@ public:
     std::deque<LiveryGpu> shipLivery;
     Shipyard yard;
     Vector3 yardPos{};
+    bool campYard = false;      // the campaign: painting her in port (the Shipwright over the live sea, round her own ship)
+    void OpenCampYard();
+    void CampYardCamera();
     const LiveryGpu* LiveryFor(int id) const {
         if (id < 0 || id >= NumShips()) return nullptr;
         int o = view[id].s.leader >= 0 && view[id].s.leader < NumShips() ? view[id].s.leader : id;
@@ -423,7 +426,23 @@ public:
     SeaSay seaSay;                   // someone at sea saying something (a few seconds)
     double hailAt = -1000.0;         // the last hail from a passing trader or the navy
     std::set<int> hailed;            // (ships that have hailed us already)
-    void Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line);
+    // (key: whose face this is - the same key, the same face; empty: by name and title)
+    void Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line, const std::string& key = "");
+    // the campaign's passengers: castaways and freed captives aboard, for port - out of the fighting they talk
+    struct Passenger { int slot; uint16_t seed; bool captive; int biome; bool story; std::string id, name, title, key; double next; int said; };
+    std::vector<Passenger> passengers;
+    int adriftN = 0;  // (each boat of survivors their own face)
+    void UpdatePassengers(bool fight);
+    // the faces at sea: a ship's captain keeps the face she first had; a new one gets whichever of the pool's
+    // (imported) faces she's seen least lately - not the same few over and over
+    std::map<std::string, std::string> faceOf;  // (whose -> face)
+    std::map<std::string, uint32_t> faceLast;   // (face -> when last seen)
+    uint32_t faceClock = 0;
+    std::string PickFace(const std::string& who, const std::vector<std::string>& pool);
+    std::string PirateFaceFor(int ship) {
+        std::vector<std::string> pool(std::begin(people::kPiratePool), std::end(people::kPiratePool));
+        return PickFace(std::string("pirate|") + NameOf(ship), pool);
+    }
     void DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
                   float age, float alpha);
     void DrawSeaSay(float W, float H);
@@ -1326,6 +1345,11 @@ void Game::Interpolate() {
             campClock = sn.campClock;
             campFast = sn.campFast;
             campWantFast = sn.campWantFast;
+            if (sn.campReal != curRealistic) {  // (she changed her handling: the prediction follows)
+                curRealistic = sn.campReal;
+                pred.realistic = curRealistic;
+                handlingSel = curRealistic ? 1 : 0;
+            }
             campSunk = sn.campSunk;
             for (int k = 0; k < campaign::maxQuests; ++k) campQuests[k] = sn.campQuests[k];
             campOffers = sn.campOffers;
@@ -1484,13 +1508,16 @@ void Game::UpdateInput(float dt) {
         EnableCursor();
         if (getenv("BS_PORTTAB")) portTab = atoi(getenv("BS_PORTTAB"));
     }
+    static bool autoYard = getenv("BS_CAMPYARD") != nullptr;  // (screenshots: painting her in port)
+    if (campaign && autoYard && campDocked >= 0 && GetTime() - sessionStart > 8.0) { autoYard = false; portOpen = true; OpenCampYard(); }
     static bool autoTake = getenv("BS_TAKEQUESTS") != nullptr;  // (screenshots: take every quest on offer)
     if (campaign && autoTake && campDocked >= 0 && !campOffers.empty() && GetTime() - sessionStart > 7.0) {
         autoTake = false;
         for (int k = (int)campOffers.size() - 1; k >= 0; --k) CampaignAct(campaign::ACT_ACCEPT, k);
     }
     if (autoPause && GetTime() - sessionStart > 4.0) { autoPause = false; paused = true; EnableCursor(); }
-    if (IsKeyPressed(KEY_ESCAPE)) {
+    if (campYard && (campDocked < 0 || !campaign || myId < 0 || !view[myId].present)) { yard.Close(); campYard = false; }  // (sunk, or gone)
+    if (IsKeyPressed(KEY_ESCAPE) && !campYard) {  // (painting: the Shipwright's own Esc)
         if (portOpen) { portOpen = false; DisableCursor(); }
         else if (chartOpen) chartOpen = false;
         else {
@@ -1499,11 +1526,11 @@ void Game::UpdateInput(float dt) {
             else DisableCursor();
         }
     }
-    if (campaign && !IsCrew() && !paused && campPrizeC >= 0 && !portOpen) {  // a prize alongside: 1 into the fleet, 2 plunder (before the ship keys)
+    if (campaign && !IsCrew() && !paused && campPrizeC >= 0 && !portOpen && !campYard) {  // a prize alongside: 1 into the fleet, 2 plunder (before the ship keys)
         if (IsKeyPressed(KEY_ONE)) CampaignAct(campaign::ACT_PRIZE, 1);
         if (IsKeyPressed(KEY_TWO)) CampaignAct(campaign::ACT_PRIZE, 0);
     }
-    if (campaign && !IsCrew() && !paused) {  // the campaign: the chart (Tab), fast-sail (F), ashore in port (E)
+    if (campaign && !IsCrew() && !paused && !campYard) {  // the campaign: the chart (Tab), fast-sail (F), ashore in port (E)
         if (IsKeyPressed(KEY_TAB) && !portOpen) chartOpen = !chartOpen;
         if (IsKeyPressed(KEY_F) && !portOpen) {
             CampaignAct(campWantFast ? campaign::ACT_FAST_OFF : campaign::ACT_FAST_ON);
@@ -3043,7 +3070,7 @@ void Game::PlayEvent(const GameEvent& e) {
         case EventType::Kill: {
             if (campaign && curMode == MODE_CAMPAIGN && !(e.flags & EF_CRIPPLE) && e.b < NumShips() && myId >= 0 && myId < NumShips() && view[myId].present &&
                 IsEnemy(e.b) && Vector3Distance(e.pos, view[myId].s.pos) < 1500.0f) {  // (a pirate down near her: its last curse, her fleet's cheer)
-                AddBark(people::PirateFace(e.b * 7 + view[e.b].s.cls), NameOf(e.b), people::kPirateLines[people::PB_SINKING][GetRandomValue(0, 5)], ui::kRed);
+                AddBark(PirateFaceFor(e.b), NameOf(e.b), people::kPirateLines[people::PB_SINKING][GetRandomValue(0, 5)], ui::kRed);
                 std::vector<const Snapshot::CampFleet*> mine;
                 for (const Snapshot::CampFleet& f : campFleetC)
                     if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present && (view[f.ship].s.flags & SF_ALIVE)) mine.push_back(&f);
@@ -3326,7 +3353,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_RIVAL:
                     Notice("A RIVAL CAPTAIN", ui::kRed, 3.0f);
                     Feed3(NameOf(e.a), "  has come looking for you", "", ui::kRed, ui::kText);
-                    Say(Portrait(TextFormat("rival_%d", e.flags % 6 + 1)) ? "rival" : people::PirateFace(e.flags), NameOf(e.a), "A rival captain",
+                    Say(Portrait(TextFormat("rival_%d", e.flags % 6 + 1)) ? "rival" : PirateFaceFor(e.a), NameOf(e.a), "A rival captain",
                         people::kRivalLines[GetRandomValue(0, 5)]);
                     break;
                 case EV_SMUGGLER:
@@ -3337,11 +3364,12 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_ADRIFT:
                     Feed3("SURVIVORS", "  adrift in a crippled boat: come alongside, slowly", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "SURVIVORS", ui::kGold, 5.0f});
-                    Say("sea_castaway", "Survivors", "Adrift in a crippled boat", people::kAdriftLines[GetRandomValue(0, 2)]);
+                    ++adriftN;
+                    Say("sea_castaway", "Survivors", "Adrift in a crippled boat", people::kAdriftLines[GetRandomValue(0, 2)], TextFormat("adrift|%d", adriftN));
                     break;
                 case EV_ADRIFTSAVED:
                     Feed3("SURVIVORS", "  taken off, and what they saved is yours", gold, ui::kGold, ui::kGold);
-                    Say("sea_castaway", "Survivors", "Taken off their boat", people::kAdriftThanks[GetRandomValue(0, 2)]);
+                    Say("sea_castaway", "Survivors", "Taken off their boat", people::kAdriftThanks[GetRandomValue(0, 2)], TextFormat("adrift|%d", adriftN));
                     sfx::PlayFlat(sfx::Treasure, 0.8f, 1.0f);
                     break;
                 case EV_ADRIFTLOST: Feed3("SURVIVORS", "  lost: their boat went down", "", ui::kRed, ui::kText); break;
@@ -3433,7 +3461,9 @@ void Game::PlayEvent(const GameEvent& e) {
                 if (q.type == campaign::Q_CASTAWAYS) {
                     Feed3("The castaways", "  are aboard: bring them to any port", "", ui::kGold, ui::kText);
                     const people::SeaVoice& v = people::kSea[people::ST_CASTAWAY];
-                    Say(v.id, v.name, v.title, v.lines[GetRandomValue(0, 5)]);
+                    const std::string key = TextFormat("castaway|%u", (unsigned)q.seed);
+                    Say(v.id, v.name, v.title, v.lines[GetRandomValue(0, 5)], key);
+                    passengers.push_back({(int)e.a, q.seed, false, (int)q.biome, q.chain != 0, v.id, v.name, "Your passenger", key, GetTime() + GetRandomValue(35, 55), 0});
                 } else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
                     const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
                     Say(v.id, campaign::PirateName(q.seed), v.title, v.lines[GetRandomValue(0, 5)]);
@@ -3443,7 +3473,9 @@ void Game::PlayEvent(const GameEvent& e) {
                     std::string c = CaptiveOf(q);
                     const people::SeaVoice& v = people::kSea[people::CaptiveIsWoman(c) ? people::ST_CAPTIVE_F : people::ST_CAPTIVE_M];
                     c[0] = (char)toupper(c[0]);
-                    Say(v.id, c, v.title, v.lines[GetRandomValue(0, 5)]);
+                    const std::string key = TextFormat("captive|%u", (unsigned)q.seed);
+                    Say(v.id, c, v.title, v.lines[GetRandomValue(0, 5)], key);
+                    passengers.push_back({(int)e.a, q.seed, true, (int)q.biome, q.chain != 0, v.id, c, "Your passenger", key, GetTime() + GetRandomValue(35, 55), 0});
                     Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
                 }
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
@@ -4768,6 +4800,10 @@ void Game::DrawShips(bool menu, bool shadow, Vector3 centre, float radius) {
             if (!view[id].present) continue;
             const NetShip& s = view[id].s;
             if (shadow ? !inShadowBox(s.pos) : Vector3DotProduct(Vector3Subtract(s.pos, rv.pos), look) < -60.0f) continue;  // behind the camera
+            if (campYard && id == myId) {  // (painting her: the Shipwright's work on her, where she lies)
+                DrawShip(s.cls, -2, ShipModelMatrix(s.pos, s.rot, ScaleOf(id)), nullptr, 0.85f, ColorOf(id), 0.0f, 1.0f, true, s.pos, s.rot, id * 1.7f, ScaleOf(id));
+                continue;
+            }
             if (!shadow && id == myId && OwnShipLate()) continue;  // drawn see-through after the water
             if (s.cls == SC_GHOST) continue;  // (the Dutchman: see-through, after the water)
             // the Fog Banks' ghost ships ("the Drowned ...") look the part when there's a ghost ship's model (assets/ship_ghost):
@@ -5016,7 +5052,7 @@ void Game::RenderWorld(float dt, bool menu) {
     }
     if (!menu && !getenv("BS_NOHUD")) DrawFleetRings();  // (film: none)
     if (!menu && curMode == MODE_RACE) DrawRaceGates(true);
-    if (!menu && myId >= 0 && view[myId].present && OwnShipLate()) {
+    if (!menu && myId >= 0 && view[myId].present && OwnShipLate() && !campYard) {
         const NetShip& s = view[myId].s;
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
@@ -6146,6 +6182,13 @@ void Game::DrawHUD() {
         Text("the sea, however, is not", W * 0.5f, H * 0.5f - 88, 18, kDim, false, Center);
         if (Button({W * 0.5f - 150, H * 0.5f - 30, 300, 52}, "Resume", true)) { paused = false; DisableCursor(); }
         float yb = H * 0.5f + 34;
+        if (campaign && !IsCrew()) {  // her handling, hers to change whenever she likes (the solo campaign)
+            if (Button({W * 0.5f - 150, yb, 300, 52}, curRealistic ? "Handling  \xC2\xB7  Realistic" : "Handling  \xC2\xB7  Over the top")) {
+                CampaignAct(campaign::ACT_HANDLING, curRealistic ? 0 : 1);
+                Feed(curRealistic ? "Handling: over the top (jumps, arcade speeds)" : "Handling: realistic (real speeds and turning, no jumps)", ui::kDim);
+            }
+            yb += 64;
+        }
         if (IsCrew()) {
             if (Button({W * 0.5f - 150, yb, 300, 52}, "Change ship")) { SetRole(2); paused = false; DisableCursor(); }
             if (Button({W * 0.5f - 150, yb + 64, 300, 52}, "Take a ship of your own")) { SetRole(ROLE_CAPTAIN); paused = false; DisableCursor(); }
@@ -7346,7 +7389,8 @@ void Game::Frame() {
         PlayEvents();
         if (prof) mark[2] = GetTime();
         Vector3 focus = (myId >= 0 && view[myId].present) ? view[myId].s.pos : Vector3{0, 0, 0};
-        if (IsCrew()) CrewCamera(dt);
+        if (campYard) CampYardCamera();
+        else if (IsCrew()) CrewCamera(dt);
         else UpdateCamera(dt, focus);
         if (opt.freeCam) { rv.pos = opt.freePos; rv.target = opt.freeTarget; rv.fovy = 55; }
         if (const char* oc = getenv("BS_ORBIT")) {  // (film: \"cx cy cz radius height deg/s\" circling a point, looking at it)
@@ -7435,11 +7479,24 @@ void Game::Frame() {
             SetMouseScale(1.0f / s, 1.0f / s);
             rv.uiScale = s;
             if (!(campaign && portOpen)) DrawMonsterLabels();
-            DrawHUD();
+            if (!campYard) DrawHUD();
             rlDrawRenderBatchActive();
             rlPopMatrix();
             SetMouseScale(1.0f, 1.0f);
             rv.uiScale = 1.0f;
+            if (campYard) {
+                const int r = yard.Draw((float)GetScreenWidth(), (float)GetScreenHeight());
+                if (r == 1) {  // done: hers from now on - saved, and the sea sees it
+                    myLivery = yard.work;
+                    if (!myLivery.Save(LiveryPath())) Feed("Couldn't save the paint (livery.dat)", ui::kRed);
+                    myLiveryGpu.Set(myLivery);
+                    ByteWriter w;
+                    w.Put(MSG_LIVERY);
+                    PutBlob(w.buf, myLivery.IsDefault() ? std::vector<uint8_t>{} : myLivery.Encode());
+                    Send(w.buf, true);
+                }
+                if (r != 0) { yard.Close(); campYard = false; }  // (back to the port screen)
+            }
         } else if (campaign && getenv("BS_FILMTALK") && !portOpen) {  // (film: no HUD, but the people still talk - the barks, the hails)
             const float s = HudScale();
             rlDrawRenderBatchActive();
@@ -7527,6 +7584,39 @@ void Game::OpenShipyard() {
     }
 }
 
+// The campaign's shipwright: the Shipwright's tools on her own ship where she lies in port (the session runs on)
+void Game::OpenCampYard() {
+    if (myId < 0 || !view[myId].present || campDocked < 0) return;
+    yard.Open(myLivery, view[myId].s.cls);
+    campYard = true;
+    EnableCursor();
+}
+
+void Game::CampYardCamera() {
+    yard.Orbit();
+    const NetShip& me = view[myId].s;
+    const float s = ScaleOf(myId);
+    Vector3 c = {me.pos.x, me.pos.y + 9.0f * s, me.pos.z};
+    if (yard.focus == 1 || yard.focus == 2) yard.look = ModelOf(me.cls).PartAnchor(yard.focus == 1 ? 0 : 1);
+    if (yard.lookK > 0.001f) c = Vector3Lerp(c, Vector3Transform(yard.look, ShipModelMatrix(me.pos, me.rot, s)), yard.lookK);
+    const float d = yard.dist * (0.55f + 0.45f * s);
+    // (the yaw relative to her heading, so the Shipwright's views - bow, stern, a side - are hers)
+    const Vector3 fwd0 = Vector3RotateByQuaternion({0, 0, 1}, me.rot);
+    const float hdg = atan2f(fwd0.x, fwd0.z), yaw = yard.yaw + hdg;
+    Vector3 off = {sinf(yaw) * cosf(yard.pitch) * d, sinf(yard.pitch) * d, cosf(yaw) * cosf(yard.pitch) * d};
+    rv.target = c;
+    rv.pos = Vector3Add(c, off);
+    rv.pos.y = fmaxf(rv.pos.y, pred.ocean.Height(rv.pos.x, rv.pos.z) + 2.0f);
+    rv.up = {0, 1, 0};
+    rv.fovy = 50.0f;
+    const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+    const Vector3 fwd = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+    const Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, {0, 1, 0}));
+    const float k = -(2.0f * yard.ShipScreenX() - 1.0f) * tanf(rv.fovy * 0.5f * DEG2RAD) * (W / H) * Vector3Distance(rv.pos, rv.target);
+    rv.pos = Vector3Add(rv.pos, Vector3Scale(right, k));
+    rv.target = Vector3Add(rv.target, Vector3Scale(right, k));
+}
+
 static void YardPose(OceanCPU& oc, Vector3 at, float s, Vector3& comPos, Quaternion& rot) {
     const float L = 14.0f * s, B = 4.5f * s;
     float hb = oc.Height(at.x, at.z + L), hs = oc.Height(at.x, at.z - L);
@@ -7585,6 +7675,29 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--simtest")) return RunSimTest();
         if (!strcmp(argv[i], "--sfx-export") && i + 1 < argc) return sfx::ExportAll(argv[i + 1]) ? 0 : 1;
+        if (!strcmp(argv[i], "--voice-export") && i + 2 < argc) {  // <list: "id|line" per line> <dir>: each as NN_id.wav (the people's babble)
+            FILE* f = fopen(argv[i + 1], "rb");
+            if (!f) return 1;
+            char buf[1024];
+            int n = 0;
+            while (fgets(buf, sizeof buf, f)) {
+                std::string l = buf;
+                while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+                const size_t bar = l.find('|');
+                if (bar == std::string::npos) continue;
+                const std::string id = l.substr(0, bar), line = l.substr(bar + 1);
+                const people::Voice* v = people::VoiceOf(id.c_str());
+                if (!v) { printf("no voice: %s\n", id.c_str()); continue; }
+                Wave w = sfx::BabbleWave(people::ParamsOf(*v), line.c_str(), people::MoodOf(*v, line.c_str()), (uint32_t)(n * 31 + 7));
+                const std::string out = TextFormat("%s/%02d_%s.wav", argv[i + 2], n, id.c_str());
+                ExportWave(w, out.c_str());
+                printf("%s  mood %d  %.2f s  %s\n", out.c_str(), people::MoodOf(*v, line.c_str()), w.frameCount / 44100.0f, line.c_str());
+                UnloadWave(w);
+                ++n;
+            }
+            fclose(f);
+            return 0;
+        }
         if (!strcmp(argv[i], "--upnp-probe")) { printf("%s\n", upnp::Probe().c_str()); return 0; }
         if (!strcmp(argv[i], "--upnp-map-test") && i + 1 < argc) {  // map, report, unmap (no window)
             upnp::Start((uint16_t)atoi(argv[i + 1]));
@@ -9057,23 +9170,44 @@ void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, 
     }
 }
 
-void Game::Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line) {
-    // (the people at sea have more than one face: one of the kind's, by the ship's name - the same ship, the same
-    // captain - and only one that's been imported; the voice goes with the face)
+std::string Game::PickFace(const std::string& who, const std::vector<std::string>& pool) {
+    if (pool.empty()) return "";
+    if (faceOf.size() > 4000) faceOf.clear();
+    auto it = faceOf.find(who);
+    std::string face;
+    if (it != faceOf.end() && std::find(pool.begin(), pool.end(), it->second) != pool.end()) face = it->second;
+    else {
+        const uint32_t h = (uint32_t)std::hash<std::string>{}(who) * 2654435761u;
+        uint32_t best = UINT32_MAX, bestTie = 0;
+        for (size_t k = 0; k < pool.size(); ++k) {
+            if (!Portrait(pool[k])) continue;  // (not imported yet)
+            auto l = faceLast.find(pool[k]);
+            const uint32_t last = l == faceLast.end() ? 0 : l->second;
+            const uint32_t tie = (h ^ (uint32_t)std::hash<std::string>{}(pool[k])) * 2246822519u;
+            if (last < best || (last == best && tie > bestTie)) { best = last; bestTie = tie; face = pool[k]; }
+        }
+        if (face.empty()) face = pool[h % pool.size()];
+        faceOf[who] = face;
+    }
+    faceLast[face] = ++faceClock;
+    return face;
+}
+
+void Game::Say(const std::string& id, const std::string& name, const std::string& title, const std::string& line, const std::string& key) {
+    // (the people at sea have more than one face: one of the kind's - the same ship, the same captain; a new one the
+    // face she's seen least lately - and only one that's been imported; the voice goes with the face)
     std::string face = id, who = name;
     int n = 0;
     if (const people::FacePick* pool = people::FacePool(id, n)) {
-        const uint32_t h = (uint32_t)std::hash<std::string>{}(name + "|" + title) * 2654435761u;
-        for (int k = 0; k < n; ++k) {
-            const people::FacePick& f = pool[(h + (uint32_t)k) % (uint32_t)n];
-            if (Portrait(f.id)) {
-                face = f.id;
-                if (f.name) who = f.name;
-                break;
-            }
-        }
+        std::vector<std::string> ids;
+        for (int k = 0; k < n; ++k) ids.push_back(pool[k].id);
+        face = PickFace(key.empty() ? id + "|" + name + "|" + title : key, ids);
+        for (int k = 0; k < n; ++k)
+            if (face == pool[k].id && pool[k].name) who = pool[k].name;
+        if (!Portrait(face)) face = id;
     }
     seaSay = {face, who, title, line, GetTime()};
+    if (getenv("BS_TALKLOG")) printf("[say] %.1f %s | %s | %s | %s\n", GetTime() - sessionStart, face.c_str(), who.c_str(), title.c_str(), line.c_str());
     people::Voiced(face.c_str(), line.c_str(), (uint32_t)(GetTime() * 10.0));
 }
 
@@ -9104,6 +9238,46 @@ void Game::AddBark(const std::string& id, const std::string& name, const std::st
 
 // Who says what: her fleet's captains between fights (now and then), when a fight starts, when they're badly hurt,
 // when an enemy goes down; the pirates as they come at her, while they fight, and as they sink
+// The passengers talk on the way home: three lines, a minute or so apart, never in a fight or over someone else
+void Game::UpdatePassengers(bool fight) {
+    const double now = GetTime();
+    static const char* passTest = getenv("BS_PASSTEST");  // (testing: "captive biome seed" - a passenger aboard at 8 s, a line every 12 s)
+    if (passTest && now - sessionStart > 8.0) {
+        int cap = 0, bio = 0, seed = 1;
+        sscanf(passTest, "%d %d %d", &cap, &bio, &seed);
+        passTest = nullptr;
+        const people::SeaVoice& v = people::kSea[cap ? people::ST_CAPTIVE_F : people::ST_CASTAWAY];
+        passengers.push_back({-2, (uint16_t)seed, cap != 0, bio, false, v.id, cap ? "The consul's wife" : v.name, "Your passenger",
+                              TextFormat("test|%d", seed), now + 2.0, 0});
+    }
+    passengers.erase(std::remove_if(passengers.begin(), passengers.end(), [&](const Passenger& p) {
+                         if (p.said >= 3) return true;
+                         if (p.slot == -2) return false;  // (BS_PASSTEST's)
+                         if (p.slot < 0 || p.slot >= campaign::maxQuests) return true;
+                         const Quest& q = campQuests[p.slot];
+                         return q.state != campaign::QS_RETURN || q.seed != p.seed;  // (home, or lost)
+                     }), passengers.end());
+    if (passengers.empty()) return;
+    if (fight) {  // (not now: and not straight after, either)
+        for (Passenger& p : passengers) p.next = std::max(p.next, now + 20.0);
+        return;
+    }
+    const float sayAge = (float)(now - seaSay.at);
+    if (sayAge < 4.0f + seaSay.line.size() * 0.035f + 6.0f) return;  // (someone's talking)
+    for (const Bark& b : barks)
+        if (now - b.at < 6.0) return;
+    for (Passenger& p : passengers) {
+        if (now < p.next) continue;
+        int told = 0;
+        for (int b = 0; b < campaign::BIOMES; ++b) told += campChainC[b] >= campaign::chainSteps + 1;
+        Say(p.id, p.name, p.title, people::PassengerLine(p.captive, p.biome, p.seed, p.said, p.story, told), p.key);
+        ++p.said;
+        p.next = now + (getenv("BS_PASSTEST") ? 12.0 : GetRandomValue(50, 80));
+        for (Passenger& o : passengers) o.next = std::max(o.next, now + 25.0);  // (one at a time)
+        break;
+    }
+}
+
 void Game::UpdateBarks() {
     if (myId < 0 || myId >= NumShips() || !view[myId].present || campDocked >= 0 || curMode != MODE_CAMPAIGN) return;
     const NetShip& me = view[myId].s;
@@ -9119,6 +9293,7 @@ void Game::UpdateBarks() {
             if (d < nd) { nd = d; nearest = id; }
         }
     const bool fight = nd < 700.0f;
+    UpdatePassengers(nd < 900.0f);
     // her fleet
     std::vector<const Snapshot::CampFleet*> mine;
     for (const Snapshot::CampFleet& f : campFleetC)
@@ -9147,10 +9322,10 @@ void Game::UpdateBarks() {
     // the pirates: a word as each one comes at her, a jeer now and then in the fight
     if (nearest >= 0 && nd < 650.0f && !barkSeen.count(nearest) && now - barkPirateAt > 6.0) {
         barkSeen.insert(nearest);
-        AddBark(people::PirateFace(nearest * 7 + view[nearest].s.cls), NameOf(nearest), people::kPirateLines[people::PB_APPROACH][pick(6)], ui::kRed);
+        AddBark(PirateFaceFor(nearest), NameOf(nearest), people::kPirateLines[people::PB_APPROACH][pick(6)], ui::kRed);
         barkPirateAt = now;
     } else if (nearest >= 0 && nd < 450.0f && now - barkPirateAt > 22.0 && GetRandomValue(0, 240) == 0) {
-        AddBark(people::PirateFace(nearest * 7 + view[nearest].s.cls), NameOf(nearest), people::kPirateLines[people::PB_TAUNT][pick(6)], ui::kRed);
+        AddBark(PirateFaceFor(nearest), NameOf(nearest), people::kPirateLines[people::PB_TAUNT][pick(6)], ui::kRed);
         barkPirateAt = now;
     }
 }
@@ -9435,6 +9610,7 @@ void Game::DrawPort(float W, float H) {
         }
         y += ((kUpgradeCount + 1) / 2) * 44.0f + 10;
         Label("YOUR SHIP   \xC2\xB7   BUILT FROM PARTS WON AT SEA, NOT BOUGHT", x0, y, 12, kDim);
+        if (Button({x0 + w0 - 170, y - 12, 170, 30}, "Paint her  \xC2\xB7  Shipwright")) OpenCampYard();
         y += 20;
         for (int c = 0; c < SC_PLAYABLE; ++c) {
             const float bx = x0 + c * ((w0 + 10) / 3.0f), bw = (w0 + 10) / 3.0f - 10;

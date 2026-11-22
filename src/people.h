@@ -4,8 +4,17 @@
 #include "sim.h"
 #include "audio.h"
 #include <cstring>
+#include <cctype>
 
 namespace people {
+
+inline int strncasecmp_bs(const char* a, const char* b, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        const int x = tolower((unsigned char)a[i]), y = tolower((unsigned char)b[i]);
+        if (x != y || !x) return x - y;
+    }
+    return 0;
+}
 
 struct Person {
     const char* id;
@@ -444,32 +453,57 @@ inline const Voice kVoices[] = {
     {"fleet_4", 200, 1.13f, 0.15f, 0.00f, 0}, {"fleet_5", 90, 0.92f, 0.10f, 0.30f, 1}, {"fleet_6", 125, 1.00f, 0.20f, 0.20f, 0},
     {"pirate_1", 95, 0.93f, 0.15f, 0.40f, 2}, {"pirate_2", 215, 1.15f, 0.20f, 0.05f, 1}, {"pirate_3", 80, 0.88f, 0.10f, 0.45f, 2},
     {"pirate_4", 130, 1.00f, 0.40f, 0.10f, 3}, {"pirate_5", 140, 1.03f, 0.10f, 0.00f, 1}, {"pirate_6", 100, 0.95f, 0.30f, 0.20f, 3},
+    // the sea's second cast (2026-11-22)
+    {"pirate_7", 200, 1.13f, 0.15f, 0.10f, 2}, {"pirate_8", 80, 0.88f, 0.10f, 0.45f, 1}, {"pirate_9", 135, 1.02f, 0.12f, 0.00f, 1},
+    {"pirate_10", 190, 1.11f, 0.10f, 0.15f, 1}, {"pirate_11", 95, 0.93f, 0.20f, 0.50f, 1}, {"pirate_12", 215, 1.15f, 0.25f, 0.05f, 3},
+    {"castaway_6", 150, 1.05f, 0.25f, 0.00f, 0}, {"castaway_7", 170, 1.06f, 0.20f, 0.25f, 2}, {"castaway_8", 100, 0.94f, 0.25f, 0.20f, 1},
+    {"castaway_9", 220, 1.16f, 0.25f, 0.00f, 0}, {"captive_f_6", 225, 1.17f, 0.10f, 0.05f, 2}, {"captive_f_7", 190, 1.11f, 0.12f, 0.00f, 0},
+    {"captive_m_3", 145, 1.04f, 0.12f, 0.00f, 0}, {"captive_m_4", 95, 0.93f, 0.15f, 0.35f, 2}, {"merchant_6", 215, 1.15f, 0.15f, 0.00f, 1},
+    {"merchant_7", 90, 0.92f, 0.12f, 0.10f, 0}, {"navy_5", 120, 0.98f, 0.08f, 0.05f, 0}, {"navy_6", 180, 1.08f, 0.08f, 0.05f, 2},
+    {"smuggler_6", 125, 1.00f, 0.15f, 0.15f, 1}, {"smuggler_7", 210, 1.14f, 0.20f, 0.00f, 1},
 };
 
-// the sound they make for a line: a question gets an eh?, a laugh a heh-heh, an exclamation an oh! (or a laugh, from
-// the cheerful); otherwise their manner: a hmph from the gruff, a long hum from the eerie, an ah or a mm-hm
-inline void Voiced(const char* id, const char* line, uint32_t salt) {
-    const Voice* v = nullptr;
+// How they say a line (sfx::Babble: the line's own syllables, without words): their manner's mood - plain, cheerful,
+// gruff, eerie - unless the line itself is begging (scared), cursing or burning (angry) or trailing off (weary)
+inline bool HasWord(const char* line, const char* w) {
+    const size_t n = strlen(w);
+    for (const char* s = line; *s; ++s)
+        if (!strncasecmp_bs(s, w, n) && (s == line || !isalpha((unsigned char)s[-1])) && !isalpha((unsigned char)s[n])) return true;
+    return false;
+}
+inline int MoodOf(const Voice& v, const char* line) {
+    static const char* const scared[] = {"please", "mercy", "help", "beg", "pity", "save", "strike", "surrender", "don't shoot", "spare"};
+    static const char* const angry[] = {"curse", "damn", "burn", "die", "kill", "pay for this", "board her", "destroy", "blood", "sink you", "fool"};
+    const bool bang = strchr(line, '!') != nullptr;
+    const size_t len = strlen(line);
+    if (v.manner != 3)
+        for (const char* w : scared)
+            if (HasWord(line, w)) return sfx::MOOD_SCARED;
+    if (bang && v.manner != 1)
+        for (const char* w : angry)
+            if (HasWord(line, w)) return sfx::MOOD_ANGRY;
+    if (len > 3 && !strcmp(line + len - 3, "...") && v.manner != 1) return sfx::MOOD_WEARY;
+    static const int k[] = {sfx::MOOD_PLAIN, sfx::MOOD_CHEERFUL, sfx::MOOD_GRUFF, sfx::MOOD_EERIE};
+    return k[v.manner & 3];
+}
+inline const Voice* VoiceOf(const char* id) {
     for (const Voice& x : kVoices)
-        if (!strcmp(x.id, id)) v = &x;
+        if (!strcmp(x.id, id)) return &x;
+    return nullptr;
+}
+inline sfx::VoiceParams ParamsOf(const Voice& v) {
+    sfx::VoiceParams p;
+    p.pitch = v.pitch;
+    p.formant = v.formant;
+    p.breath = v.breath;
+    p.rasp = v.rasp;
+    return p;
+}
+inline void Voiced(const char* id, const char* line, uint32_t salt) {
+    const Voice* v = VoiceOf(id);
     if (!v || !line) return;
     const uint32_t h = salt * 2654435761u + (uint32_t)strlen(line) * 40503u;
-    const bool ask = strchr(line, '?') != nullptr, bang = strchr(line, '!') != nullptr;
-    const bool laugh = !strncmp(line, "Ha", 2) || !strncmp(line, "HA", 2) || strstr(line, "Heh") || strstr(line, "Blimey");
-    int k;
-    if (laugh) k = sfx::UT_HEH;
-    else if (v->manner == 3) k = (h >> 3) % 3 ? sfx::UT_HUM : sfx::UT_AH;
-    else if (ask) k = sfx::UT_EH;
-    else if (bang) k = v->manner == 1 && (h >> 5) % 2 ? sfx::UT_HEH : sfx::UT_OH;
-    else if (v->manner == 2) k = (h >> 4) % 2 ? sfx::UT_HMPH : sfx::UT_HMM;
-    else if (v->manner == 1) k = (h >> 4) % 3 == 0 ? sfx::UT_HEH : sfx::UT_AH;
-    else k = (h >> 4) % 2 ? sfx::UT_AH : sfx::UT_HMM;
-    sfx::VoiceParams p;
-    p.pitch = v->pitch;
-    p.formant = v->formant;
-    p.breath = v->breath;
-    p.rasp = v->rasp;
-    sfx::Utter(p, k, 0.75f, h);
+    sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h);
 }
 
 // What a port's keepers say once it thinks well of her (Trusted, a friend of the port, its hero: campaign::RepTier
@@ -510,17 +544,14 @@ inline const char* const kWarm[SHOPS][3][3] = {
     },
 };
 
-// Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line)
-constexpr int kFleetFaces = 6, kPirateFaces = 6;
-// (the favourites twice over, here and in FacePool: the faces that came out best are the ones she meets most -
-// fleet 2, 3 and 4, pirates 2 and 4)
-inline const char* FleetFace(int seed) {
-    static const char* const k[] = {"fleet_1", "fleet_2", "fleet_2", "fleet_3", "fleet_3", "fleet_4", "fleet_4", "fleet_5", "fleet_6"};
-    return k[(unsigned)seed % (sizeof k / sizeof k[0])];
-}
-inline const char* PirateFace(int seed) {
-    static const char* const k[] = {"pirate_1", "pirate_2", "pirate_2", "pirate_3", "pirate_4", "pirate_4", "pirate_5", "pirate_6"};
-    return k[(unsigned)seed % (sizeof k / sizeof k[0])];
+// Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line).
+// Every face once: the game picks whichever she's seen least lately (Game::PickFace), and only those imported
+// (data/portraits/<id>.png), so a new face in a pool turns up as soon as its portrait does.
+inline const char* const kFleetPool[] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6"};
+inline const char* const kPiratePool[] = {"pirate_1", "pirate_2", "pirate_3", "pirate_4", "pirate_5", "pirate_6",
+                                         "pirate_7", "pirate_8", "pirate_9", "pirate_10", "pirate_11", "pirate_12"};
+inline const char* FleetFace(int seed) {  // (her own fleet: few, and each keeps its captain for good)
+    return kFleetPool[(unsigned)seed % (sizeof kFleetPool / sizeof kFleetPool[0])];
 }
 enum FleetBark { FB_IDLE = 0, FB_ENEMY, FB_HURT, FB_KILL, FB_JOINED, FB_COUNT };
 inline const char* const kFleetLines[FB_COUNT][6] = {
@@ -549,20 +580,24 @@ inline const char* const kPirateLines[PB_COUNT][6] = {
 // one of these (by the ship's name, so the same ship keeps the same captain); name nullptr keeps the speaker's own
 struct FacePick { const char* id; const char* name; };
 inline const FacePick* FacePool(const std::string& base, int& n) {
-    // (the favourites listed twice: met twice as often)
-    static const FacePick merchant[] = {{"sea_merchant", nullptr}, {"merchant_1", nullptr}, {"merchant_2", nullptr}, {"merchant_2", nullptr}, {"merchant_3", nullptr},
-                                        {"merchant_4", nullptr}, {"merchant_5", nullptr}};
-    static const FacePick navy[] = {{"sea_navy", nullptr}, {"navy_1", "Captain Edmund Hale"}, {"navy_2", "Lieutenant Clara Vance"}, {"navy_2", "Lieutenant Clara Vance"},
-                                    {"navy_3", "Admiral Sir Rufus Blackwood"}, {"navy_3", "Admiral Sir Rufus Blackwood"}, {"navy_4", "Commander Isobel Thorne"}};
-    static const FacePick castaway[] = {{"sea_castaway", nullptr}, {"castaway_1", nullptr}, {"castaway_2", nullptr}, {"castaway_3", nullptr}, {"castaway_3", nullptr},
-                                        {"castaway_4", nullptr}, {"castaway_5", nullptr}, {"castaway_5", nullptr}};
-    static const FacePick woman[] = {{"sea_captive", nullptr}, {"captive_f_1", nullptr}, {"captive_f_1", nullptr}, {"captive_f_2", nullptr}, {"captive_f_2", nullptr},
-                                     {"captive_f_3", nullptr}, {"captive_f_4", nullptr}, {"captive_f_5", nullptr}, {"captive_f_5", nullptr}};
-    static const FacePick man[] = {{"sea_captive_m", nullptr}, {"sea_captive_m", nullptr}, {"captive_m_1", nullptr}, {"captive_m_2", nullptr}, {"captive_m_2", nullptr}};
-    static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr},
-                                     {"rival_5", nullptr}, {"rival_5", nullptr}, {"rival_6", nullptr}};
-    static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}, {"smuggler_4", nullptr},
-                                        {"smuggler_4", nullptr}, {"smuggler_5", nullptr}};
+    // (every face once: the game picks the one she's seen least lately, Game::PickFace; those not imported are skipped)
+    static const FacePick merchant[] = {{"sea_merchant", nullptr}, {"merchant_1", nullptr}, {"merchant_2", nullptr}, {"merchant_3", nullptr},
+                                        {"merchant_4", nullptr}, {"merchant_5", nullptr}, {"merchant_6", nullptr}, {"merchant_7", nullptr}};
+    static const FacePick navy[] = {{"sea_navy", nullptr}, {"navy_1", "Captain Edmund Hale"}, {"navy_2", "Lieutenant Clara Vance"},
+                                    {"navy_3", "Admiral Sir Rufus Blackwood"}, {"navy_4", "Commander Isobel Thorne"},
+                                    {"navy_5", "Captain Thomas Reyne of the Marines"}, {"navy_6", "Captain Honoria Steele"}};
+    static const FacePick castaway[] = {{"sea_castaway", "Ezra Holt"}, {"castaway_1", "Nell Harrow"}, {"castaway_2", "Old Bartholomew"},
+                                        {"castaway_3", "Kip Tobias"}, {"castaway_4", "Rosa Quill"}, {"castaway_5", "Amara Sol"},
+                                        {"castaway_6", "Midshipman Peter Ash"}, {"castaway_7", "Greta Holm"}, {"castaway_8", "Cookie Marchetti"},
+                                        {"castaway_9", "Fen Ashby"}};
+    static const FacePick woman[] = {{"sea_captive", nullptr}, {"captive_f_1", nullptr}, {"captive_f_2", nullptr}, {"captive_f_3", nullptr},
+                                     {"captive_f_4", nullptr}, {"captive_f_5", nullptr}, {"captive_f_6", nullptr}, {"captive_f_7", nullptr}};
+    static const FacePick man[] = {{"sea_captive_m", nullptr}, {"captive_m_1", nullptr}, {"captive_m_2", nullptr}, {"captive_m_3", nullptr},
+                                   {"captive_m_4", nullptr}};
+    static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr}, {"rival_5", nullptr},
+                                     {"rival_6", nullptr}};
+    static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}, {"smuggler_4", nullptr},
+                                        {"smuggler_5", nullptr}, {"smuggler_6", nullptr}, {"smuggler_7", nullptr}};
     struct P { const char* base; const FacePick* f; int n; };
 #define BS_POOL(b, a) {b, a, (int)(sizeof a / sizeof a[0])}
     static const P k[] = {BS_POOL("sea_merchant", merchant), BS_POOL("sea_navy", navy), BS_POOL("sea_castaway", castaway), BS_POOL("sea_captive", woman),
@@ -598,6 +633,127 @@ inline const char* const kAdriftThanks[3] = {
     "Water... thank you. We'll tell every port what you did.",
     "Three days we drifted. I'll never complain about a hammock again.",
 };
+
+// ---- Passengers: on the way home, out of the fighting, the castaways and the freed captives talk (Game::UpdatePassengers):
+// how they came to be there, what they saw, and an omen of the last story that grows with the stories she's told.
+// Three lines each, a minute or so apart.
+struct Tale { const char* how; const char* saw; };
+inline const Tale kCastawayTales[campaign::BIOMES][4] = {
+    {  // the Temperate Isles: Gentleman Corwin, the guns on the Grey Isle
+     {"We were a packet out of Saltmarsh. Gentleman Corwin took her, very politely, and put us ashore with a bow and no water.",
+      "He kept the ship's bell. Says he collects them. A whole cabin of bells, from every ship he's taken."},
+     {"Our brig ran past the Grey Isle at night. Something on the island opened fire. Not pirates. Guns, big ones, in the rock.",
+      "There's no fort on any chart of the Grey Isle. But I saw the flashes. Dozens of them. Somebody built a fortress out there."},
+     {"A storm put us on the rocks. Eight of us got ashore. Three of us lasted.",
+      "Ships passed the island every day. None of them stopped. They all looked like they were in a hurry to be somewhere else."},
+     {"I was a powder monkey on a navy sloop. We went to have a look at the Grey Isle. The sloop didn't come back from looking.",
+      "Somebody's buying powder by the ton in the Isles, Captain. Not the navy. The navy's short."}},
+    {  // the Tropics: Calypso Vane, the thing under the reef
+     {"We were pearl divers. One morning the reef went dark under the boat, like a cloud over the sun. Then the boat went under.",
+      "It had arms, Captain. Arms like mainmasts. And it sang. I still hear it when the water's still."},
+     {"Calypso Vane's crew took our sloop. She said the sea wanted a gift, and we were it.",
+      "She talks to the water, that one. And I swear something talked back."},
+     {"A hurricane. Out of a clear sky, in an hour. I hung on to a hen coop for two days.",
+      "The old fishermen say the storms never came so fast before this year. Not before the reef started singing."},
+     {"I jumped ship. The cook was trying to kill me. It's a long story, and I was right.",
+      "Every morning the tide brought in dead fish. Thousands. All of them swimming away from something, I reckon."}},
+    {  // the Frozen North: Old Rime, the coil in the ice
+     {"We were whalers. The ice closed round us in a night. In the morning there was a coil of something in it, longer than the ship.",
+      "It moved, Captain. Under the ice. You could see it pass like a shadow under a window."},
+     {"Old Rime found us in a frost fog. He took our furs, our food and our boats.",
+      "He wasn't after the cargo. He wanted our soundings, our charts of the ice. Why would a pirate want charts of the ice?"},
+     {"Our mast went over in a blizzard. Ice on the rigging three inches thick. She just rolled.",
+      "The ice comes further south every year, the whalers say. As if something's pushing it."},
+     {"I was put off a ship for card sharping. On an iceberg. People take cards very seriously up here.",
+      "Something big swam under my berg one night. The whole thing rocked like a cradle. I didn't sleep much after that."}},
+    {  // the Ember Reach: Cinder Kate, the iron beast
+     {"I worked the foundry at Cinderport. Then a ship came with no sails at all, smoking like a chimney, and burned our boats.",
+      "It was iron, Captain. All of it. A ship of iron, and it floated. I've cast iron my whole life and I don't understand it."},
+     {"Cinder Kate set our ship alight for the fun of it. She sang while it burned.",
+      "She's working for someone. Kate never cared about coal before, and now she takes every collier in the Reach."},
+     {"The mountain blew while we were fishing under it. The sea boiled and the sky rained stones.",
+      "Every mountain in the Reach has woken this year. All at once. The old folk say the sea's angry at something."},
+     {"Our captain bought cheap coal from a man with no name. It blew up in the hold.",
+      "Someone is buying all the coal in the Reach. Shiploads of it. Feeding something big."}},
+    {  // the Fog Banks: the Grey Widow, the ship without a crew
+     {"A ship came out of the fog with every lantern lit and not a soul on deck. She rammed us, and sailed on.",
+      "Her sails were rotten through, Captain. You could see the moon through the holes. And she sailed into the wind."},
+     {"The Grey Widow sank us. She stood on her rail and read out our names, as if she was writing them down.",
+      "She said her husband was waiting for us all, down below. I think she believes it."},
+     {"We followed a light in the fog. We thought it was a lighthouse. It led us onto the rocks.",
+      "The lights move out there. They walk over the water. I counted twelve one night, in a line, going west."},
+     {"Our crew vanished. One night they were there; in the morning, only me and the cat. The cat won't talk about it.",
+      "I found their boots on deck. All lined up, neat as a parade. Not a man in any of them."}},
+};
+inline const Tale kCaptiveTales[campaign::BIOMES][3] = {
+    {{"They took me for the ransom. Gentleman Corwin apologised for the ropes. Then he tied them tighter.",
+      "His men talked of a buyer for powder on the Grey Isle. Paying in Spanish silver."},
+     {"Pirates took the packet, and me with it, because I can read a chart.",
+      "They had me copy a chart of the Isles. Every navy anchorage marked. Someone wants to know where the navy is."},
+     {"They took me from the harbour itself. Rowed in at night, bold as you like.",
+      "Their captain kept talking of the Admiral. Not ours. He said the word like a prayer."}},
+    {{"Calypso Vane took me off a merchantman. She wanted someone to sing to her. I can't sing.",
+      "She feeds the reef, Captain. Whole crews. She says the Queen is hungry, and when she's fed she'll rise."},
+     {"I came to study the reef. Now the reef's studying me, from what I've seen.",
+      "They took a diver's map from us. They wanted to know where the reef sings loudest."},
+     {"They kept me in a cage on deck. A good view of the sunsets, I'll give them that.",
+      "A ship with black sails came alongside one night. The captain took his hat off to her. Pirates don't take their hats off."}},
+    {{"They took me for my charts. The ice charts were all they wanted.",
+      "Old Rime's mate said they're charting a road through the ice. For a fleet."},
+     {"My ship was fast in the floes. They walked across the ice to take us.",
+      "They burned whale oil day and night to keep something warm in the hold. I never saw what. It hissed."},
+     {"They raided Iceward for a doctor. I'm the doctor.",
+      "I stitched up a man who'd been bitten. The bite was as wide as a barrel. They said the serpent did it, and laughed."}},
+    {{"They wanted someone who understands steam. I made the mistake of saying I did.",
+      "They're building more than one iron ship, Captain. I saw the plans. A whole fleet."},
+     {"They took me off a collier. The coal they kept. Me, they nearly didn't.",
+      "The coal goes east, past the last islands, where nobody sails. They call it the Admiral's yard."},
+     {"Cinder Kate took me to keep her books. Pirates keep books, it turns out. Terrible ones.",
+      "Her ledger had one buyer for everything. No name. Just a mark: a black sail."}},
+    {{"They took me from Mournwick. They were afraid of the fog, all of them. Pirates, afraid.",
+      "They talked of a herald. A ship with black sails that goes ahead of something, and calls the beasts up from the deep."},
+     {"I'm a chaplain. They wanted their ship blessed. I said I would if they let me go. I'm still deciding.",
+      "They sail with the dead now, they said. The Dutchman's crew. Something has promised them a way out of the fog."},
+     {"They took me from a lighthouse. They put out the light, and took me so nobody would light it again.",
+      "Someone wants the lighthouses dark. All of them. So that something can come through the fog unseen."}},
+};
+// a story's own passengers (a step of the region's story): what they know of its mystery, in place of what they saw
+inline const char* const kStoryTale[campaign::BIOMES] = {
+    "That fortress is real, Captain. I've seen it. Guns cut into the rock, and a flag nobody's flown in fifty years.",
+    "The Queen, the divers call it. They won't say it above water. It lives under the reef, and it's waking.",
+    "The serpent lies coiled round the whole north, Captain. Every hole in the ice is a place it's breathed.",
+    "Iron that floats and fire that sails. The Reach has made a beast of its own, and someone's paying for it.",
+    "The Dutchman's back. She sails the fog with no crew, and every ship she sinks adds to it.",
+};
+// the last story's omens, darker the more she's told: none yet; one or two; three or four; all five
+inline const char* const kOmens[4][4] = {
+    {"The old sailors say the sea's restless this year. Beasts in every corner of it, all waking at once. That's not natural, Captain.",
+     "Five monsters in five seas, the taverns say. One a region, as if somebody shared them out.",
+     "My gran used to say the deep sleeps until someone calls it. Somebody's calling, I think.",
+     "Have you noticed? The beasts all woke the same season. Like a bell was rung."},
+    {"They say you've killed one of the beasts. Good. But a man on the island told me they were brought, Captain. Not born.",
+     "Somebody's paying the pirates to stir up the deep. Nobody who says the name lives long.",
+     "You beat one; the others will know. Things that big talk to each other. And somebody listens.",
+     "They talk of you in every port now. Somebody else is listening to that talk. Be careful."},
+    {"Black sails, Captain. I saw them from the beach. A long line of them, heading east, not a lantern lit.",
+     "The pirates are gathering. All of them, even the ones who hate each other. Somebody's flying a flag they all bow to.",
+     "They call him the Admiral. He was navy once, they say. Now he's something else.",
+     "The black sails were there every time a beast rose. Watching. Like a shepherd with his flock."},
+    {"With the five beasts gone, the black sails have come out of hiding. They're coming for you, Captain. I'd bet my life on it. I'd rather not.",
+     "There's a woman with them who calls up storms. I saw her. She stood on the deck and the sky came down to listen.",
+     "Something bigger than all five still sleeps at the end of the world. The beasts were only its dreams.",
+     "The Lamplighter on Lantern Rock knows. He's always known. Ask him, Captain, before the light goes out."},
+};
+// line `n` (0..2) of a passenger's talk: a castaway (captive false) or a captive, from region `biome`, the quest's seed;
+// storyStep: the quest is a step of the region's story; told: how many of the five stories she's finished
+inline const char* PassengerLine(bool captive, int biome, uint16_t seed, int n, bool storyStep, int told) {
+    biome = (biome % campaign::BIOMES + campaign::BIOMES) % campaign::BIOMES;
+    const Tale& t = captive ? kCaptiveTales[biome][seed % 3] : kCastawayTales[biome][seed % 4];
+    if (n == 0) return t.how;
+    if (n == 1) return storyStep ? kStoryTale[biome] : t.saw;
+    const int stage = told <= 0 ? 0 : told <= 2 ? 1 : told <= 4 ? 2 : 3;
+    return kOmens[stage][(seed / 7 + (unsigned)biome) % 4];
+}
 
 // is a captive (campaign::CaptiveName, a story's) a woman? (for the portrait)
 inline bool CaptiveIsWoman(const std::string& c) {

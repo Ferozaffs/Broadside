@@ -171,6 +171,11 @@ void GameServer::HandlePacket(uint32_t peer, const std::vector<uint8_t>& data) {
         const bool ok = r.ok;
         uint8_t arg = r.Get<uint8_t>();  // (accept: which offer; abandon: which quest)
         if (id >= 0 && ok) world.CampaignAct(id, act, r.ok ? arg : 0);
+    } else if (type == MSG_LIVERY) {  // a new paint (the campaign's shipwright): everyone sees it
+        std::vector<uint8_t> livery = r.GetBlob();
+        if (!r.ok || livery.size() > (size_t)kLiveryMaxBytes) return;
+        peerLivery[peer] = livery;
+        if (peerShip[peer] >= 0) SendPlayerInfo(peerShip[peer], -1);
     } else if (type == MSG_PICK_PERK) {  // the Odyssey: an upgrade, between rounds
         int id = peerShip[peer];
         uint8_t choice = r.Get<uint8_t>();

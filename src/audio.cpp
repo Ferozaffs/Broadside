@@ -739,6 +739,298 @@ Buf UtterBuf(const VoiceParams& v, int kind, uint32_t seed) {
     return Speak(v, s, seed);
 }
 
+// ---- babble: a line said without words ------------------------------------------------------------
+// The line is turned into phones (its own letters: a vowel for each vowel group, a consonant of the right kind before
+// it, a coda at the end of a word), given a prosody (stress, declination, the punctuation's contours, the mood) and
+// rendered by one continuous source-filter voice: the formants and the pitch glide from phone to phone.
+enum PhKind { PH_SIL, PH_VOWEL, PH_STOP, PH_BURST, PH_FRIC, PH_NASAL, PH_LIQ, PH_H };
+struct Phone {
+    PhKind k;
+    float dur;
+    Vowel f;              // the formants it aims for
+    float p0, p1;         // pitch (x the voice's) at its start and end
+    float amp;
+    float nfc = 0, nq = 1;  // a fricative's or burst's noise band
+    bool voiced = true;   // (a stop or fricative: b d g v z or p t k f s)
+};
+constexpr Vowel kEe = {300, 2250, 2950}, kOo = {340, 870, 2250}, kUhh = {600, 1170, 2390};
+constexpr Vowel kL = {360, 1300, 2700}, kR = {420, 1250, 1650}, kW = {300, 650, 2200}, kY = {280, 2200, 2900};
+struct MoodShape {
+    float syl;      // s: a vowel's length
+    float range;    // pitch movement (stress, contours, jitter)
+    float base;     // pitch x
+    float tilt;     // Hz: the source's brightness
+    float trem;     // tremolo depth (fear)
+    float breath, rasp;  // added to the voice's own
+    float decl;     // how far the pitch falls through a clause
+    float loud;     // peak
+};
+constexpr MoodShape kMoods[MOOD_COUNT] = {
+    {0.115f, 1.00f, 1.00f, 1500, 0.00f, 0.00f, 0.00f, 0.14f, 0.80f},  // plain
+    {0.100f, 1.45f, 1.08f, 1900, 0.00f, 0.00f, 0.00f, 0.10f, 0.85f},  // cheerful: quick, high, sing-song
+    {0.135f, 0.65f, 0.92f, 1150, 0.00f, 0.05f, 0.20f, 0.18f, 0.82f},  // gruff: slow, low, rough, flat
+    {0.150f, 0.85f, 0.97f, 1000, 0.00f, 0.22f, 0.00f, 0.10f, 0.66f},   // eerie: slow glides, breathy
+    {0.095f, 1.30f, 1.05f, 2400, 0.00f, 0.00f, 0.25f, 0.20f, 0.92f},  // angry: fast, bright, rough, loud
+    {0.088f, 1.50f, 1.16f, 1800, 0.22f, 0.15f, 0.00f, 0.06f, 0.78f},  // scared: fast, high, trembling
+    {0.150f, 0.55f, 0.92f, 1000, 0.00f, 0.20f, 0.05f, 0.24f, 0.62f},  // weary: slow, low, sinking
+};
+
+bool IsVowelCh(char c) { return c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' || c == 'y'; }
+Vowel VowelOf(char c, char next) {
+    switch (c) {
+        case 'a': return next == 'u' || next == 'w' ? kOh : kAh;
+        case 'e': return next == 'e' ? kEe : kEh;
+        case 'i': case 'y': return kEe;
+        case 'o': return next == 'o' ? kOo : kOh;
+        default: return next ? kOo : kUhh;
+    }
+}
+
+std::vector<Phone> ScriptLine(const char* line, int mood, Rng& r, float costMul) {
+    const MoodShape& M = kMoods[std::max(0, std::min(mood, (int)MOOD_COUNT - 1))];
+    struct Word { std::string w; char punct; bool caps, laugh; };
+    std::vector<Word> words;
+    {
+        std::string cur;
+        bool caps = true;
+        int letters = 0;
+        auto flush = [&](char p) {
+            if (!cur.empty()) {
+                const bool laugh = cur == "ha" || cur == "hah" || cur == "heh" || cur == "haha" || cur == "hahaha" || cur == "ho";
+                words.push_back({cur, p, caps && letters > 1, laugh});
+            } else if (p && !words.empty() && !words.back().punct) words.back().punct = p;
+            cur.clear();
+            caps = true;
+            letters = 0;
+        };
+        for (const char* s = line; *s; ++s) {
+            const char c = *s;
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+                if (c >= 'a') caps = false;
+                cur.push_back((char)(c | 32));
+                ++letters;
+            } else if (c == '\'') {
+            } else if (c == '.' && s[1] == '.' ) { flush('~'); while (s[1] == '.') ++s; }
+            else if (c == ',' || c == '.' || c == '?' || c == '!' || c == ';' || c == ':' || c == '-') flush(c == ';' || c == ':' || c == '-' ? ',' : c);
+            else flush(0);
+        }
+        flush(0);
+    }
+    // the budget: about as long as the line takes to type out, never more than ~2.4 s
+    std::vector<int> keep;
+    {
+        float t = 0.0f;
+        const float cap = 2.4f;
+        int lastFrom = (int)words.size() - 1;
+        for (int i = 0; i < (int)words.size(); ++i) {
+            int g = 0;
+            for (size_t k = 0; k < words[i].w.size(); ++k)
+                if (IsVowelCh(words[i].w[k]) && (k == 0 || !IsVowelCh(words[i].w[k - 1]))) ++g;
+            t += std::max(1, std::min(g, 3)) * (M.syl + 0.05f) * costMul;
+            if (t > cap && i < lastFrom) { keep.push_back(lastFrom); break; }  // (skip to the last word: its contour lands)
+            keep.push_back(i);
+        }
+    }
+    std::vector<Phone> ph;
+    auto add = [&](PhKind k, float dur, Vowel f, float p0, float p1, float amp) { ph.push_back({k, dur, f, p0, p1, amp}); };
+    auto consonant = [&](char c, char next, float p, float amp, bool coda) {
+        const float sc = M.syl / 0.115f;  // (consonants scale with the tempo a little)
+        const float s = 0.6f + 0.4f * sc;
+        switch (c) {
+            case 'p': case 'b': case 't': case 'd': case 'k': case 'g': case 'c': case 'q': {
+                const bool v = c == 'b' || c == 'd' || c == 'g';
+                const float fc = c == 'p' || c == 'b' ? 900.0f : c == 't' || c == 'd' ? 4200.0f : 2200.0f;
+                Phone cl{PH_STOP, 0.035f * s, kUhh, p, p, amp};
+                cl.voiced = v;
+                ph.push_back(cl);
+                if (!coda || r.F() < 0.6f) {
+                    Phone b{PH_BURST, 0.018f * s, kUhh, p, p, amp, fc, 1.6f};
+                    b.voiced = v;
+                    ph.push_back(b);
+                }
+                break;
+            }
+            case 's': case 'z': case 'x': { Phone f{PH_FRIC, 0.065f * s, kEh, p, p, amp * 0.6f, 6200.0f, 2.5f}; f.voiced = c == 'z'; ph.push_back(f); break; }
+            case 'j': { Phone f{PH_FRIC, 0.06f * s, kEe, p, p, amp * 0.6f, 2900.0f, 2.2f}; f.voiced = true; ph.push_back(f); break; }
+            case 'f': case 'v': { Phone f{PH_FRIC, 0.055f * s, kUhh, p, p, amp * 0.35f, 4500.0f, 0.7f}; f.voiced = c == 'v'; ph.push_back(f); break; }
+            case 'h': add(PH_H, 0.05f * s, VowelOf(next, 0), p, p, amp * 0.55f); break;
+            case 'm': case 'n': add(PH_NASAL, 0.055f * s, kMm, p, p, amp * 0.8f); break;
+            case 'l': add(PH_LIQ, 0.045f * s, kL, p, p, amp * 0.8f); break;
+            case 'r': add(PH_LIQ, 0.045f * s, kR, p, p, amp * 0.75f); break;
+            case 'w': add(PH_LIQ, 0.04f * s, kW, p, p, amp * 0.75f); break;
+            case 'y': add(PH_LIQ, 0.035f * s, kY, p, p, amp * 0.75f); break;
+            default: break;
+        }
+    };
+    // clauses: the pitch falls through each, ending on the punctuation's contour
+    int clauseStart = 0;
+    for (int ki = 0; ki < (int)keep.size(); ++ki) {
+        const Word& W = words[keep[ki]];
+        // where we are in the clause (for the declination)
+        int clauseEnd = ki;
+        while (clauseEnd < (int)keep.size() - 1 && !words[keep[clauseEnd]].punct) ++clauseEnd;
+        const float pos = clauseEnd > clauseStart ? (float)(ki - clauseStart) / (clauseEnd - clauseStart) : 0.0f;
+        const bool last = ki == clauseEnd;
+        const char punct = last ? (W.punct ? W.punct : '.') : 0;
+        const float decl = 1.0f + M.decl * 0.5f - M.decl * pos;
+        const bool emph = W.caps || (punct == '!' && W.w.size() > 2);
+        if (W.laugh) {  // ha-ha: staccato, high, falling
+            const int n = std::max(2, (int)W.w.size() / 2);
+            for (int k = 0; k < n; ++k) {
+                const float p = M.base * (1.25f - 0.07f * k) * decl;
+                add(PH_H, 0.045f, kAh, p, p, 0.7f);
+                add(PH_VOWEL, 0.085f, kAh, p, p * 0.93f, 1.0f - 0.12f * k);
+                add(PH_SIL, 0.045f, kAh, p, p, 0.0f);
+            }
+            if (punct) { add(PH_SIL, 0.16f, kUhh, M.base, M.base, 0.0f); clauseStart = ki + 1; }
+            continue;
+        }
+        // the word's syllables, from its letters
+        const std::string& w = W.w;
+        size_t i = 0;
+        int syl = 0, nsyl = 0;
+        for (size_t k = 0; k < w.size(); ++k)
+            if (IsVowelCh(w[k]) && (k == 0 || !IsVowelCh(w[k - 1]))) ++nsyl;
+        nsyl = std::max(1, std::min(nsyl, 3));
+        while (i < w.size() && syl < 3) {
+            std::string onset;
+            while (i < w.size() && !IsVowelCh(w[i])) onset.push_back(w[i++]);
+            if (i >= w.size()) {  // (a word without vowels, or the end: a coda)
+                if (!onset.empty() && !ph.empty()) consonant(onset[0], 0, ph.back().p1, 0.7f, true);
+                break;
+            }
+            const char v0 = w[i], v1 = i + 1 < w.size() && IsVowelCh(w[i + 1]) ? w[i + 1] : 0;
+            while (i < w.size() && IsVowelCh(w[i])) ++i;
+            const bool stressed = syl == 0 && (w.size() >= 4 || nsyl == 1) && (emph || r.F() < 0.75f);
+            const bool final = last && syl == nsyl - 1;
+            float p = M.base * decl * (1.0f + (stressed ? 0.16f : -0.03f) * M.range + r.R(-0.05f, 0.05f) * M.range);
+            if (emph) p *= 1.0f + 0.14f * M.range;
+            float amp = (stressed ? 1.0f : 0.78f) * r.R(0.88f, 1.0f) * (emph ? 1.1f : 1.0f);
+            float dur = M.syl * (stressed ? 1.25f : 0.85f) * r.R(0.85f, 1.15f);
+            float p1 = p * (stressed ? 0.97f : 0.99f);
+            if (final) {  // the clause's end
+                dur *= 1.45f;
+                switch (punct) {
+                    case '?': p1 = p * (1.0f + 0.42f * M.range); break;
+                    case '!': p *= 1.0f + 0.12f * M.range; p1 = p * (1.0f - 0.22f * M.range); amp *= 1.1f; break;
+                    case ',': p1 = p * (1.0f + 0.06f * M.range); break;
+                    case '~': p1 = p * 0.82f; dur *= 1.3f; amp *= 0.8f; break;
+                    default: p1 = p * (1.0f - 0.16f * fminf(M.range, 1.2f)); break;
+                }
+            }
+            // its onset: the cluster's first consonant (and a liquid after it: "tr", "pl", "sw")
+            if (!onset.empty()) {
+                consonant(onset[0], v0, p, amp, false);
+                if (onset.size() > 1 && (onset.back() == 'r' || onset.back() == 'l' || onset.back() == 'w')) consonant(onset.back(), v0, p, amp, false);
+            }
+            Vowel a = VowelOf(v0, v1);
+            if (v1 && v1 != v0 && !(v0 == 'a' && v1 == 'u') && !(v0 == 'o' && v1 == 'o')) {  // a diphthong: glide to the second
+                add(PH_VOWEL, dur * 0.6f, a, p, p + (p1 - p) * 0.6f, amp);
+                add(PH_VOWEL, dur * 0.4f, VowelOf(v1, 0), p + (p1 - p) * 0.6f, p1, amp * 0.9f);
+            } else
+                add(PH_VOWEL, dur, a, p, p1, amp);
+            ++syl;
+            if (syl >= 3) break;
+        }
+        // the word's coda: its last letter, if a consonant
+        if (!w.empty() && !IsVowelCh(w.back()) && !ph.empty() && ph.back().k == PH_VOWEL) consonant(w.back(), 0, ph.back().p1, 0.65f, true);
+        // between words: mostly joined; a breath at the punctuation
+        if (punct) {
+            const float gap = punct == ',' ? 0.13f : punct == '~' ? 0.34f : 0.22f;
+            add(PH_SIL, gap * (M.syl / 0.115f), kUhh, ph.empty() ? M.base : ph.back().p1, M.base, 0.0f);
+            clauseStart = ki + 1;
+        } else if (r.F() < 0.25f)
+            add(PH_SIL, 0.025f, kUhh, ph.back().p1, ph.back().p1, 0.0f);
+    }
+    if (ph.empty()) add(PH_VOWEL, M.syl * 2.0f, kAh, M.base, M.base * 0.85f, 1.0f);
+    add(PH_SIL, 0.06f, kUhh, ph.back().p1, ph.back().p1, 0.0f);
+    return ph;
+}
+
+Buf RenderPhones(const VoiceParams& v, const std::vector<Phone>& ph, int mood, uint32_t seed) {
+    const MoodShape& M = kMoods[std::max(0, std::min(mood, (int)MOOD_COUNT - 1))];
+    Rng r(seed * 7919u + 29u);
+    const float breath = fminf(1.0f, v.breath + M.breath), rasp = fminf(1.0f, v.rasp + M.rasp);
+    Buf out;
+    float ph0 = 0.0f, sub = 1.0f;
+    Biquad f1, f2, f3, nb;
+    OnePole tilt, nasalLp;
+    tilt.Set(M.tilt);
+    nasalLp.Set(480.0f);
+    Wander jit, shimmer;
+    // smoothed state: formants, pitch, voicing, noise, nasality
+    float cf1 = ph[0].f.f1, cf2 = ph[0].f.f2, cf3 = ph[0].f.f3, cp = v.pitch * ph[0].p0, va = 0, na = 0, nm = 0, ha = 0;
+    const float kF = 1.0f - expf(-1.0f / (0.022f * SR)), kP = 1.0f - expf(-1.0f / (0.03f * SR));
+    const float kA = 1.0f - expf(-1.0f / (0.008f * SR)), kN = 1.0f - expf(-1.0f / (0.004f * SR));
+    float tAll = 0.0f;
+    for (const Phone& p : ph) {
+        const int n = std::max(1, (int)(p.dur * SR));
+        if (p.k == PH_FRIC || p.k == PH_BURST) nb.Band(p.nfc, p.nq);
+        for (int i = 0; i < n; ++i, tAll += 1.0f / SR) {
+            const float t = (float)i / n;
+            // what this phone wants
+            float tv = 0, tn = 0, th = 0, tm = 0;
+            switch (p.k) {
+                case PH_VOWEL: tv = p.amp * (0.8f + 0.2f * sinf(3.14159f * t)); break;
+                case PH_LIQ:   tv = p.amp; break;
+                case PH_NASAL: tv = p.amp; tm = 1.0f; break;
+                case PH_STOP:  tv = p.voiced ? p.amp * 0.12f : 0.0f; break;
+                case PH_BURST: tn = p.amp * 1.3f * expf(-t * 4.0f); tv = p.voiced ? p.amp * 0.4f : 0.0f; break;
+                case PH_FRIC:  tn = p.amp * (0.6f + 0.4f * sinf(3.14159f * t)); tv = p.voiced ? p.amp * 0.35f : 0.0f; break;
+                case PH_H:     th = p.amp; break;
+                default: break;
+            }
+            const float kAm = (p.k == PH_STOP || p.k == PH_BURST) ? kN : kA;
+            va += (tv - va) * kAm;
+            na += (tn - na) * kN;
+            ha += (th - ha) * kA;
+            nm += (tm - nm) * kA;
+            const float fs = v.formant;
+            cf1 += (p.f.f1 * fs - cf1) * kF;
+            cf2 += (p.f.f2 * fs - cf2) * kF;
+            cf3 += (p.f.f3 * fs - cf3) * kF;
+            const float k = t * t * (3.0f - 2.0f * t);
+            cp += (v.pitch * (p.p0 + (p.p1 - p.p0) * k) - cp) * kP;
+            // the source: a pitched buzz (vibrato, jitter; a rough voice's uneven pulses) and noise
+            const float vib = 1.0f + (0.012f + 0.03f * M.trem) * sinf(TAU * 5.5f * tAll);
+            const float f0 = cp * vib * (1.0f + (jit.Next(r, 40.0f) - 0.5f) * (0.02f + 0.08f * rasp));
+            ph0 += f0 / SR;
+            if (ph0 >= 1.0f) { ph0 -= 1.0f; sub = r.F() < rasp * 0.6f ? r.R(0.3f, 1.0f) : 1.0f; }
+            const float glot = tilt.Lp((1.0f - 2.0f * ph0) * sub) * 3.0f;
+            const float noise = r.W();
+            float src = glot * va * (1.0f - 0.45f * breath) + noise * (va * 0.22f * breath + ha * 0.5f);
+            f1.Band(cf1, 6.0f);
+            f2.Band(cf2, 9.0f);
+            f3.Band(cf3, 12.0f);
+            float y = f1.Run(src) + f2.Run(src) * 0.9f + f3.Run(src) * 0.45f;
+            if (nm > 0.01f) y = y * (1.0f - nm) + nm * nasalLp.Lp(y * 0.5f + glot * va * 0.3f) * 1.9f;
+            y += nb.Run(noise) * na * 0.9f;  // (s, sh, f; a stop's burst)
+            const float trem = 1.0f + M.trem * sinf(TAU * 7.0f * tAll);
+            out.push_back(y * trem * (0.88f + 0.24f * shimmer.Next(r, 6.0f)));
+        }
+    }
+    const int fade = std::min((int)out.size(), (int)(0.01f * SR));
+    for (int i = 0; i < fade; ++i) out[i] *= (float)i / fade;
+    float peak = 1e-4f;
+    for (float x : out) peak = fmaxf(peak, fabsf(x));
+    for (float& x : out) x *= M.loud / peak;
+    return out;
+}
+
+Buf BabbleBuf(const VoiceParams& v, const char* line, int mood, uint32_t seed) {
+    // (fewer words until it fits: about as long as the line takes to type out, never much over 2.4 s)
+    std::vector<Phone> ph;
+    float cost = 1.0f;
+    for (int tries = 0; tries < 10; ++tries, cost *= 1.2f) {
+        Rng r(seed + 101u);
+        ph = ScriptLine(line ? line : "", mood, r, cost);
+        float t = 0.0f;
+        for (const Phone& p : ph) t += p.dur;
+        if (t <= 2.5f) break;
+    }
+    return RenderPhones(v, ph, mood, seed);
+}
+
 constexpr int kUtterSlots = 4;
 Sound utterSounds[kUtterSlots];
 int utterNext = 0;
@@ -758,6 +1050,22 @@ void Utter(const VoiceParams& v, int kind, float vol, uint32_t seed) {
 }
 
 Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed) { return ToWave(UtterBuf(v, kind, seed)); }
+
+void Babble(const VoiceParams& v, const char* line, int mood, float vol, uint32_t seed) {
+    if (!ready || muted) return;
+    for (Sound& o : utterSounds)  // (one voice at a time: a new line cuts the last one off)
+        if (o.frameCount && IsSoundPlaying(o)) StopSound(o);
+    Sound& s = utterSounds[utterNext];
+    utterNext = (utterNext + 1) % kUtterSlots;
+    if (s.frameCount) { StopSound(s); UnloadSound(s); }
+    Wave w = ToWave(BabbleBuf(v, line, mood, seed));
+    s = LoadSoundFromWave(w);
+    UnloadWave(w);
+    SetSoundVolume(s, Clamp(vol, 0.0f, 1.0f));
+    PlaySound(s);
+}
+
+Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed) { return ToWave(BabbleBuf(v, line, mood, seed)); }
 
 bool Init() {
     InitAudioDevice();

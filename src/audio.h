@@ -63,6 +63,12 @@ struct VoiceParams {
 enum Utterance { UT_HMM = 0, UT_AH, UT_EH, UT_OH, UT_HEH, UT_HMPH, UT_HUM, UT_COUNT };
 void Utter(const VoiceParams& v, int kind, float vol = 0.8f, uint32_t seed = 1);
 Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed = 1);  // (the same, as a wave: tests, --sfx-export)
+// A whole line "said" without words: babble that follows it - a syllable for each of its own (its consonants and
+// vowels, so it has the line's rhythm), stress on the long words, the pitch falling through a clause, a pause at a
+// comma, a rise at a question, a lift at an exclamation, laughter at a "Ha!" - in a mood
+enum Mood { MOOD_PLAIN = 0, MOOD_CHEERFUL, MOOD_GRUFF, MOOD_EERIE, MOOD_ANGRY, MOOD_SCARED, MOOD_WEARY, MOOD_COUNT };
+void Babble(const VoiceParams& v, const char* line, int mood, float vol = 0.8f, uint32_t seed = 1);
+Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed = 1);
 
 // Music: tracks streamed from data/music, one per state of the game, crossfaded as it changes. Each state's
 // file is <name>.ogg (or .mp3 / .wav / .qoa), with more takes as <name>_2, <name>_3...: a state with several
