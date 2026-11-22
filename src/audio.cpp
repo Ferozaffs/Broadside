@@ -1067,6 +1067,26 @@ void Babble(const VoiceParams& v, const char* line, int mood, float vol, uint32_
 
 Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed) { return ToWave(BabbleBuf(v, line, mood, seed)); }
 
+bool PlayVoice(const char* path, float vol) {
+    if (!ready || muted || !path || !FileExists(path)) return false;
+    for (Sound& o : utterSounds)  // (one voice at a time)
+        if (o.frameCount && IsSoundPlaying(o)) StopSound(o);
+    Sound& s = utterSounds[utterNext];
+    utterNext = (utterNext + 1) % kUtterSlots;
+    if (s.frameCount) { StopSound(s); UnloadSound(s); }
+    s = LoadSound(path);
+    if (!s.frameCount) return false;
+    SetSoundVolume(s, Clamp(vol, 0.0f, 1.0f));  // (the master volume is applied globally)
+    PlaySound(s);
+    return true;
+}
+
+uint32_t LineHash(const char* line) {
+    uint32_t h = 2166136261u;
+    for (const char* c = line; c && *c; ++c) { h ^= (uint8_t)*c; h *= 16777619u; }
+    return h;
+}
+
 bool Init() {
     InitAudioDevice();
     if (!IsAudioDeviceReady()) return false;

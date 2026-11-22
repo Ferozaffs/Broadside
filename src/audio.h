@@ -69,6 +69,10 @@ Wave UtterWave(const VoiceParams& v, int kind, uint32_t seed = 1);  // (the same
 enum Mood { MOOD_PLAIN = 0, MOOD_CHEERFUL, MOOD_GRUFF, MOOD_EERIE, MOOD_ANGRY, MOOD_SCARED, MOOD_WEARY, MOOD_COUNT };
 void Babble(const VoiceParams& v, const char* line, int mood, float vol = 0.8f, uint32_t seed = 1);
 Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed = 1);
+// A line spoken for real: a voice file (data/voices/<who>/<hash>.ogg, made offline by an AI voice model) played
+// in the babble's place; false if it couldn't be (no file, no audio)
+bool PlayVoice(const char* path, float vol = 0.85f);
+uint32_t LineHash(const char* line);  // (the file's name for a line: FNV-1a of its text)
 
 // Music: tracks streamed from data/music, one per state of the game, crossfaded as it changes. Each state's
 // file is <name>.ogg (or .mp3 / .wav / .qoa), with more takes as <name>_2, <name>_3...: a state with several

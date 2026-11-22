@@ -504,8 +504,11 @@ inline sfx::VoiceParams ParamsOf(const Voice& v) {
     return p;
 }
 inline void Voiced(const char* id, const char* line, uint32_t salt) {
+    if (!line) return;
+    if (sfx::PlayVoice(TextFormat("data/voices/%s/%08x.ogg", id, sfx::LineHash(line)))) return;  // (spoken, where there's a recording)
+    if (getenv("BS_VOICELOG")) printf("[voice] no recording: %s %08x %s\n", id, sfx::LineHash(line), line);
     const Voice* v = VoiceOf(id);
-    if (!v || !line) return;
+    if (!v) return;
     const uint32_t h = salt * 2654435761u + (uint32_t)strlen(line) * 40503u;
     sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h);
 }

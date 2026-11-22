@@ -208,6 +208,7 @@ enum class Mode { Menu, Connecting, Playing, Shipyard };
 
 static std::string QuestTitle(const Quest& q);  // (the campaign's quests, as the captain reads them: below)
 static std::string CaptiveOf(const Quest& q);
+static const char* Scripted(const char* key);  // (the story's own lines: kScripted, further down)
 struct FeedLine {  // "<a><mid><b>" with a/b in their own colours (usually team colours)
     std::string a, mid, b;
     Color ca, cb;
@@ -3461,7 +3462,7 @@ void Game::PlayEvent(const GameEvent& e) {
                     Notice("THE LAST STORY IS TOLD", ui::kGold, 6.0f);
                     Feed3("THE LEVIATHAN", "  is sunk: the lights out there have gone dark", "", ui::kGold, ui::kText);
                     Say("lantern_harbour", "The Lamplighter", "Keeper of Lantern Rock",
-                        "So it's done. The lights out there have gone dark, Captain, all but mine. Sail where you like now: the sea is yours.");
+                        Scripted("finale"));
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.7f);
                     break;
                 case EV_PROLOGUE: PrologueScript(e.flags); break;
@@ -3469,14 +3470,14 @@ void Game::PlayEvent(const GameEvent& e) {
                     Notice("THE SOVEREIGN IS YOURS AGAIN", ui::kGold, 6.0f);
                     Feed3("THE SOVEREIGN", "  in her iron, at the shipwright's for you: sail her from any port", "", ui::kGold, ui::kText);
                     Say("officer_penhallow", "Ruth Penhallow", "Your quartermaster",
-                        "She's ours again, Captain. Iron on her sides and Ashgrave's stink in her cabins, but she's ours. The lads are already scrubbing.");
+                        Scripted("sovereign"));
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.8f);
                     break;
                 case EV_MARA:
                     Notice("MARA IS FREE", ui::kGold, 6.0f);
                     Feed3("MARA VELL", "  the bell rang, the storm broke, and she's aboard", "", ui::kGold, ui::kText);
                     Say("story_mara", "Mara Vell", "Your first mate",
-                        "I could hear you the whole time, you know. Every broadside. I kept the storm off you as long as I could. Now let's finish him.");
+                        Scripted("mara_free"));
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.9f);
                     break;
                 case EV_JOINED:
@@ -3505,12 +3506,7 @@ void Game::PlayEvent(const GameEvent& e) {
                     floats.push_back({Vector3Add(e.pos, {0, 18, 0}), TextFormat("%s RETURNS", TextToUpper(kOfficerNames[role])), ui::kGold, 4.0f});
                     {
                         static const char* const face[OFFICERS] = {"officer_gage", "officer_stroud", "officer_fairweather", "officer_whitlock", "officer_penhallow"};
-                        static const char* const line[OFFICERS] = {
-                            "Nine days on the ice, Captain, and every one of them I thought about the guns. Give me a deck and I'll give you a broadside.",
-                            "Thought you was dead, Captain! Thought we all was! Well, I'm not, and I've a rope in me hand. Where d'you want me?",
-                            "I kept a log the whole time, Captain. Every current, every reef, every one of Calypso's anchorages. I knew you'd want it.",
-                            "They had me patching up the men who built his iron, Captain. I saw what he means to do with her. Let's not let him.",
-                            "The Dutchman's crew are our lads, Captain. Drowned, but ours. I promised them we'd put it right."};
+                        static const char* const line[OFFICERS] = {Scripted("home_gage"), Scripted("home_stroud"), Scripted("home_fair"), Scripted("home_whit"), Scripted("home_pen")};
                         Say(face[role], who, TextFormat("Your %s, off the Sovereign", kOfficerNames[role]), line[role]);
                     }
                     sfx::PlayFlat(sfx::Confirm, 0.8f, 0.8f);
@@ -7796,10 +7792,13 @@ static int RunDedicated(const Options& o) {
     return 0;
 }
 
+static int ExportLines(const char* path);  // (--lines-export: at the end of the file)
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--simtest")) return RunSimTest();
         if (!strcmp(argv[i], "--sfx-export") && i + 1 < argc) return sfx::ExportAll(argv[i + 1]) ? 0 : 1;
+        if (!strcmp(argv[i], "--lines-export") && i + 1 < argc) return ExportLines(argv[i + 1]);
         if (!strcmp(argv[i], "--voice-export") && i + 2 < argc) {  // <list: "id|line" per line> <dir>: each as NN_id.wav (the people's babble)
             FILE* f = fopen(argv[i + 1], "rb");
             if (!f) return 1;
@@ -8742,6 +8741,39 @@ void Game::CampaignAct(int act, int arg) {
     Send(w.buf, true);
 }
 
+// The story's own lines, spoken from main.cpp (the prologue's script, the officers home, the Sovereign, Mara, the
+// end): one table, so --lines-export finds them all
+struct ScriptedLine { const char* key; const char* id; const char* line; };
+static const ScriptedLine kScripted[] = {
+    {"pro_mara1", "story_mara", "All hands at quarters, Captain. Pirates off the bow, and the Admiral's signalling: break their line."},
+    {"pro_ash1", "story_ashgrave", "A fine night for it, Captain. Show them what the Sovereign can do. I'll be watching."},
+    {"pro_stroud", "officer_stroud", "Guns run out and the lads are singing, Captain! Give us the word!"},
+    {"pro_fair", "officer_fairweather", "Sails all round us, Captain! Black sails! There was nothing on the glass a minute ago!"},
+    {"pro_ash2", "story_ashgrave", "Forgive me, Captain. The sea needs a master, and a master needs a voice the sea will answer. I'm taking Mara."},
+    {"pro_mara2", "story_mara", "Captain! The Dominion's boats are alongside, they're boarding us! Don't let him take the -"},
+    {"pro_ash3", "story_ashgrave", "Ring them. All five. Let the deep hear it."},
+    {"pro_gage", "officer_gage", "Bells? Out here? Captain... the water's gone still."},
+    {"pro_whit", "officer_whitlock", "Something's under us! Captain, something's under the keel!"},
+    {"pro_pen", "officer_penhallow", "She's going, Captain! Abandon ship! Abandon -"},
+    {"tom1", "haverly_wright", "Easy, Captain. Easy. Old Tom Fennick. I pulled you out of the surf three mornings back, and you've not said a sensible word since."},
+    {"tom2", "haverly_wright", "This washed up beside you. A navy dispatch case, the Admiral's own seal. Five names, five seas, and a bell broken in five. Perhaps you can make sense of it."},
+    {"tom3", "haverly_wright", "The Admiralty's posted the Sovereign lost to pirates, with all hands. Nobody will believe you, Captain. So don't tell them. Show them."},
+    {"tom4", "haverly_wright", "I've a cutter at the pier. Not much, but she's sound. Take her, and bring back your ship. The taverns will know where the Five are."},
+    {"home_gage", "officer_gage", "Nine days on the ice, Captain, and every one of them I thought about the guns. Give me a deck and I'll give you a broadside."},
+    {"home_stroud", "officer_stroud", "Thought you was dead, Captain! Thought we all was! Well, I'm not, and I've a rope in me hand. Where d'you want me?"},
+    {"home_fair", "officer_fairweather", "I kept a log the whole time, Captain. Every current, every reef, every one of Calypso's anchorages. I knew you'd want it."},
+    {"home_whit", "officer_whitlock", "They had me patching up the men who built his iron, Captain. I saw what he means to do with her. Let's not let him."},
+    {"home_pen", "officer_penhallow", "The Dutchman's crew are our lads, Captain. Drowned, but ours. I promised them we'd put it right."},
+    {"sovereign", "officer_penhallow", "She's ours again, Captain. Iron on her sides and Ashgrave's stink in her cabins, but she's ours. The lads are already scrubbing."},
+    {"mara_free", "story_mara", "I could hear you the whole time, you know. Every broadside. I kept the storm off you as long as I could. Now let's finish him."},
+    {"finale", "lantern_harbour", "So it's done. The lights out there have gone dark, Captain, all but mine. Sail where you like now: the sea is yours."},
+};
+static const char* Scripted(const char* key) {
+    for (const ScriptedLine& l : kScripted)
+        if (!strcmp(l.key, key)) return l.line;
+    return "";
+}
+
 // ---- the regions' stories ---------------------------------------------------------------------------------------
 static const char* const kStoryName[campaign::CHAINS] = {"The Guns of the Grey Isle", "The Queen Beneath the Reef", "The Coil in the Ice",
                                                          "The Iron Beast", "The Ship Without a Crew", "The Last Voyage"};
@@ -9379,34 +9411,34 @@ void Game::PrologueScript(int stage) {
             proDeepAt = proAshoreAt = -1.0;
             Script(4.5, "!notice", "", "", "THE LAST NIGHT OF THE SOVEREIGN");  // (after the region's own card)
             Script(0.5, "!feed", "THE PROLOGUE", "  the edge of the Ember Reach, by night   (Esc: skip it)", "");
-            Script(5.5, mara, "Mara Vell", "First mate of the Sovereign", "All hands at quarters, Captain. Pirates off the bow, and the Admiral's signalling: break their line.");
-            Script(14.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "A fine night for it, Captain. Show them what the Sovereign can do. I'll be watching.");
-            Script(27.0, "officer_stroud", "Jonah Stroud", "Bosun of the Sovereign", "Guns run out and the lads are singing, Captain! Give us the word!");
+            Script(5.5, mara, "Mara Vell", "First mate of the Sovereign", Scripted("pro_mara1"));
+            Script(14.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", Scripted("pro_ash1"));
+            Script(27.0, "officer_stroud", "Jonah Stroud", "Bosun of the Sovereign", Scripted("pro_stroud"));
             break;
         case PRO_BETRAYAL:
             script.clear();
             Notice("BLACK SAILS", ui::kRed, 4.0f);
-            Script(1.0, "officer_fairweather", "Grace Fairweather", "Navigator of the Sovereign", "Sails all round us, Captain! Black sails! There was nothing on the glass a minute ago!");
-            Script(8.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "Forgive me, Captain. The sea needs a master, and a master needs a voice the sea will answer. I'm taking Mara.");
-            Script(16.0, mara, "Mara Vell", "First mate of the Sovereign", "Captain! The Dominion's boats are alongside, they're boarding us! Don't let him take the -");
-            Script(24.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", "Ring them. All five. Let the deep hear it.");
-            Script(30.0, "officer_gage", "Silas Gage", "Master gunner of the Sovereign", "Bells? Out here? Captain... the water's gone still.");
+            Script(1.0, "officer_fairweather", "Grace Fairweather", "Navigator of the Sovereign", Scripted("pro_fair"));
+            Script(8.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", Scripted("pro_ash2"));
+            Script(16.0, mara, "Mara Vell", "First mate of the Sovereign", Scripted("pro_mara2"));
+            Script(24.0, ash, "Lord Admiral Ashgrave", "Aboard the Dominion", Scripted("pro_ash3"));
+            Script(30.0, "officer_gage", "Silas Gage", "Master gunner of the Sovereign", Scripted("pro_gage"));
             break;
         case PRO_DEEP:
             script.clear();
             proDeepAt = GetTime();
-            Script(1.0, "officer_whitlock", "Amos Whitlock", "Surgeon of the Sovereign", "Something's under us! Captain, something's under the keel!");
-            Script(6.5, "officer_penhallow", "Ruth Penhallow", "Quartermaster of the Sovereign", "She's going, Captain! Abandon ship! Abandon -");
+            Script(1.0, "officer_whitlock", "Amos Whitlock", "Surgeon of the Sovereign", Scripted("pro_whit"));
+            Script(6.5, "officer_penhallow", "Ruth Penhallow", "Quartermaster of the Sovereign", Scripted("pro_pen"));
             break;
         case PRO_ASHORE: {
             script.clear();
             if (proDeepAt < 0.0) proDeepAt = GetTime() - 30.0;
             proAshoreAt = GetTime();
             const char* tom = "haverly_wright";
-            Script(3.5, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "Easy, Captain. Easy. Old Tom Fennick. I pulled you out of the surf three mornings back, and you've not said a sensible word since.");
-            Script(14.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "This washed up beside you. A navy dispatch case, the Admiral's own seal. Five names, five seas, and a bell broken in five. Perhaps you can make sense of it.");
-            Script(26.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "The Admiralty's posted the Sovereign lost to pirates, with all hands. Nobody will believe you, Captain. So don't tell them. Show them.");
-            Script(38.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", "I've a cutter at the pier. Not much, but she's sound. Take her, and bring back your ship. The taverns will know where the Five are.");
+            Script(3.5, tom, "Old Tom Fennick", "Shipwright of Port Haverly", Scripted("tom1"));
+            Script(14.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", Scripted("tom2"));
+            Script(26.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", Scripted("tom3"));
+            Script(38.0, tom, "Old Tom Fennick", "Shipwright of Port Haverly", Scripted("tom4"));
             Script(48.0, "!feed", "THE STORY", "  Ashgrave's Five, one in each sea: every region's taverns tell its story", "");
             break;
         }
@@ -9844,4 +9876,84 @@ void Game::PickPerkUi(int k) {
     w.Put((uint8_t)k);
     Send(w.buf, true);
     sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
+}
+
+// --lines-export <file>: every line the campaign's people can say, with the face that says it (a TSV: id, hash, mood,
+// text) - what the AI voice model renders, one recording a line a face (data/voices/<id>/<hash>.ogg). Lines with a
+// name in them ("%s") are left out: they're spoken as babble.
+static int ExportLines(const char* path) {
+    using namespace people;
+    FILE* f = fopen(path, "wb");
+    if (!f) return 1;
+    std::set<std::string> seen;
+    int n = 0;
+    auto put = [&](const std::string& id, const char* line) {
+        if (!line || !*line || strstr(line, "%s")) return;
+        const std::string key = id + "|" + line;
+        if (!seen.insert(key).second) return;
+        const Voice* v = VoiceOf(id.c_str());
+        fprintf(f, "%s\t%08x\t%d\t%s\n", id.c_str(), sfx::LineHash(line), v ? MoodOf(*v, line) : 0, line);
+        ++n;
+    };
+    auto pool = [&](const std::string& base) {  // (the faces that speak for a kind)
+        std::vector<std::string> ids;
+        int k = 0;
+        if (const FacePick* fp = FacePool(base, k))
+            for (int i = 0; i < k; ++i) ids.push_back(fp[i].id);
+        if (ids.empty()) ids.push_back(base);
+        return ids;
+    };
+    for (int p = 0; p < campaign::kPorts; ++p)
+        for (int sh = 0; sh < SHOPS; ++sh) {
+            const Person& who = kPort[p][sh];
+            for (const char* l : who.hello) put(who.id, l);
+            put(who.id, who.special);
+            for (int t = 0; t < 3; ++t)
+                for (const char* l : kWarm[sh][t]) put(who.id, l);
+            if (sh == TAVERN) put(who.id, kBlackSails[p]);
+        }
+    for (const SeaVoice& v : kSea)
+        for (const std::string& id : pool(v.id))
+            for (const char* l : v.lines) put(id, l);
+    for (const DreadVoice& d : kDread) {
+        put(d.id, d.line);
+        for (const char* l : d.more) put(d.id, l);
+    }
+    for (const char* id : kFleetPool)
+        for (auto& row : kFleetLines)
+            for (const char* l : row) put(id, l);
+    for (const char* id : kPiratePool)
+        for (auto& row : kPirateLines)
+            for (const char* l : row) put(id, l);
+    for (const std::string& id : pool("rival"))
+        for (const char* l : kRivalLines) put(id, l);
+    for (const std::string& id : pool("smuggler"))
+        for (const char* l : kSmugglerLines) put(id, l);
+    for (const std::string& id : pool("sea_castaway")) {
+        for (const char* l : kAdriftLines) put(id, l);
+        for (const char* l : kAdriftThanks) put(id, l);
+    }
+    // the passengers: every face of the kind, every tale it might tell
+    auto tales = [&](const std::string& base, bool captive) {
+        for (const std::string& id : pool(base)) {
+            for (int b = 0; b < campaign::BIOMES; ++b) {
+                for (int k = 0; k < (captive ? 3 : 4); ++k) {
+                    const Tale& t = captive ? kCaptiveTales[b][k] : kCastawayTales[b][k];
+                    put(id, t.how);
+                    put(id, t.saw);
+                }
+                put(id, kStoryTale[b]);
+            }
+            for (auto& row : kOmens)
+                for (const char* l : row) put(id, l);
+        }
+    };
+    tales("sea_castaway", false);
+    tales("sea_captive", true);
+    tales("sea_captive_m", true);
+    // the story's own lines (main.cpp: the prologue, the officers home, the end)
+    for (const ScriptedLine& l : kScripted) put(l.id, l.line);
+    fclose(f);
+    printf("%d lines\n", n);
+    return 0;
 }
