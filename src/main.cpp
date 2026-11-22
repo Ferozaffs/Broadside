@@ -9394,6 +9394,7 @@ void Game::AddBark(const std::string& id, const std::string& name, const std::st
     for (const Bark& b : barks)
         if (b.line == line) return;  // (not twice at once)
     barks.push_back({id, name, line, c, GetTime()});
+    if (getenv("BS_TALKLOG")) printf("[say] %.1f %s | %s | bark | %s\n", GetTime() - sessionStart, id.c_str(), name.c_str(), line.c_str());
     while (barks.size() > 3) barks.pop_front();
     people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 7.0) + (uint32_t)barks.size());
 }

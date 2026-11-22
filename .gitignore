@@ -10,3 +10,6 @@ dist/
 *.zip
 playtest/
 .claude/settings.local.json
+
+# the AI voices (made on ZWUUUP by render_voices.py; ~100 MB): packed into releases, not kept in git
+data/voices/
