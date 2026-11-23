@@ -45,7 +45,7 @@ Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow). Licen
 None of these are in this repository. Release builds carry them only inside the game, encrypted (ChaCha20, with a
 key that is not published; see tools/pack_ship.py), as their licences require.
 
-- **Frigate and cutter**: "Age of sail Blender ship" by NelloF, used under the Fab Standard License.
+- **Frigate**: "Age of sail Blender ship" by NelloF, used under the Fab Standard License.
 - **Ship of the line**: the "cgt_frigate_001" frigate from CGTrader (free model), used under the CGTrader Royalty
   Free License, which allows it in a game as long as it is protected from extraction. Converted for the game
   (reduced, textures baked to albedo, stretched to fit the hull).
@@ -53,6 +53,8 @@ key that is not published; see tools/pack_ship.py), as their licences require.
   tools/ue_export_pack.py, reduced, textures baked to albedo). Only the pirate's own meshes and textures are used;
   the Unreal sample mannequins and animations that come with the pack are not. The women of the crew are made from
   the same pack's parts (tools/make_female_crew.py: reshaped, with hair and textures derived from the pack's).
+  Since v0.24 the crew on deck are generated figures (see the 3D parts below) skinned onto the pack's skeleton
+  (tools/rig_crew.py).
 - **Sailor animations**: Breathing Idle, Running and Working On Device from Adobe Mixamo (https://www.mixamo.com),
   used royalty free under Adobe's terms for Mixamo content, retargeted onto the pirate
   (tools/ue4char_to_game_crew.py).
@@ -68,6 +70,22 @@ credit, and they don't allow the generated images to be sold: the portraits, the
 Made locally: a reference image with FLUX.1 [dev] (Black Forest Labs; no LoRA), turned into a 3D model with TRELLIS.2
 (Microsoft, MIT licence) in ComfyUI, then cut down for the game with Blender (tools/prep_part.py). The FLUX.1 [dev]
 licence lets its outputs be used for any purpose other than training competing models.
+
+The cutter, the escorts' gunboat and the ghost ship (the Flying Dutchman) are made the same way: a generated hull
+rigged with masts, yards and sails in Blender (tools/transom.py, tools/rig_ship.py; docs/kitbash.md), and the
+Tropics' and Ember Reach's palms, plants, charred trees and spires too.
+
+## Idle animations of the portraits (data/idles)
+
+Made locally from the portraits above with Wan 2.2 I2V (Alibaba, Apache 2.0) and the lightx2v step-distillation
+LoRAs (Apache 2.0) in ComfyUI, the first and last frame the portrait itself, cut out with BiRefNet (MIT). They are
+the portraits in motion, so the Amadmir LoRA's terms above apply to them too: for this free game only.
+
+## Voices (data/voices)
+
+Every spoken line was rendered locally with Qwen3-TTS (Qwen, Alibaba; Apache 2.0): VoiceDesign for each character's
+voice from a written description, acted line by line with a direction for where it's said. No real person's voice
+was cloned.
 
 ## Music (data/music)
 
