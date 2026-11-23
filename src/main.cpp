@@ -6049,17 +6049,7 @@ void Game::DrawHUD() {
         }
     }
 
-    // ---- state pill (submerged / sunk) ----
-    auto Pill = [&](const char* label, const char* value, Color col) {
-        Vector2 lm = Measure(value, 28, true);
-        float pw = fmaxf(150.0f, lm.x + 44), ph = 54;
-        Rectangle r = {W * 0.5f - pw * 0.5f, curMode == MODE_BOSS || odyssey ? 80.0f : 36.0f, pw, ph};  // (below the boss's bar)
-        Panel(r, A(kPanelHi, 0.85f), 12);
-        Label(label, W * 0.5f, r.y + 7, 10, col, Center);
-        Text(value, W * 0.5f, r.y + 19, 28, kText, true, Center);
-    };
-    // (no AIRBORNE timer pill: the user found it annoying, 2026-11-23)
-    if (alive && matchState == 0 && me->depthBelow > 5.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
+    // (no AIRBORNE / SUBMERGED pills: the user found them annoying, 2026-11-23)
 
     if (me && !alive && me->downed) {  // boss mode: disabled, waiting for a friend
         Text("DISABLED", W * 0.5f, H * 0.5f - 150, 56, kGold, true, Center);
