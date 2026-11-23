@@ -79,6 +79,16 @@ Ashgrave comes for it.
 4. *The Leviathan*: Ashgrave, beaten, wakes it anyway. At the end of the world, the *Sovereign* and Mara: ring it
    back to sleep for good. Then the sea is hers.
 
+**Memories** (flashbacks; the user, 2026-11-23: "flesh out the relationship with Mara and the Admiral ... optional for
+those that want story"). Five scenes from the years before the prologue (people.h kMemories), one more for each
+region's story told, always in order whatever the region: I *The Grey Isle* (she comes to the Admiral's notice; "the
+sea wants a hand on it"), II *Lantern Rock* (she meets Mara, who sings a squall still; someone on the flagship hears),
+III *The Ice* (the Admiral asks for Mara; Mara refuses him: "I go where you go"), IV *The Sovereign* (he gives her
+the ship and asks Mara about the bell), V *The Last Night* (Mara dreams of five bells; "come and find me, whatever
+I've become"). Never in the way: a notice when one returns, then in port, "Memories" beside Set sail (a gold dot for
+one not yet watched; watched ones in memories.cfg). Mara's and the Admiral's lines are voiced; hers are text.
+BS_MEMORY="k line" or "list" opens one in port, for screenshots.
+
 ## Quests
 Every quest is a template with a giver, a place, a goal and a reward, rolled for the biome:
 - **Treasure**: a map piece -> sail to the island marked -> drop anchor at the X (stop near it) -> chest.

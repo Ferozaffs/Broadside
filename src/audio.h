@@ -74,6 +74,7 @@ void Babble(const VoiceParams& v, const char* line, int mood, float vol = 0.8f, 
 Wave BabbleWave(const VoiceParams& v, const char* line, int mood, uint32_t seed = 1);
 // A line spoken for real: a voice file (data/voices/<who>/<hash>.ogg, made offline by an AI voice model) played
 // in the babble's place; false if it couldn't be (no file, no audio)
+void StopVoice();
 bool PlayVoice(const char* path, float vol = 0.85f, int prio = 1);  // (false too when a line of priority is still being said)
 bool VoiceBusy(int prio);  // is a line that a voice of this priority mustn't cut off still being said?
 uint32_t LineHash(const char* line);  // (the file's name for a line: FNV-1a of its text)

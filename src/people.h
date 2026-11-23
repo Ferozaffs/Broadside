@@ -514,6 +514,72 @@ inline void Voiced(const char* id, const char* line, uint32_t salt, int prio = 1
     sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h, prio);
 }
 
+// ---- Memories: five flashbacks, years before the prologue - how she came to the Admiral, how she met Mara, what he
+// wanted with her. One for each story told (in order, whichever region's it was), in port under "Memories", to watch
+// or not. Who: 0 the telling (no face), 1 she herself ("You"), 2 Mara, 3 the Admiral.
+enum { MEM_TELL = 0, MEM_YOU, MEM_MARA, MEM_ASHGRAVE };
+struct MemoryLine { int who; const char* text; const char* how; };  // (how: the voice's direction)
+struct Memory { const char* title; const char* when; MemoryLine lines[14]; };
+inline const char* MemoryFace(int who) { return who == MEM_MARA ? "story_mara" : who == MEM_ASHGRAVE ? "story_ashgrave" : nullptr; }
+inline const Memory kMemories[5] = {
+    {"The Grey Isle", "Eleven years ago. The Admiral's fort on the Grey Isle.", {
+        {MEM_TELL, "Eleven years ago: a midshipman with salt in her boots, posted to Lord Admiral Ashgrave's own fort on the Grey Isle.", nullptr},
+        {MEM_ASHGRAVE, "You're the one who took the Merryweather's helm when her master fell. Without orders.", "A senior admiral, interested, testing a young officer in his study. Measured, dry."},
+        {MEM_YOU, "She was going onto the rocks, sir. There wasn't time for orders.", nullptr},
+        {MEM_ASHGRAVE, "There never is. That is what the orders are for.", "Amused, gently correcting, a teacher's patience."},
+        {MEM_ASHGRAVE, "Out there every captain sails for herself, and the sea drowns them one by one. It wants a hand on it. One hand.", "Quiet conviction, looking out of a window at the sea. Almost tender, a little cold."},
+        {MEM_YOU, "Yours, sir?", nullptr},
+        {MEM_ASHGRAVE, "Someone's. I would rather it were a hand I trust. Dine with me tonight, Midshipman. We'll talk about your future.", "Warm now, charming, the mentor choosing a protegee."},
+        {MEM_TELL, "She dined with him that night, and every week after. He taught her the stars and the guns, and the patience of a man who plans in decades.", nullptr},
+        {-1, nullptr, nullptr}}},
+    {"Lantern Rock", "Eight years ago. A squall off Lantern Rock.", {
+        {MEM_TELL, "Eight years ago: the frigate Wren, her first lieutenancy, caught off Lantern Rock in a squall that would not end.", nullptr},
+        {MEM_MARA, "Lieutenant! You'll want a line on you if you mean to stand there all night!", "Shouting over a storm on a ship's deck, young, cheeky, good-humoured."},
+        {MEM_YOU, "You're the new master's mate. Vell.", nullptr},
+        {MEM_MARA, "Mara. My gran keeps the light up there. She'd skin me if I let a lieutenant go over the side in her waters.", "Shouting over the wind, grinning, friendly, a little proud."},
+        {MEM_TELL, "Then Mara did something no one aboard ever spoke of afterwards. She sang, low, an old Lamplighter's tune, and the wind fell away like a dog called to heel.", nullptr},
+        {MEM_YOU, "How did you do that?", nullptr},
+        {MEM_MARA, "Do what? It was blowing itself out. It's only an old song.", "Suddenly quiet and evasive, embarrassed, brushing it off."},
+        {MEM_MARA, "Don't tell anyone. Please.", "A whisper, frightened, pleading, very sincere."},
+        {MEM_TELL, "She never did. But the Admiral's flagship lay at anchor in the lee of the Rock that night, and someone aboard her was listening.", nullptr},
+        {-1, nullptr, nullptr}}},
+    {"The Ice", "Six years ago. The Wren, frozen fast in the north.", {
+        {MEM_TELL, "Six years ago: the Wren, frozen fast in the northern ice for nineteen days, the biscuit gone green.", nullptr},
+        {MEM_MARA, "Twenty men down with the scurvy. If the ice doesn't open by Sunday we start on the boots.", "Cold, tired, grim gallows humour between old friends."},
+        {MEM_YOU, "It'll open.", nullptr},
+        {MEM_MARA, "You always say that. You're usually right. It's infuriating.", "A tired fond laugh, teasing her friend."},
+        {MEM_TELL, "On the twentieth day a sledge came over the ice: charts of a channel no one had ever sounded, under the Admiral's seal. And a letter.", nullptr},
+        {MEM_ASHGRAVE, "Bring her home by this road, Lieutenant. And send me Miss Vell. I have a ship with need of her particular gifts.", "Reading out his own letter, formal, courteous, with a hidden hunger."},
+        {MEM_MARA, "I'm not going. Tell him the master's mate of the Wren is needed on the Wren.", "Firm, stubborn, a little scared, refusing."},
+        {MEM_YOU, "He's the Admiral, Mara.", nullptr},
+        {MEM_MARA, "And you're my captain. Or you will be. I go where you go. That's the end of it.", "Warm, loyal, decided, final."},
+        {MEM_TELL, "She wrote that Miss Vell could not be spared. It was the only time she ever refused him, and he never spoke of it again.", nullptr},
+        {-1, nullptr, nullptr}}},
+    {"The Sovereign", "Three years ago. The yard at Port Haverly.", {
+        {MEM_TELL, "Three years ago: the yard at Port Haverly, flags on every mast, seventy-four guns newly blacked.", nullptr},
+        {MEM_ASHGRAVE, "The finest ship in the Isles, and I give her to the finest captain I ever made.", "Proud, ceremonial, a public speech at a ship's commissioning."},
+        {MEM_YOU, "I don't know how to thank you, sir.", nullptr},
+        {MEM_ASHGRAVE, "Bring her home. Always bring her home. And Miss Vell is your first mate, I see.", "Fatherly, then turning, noticing someone, interested."},
+        {MEM_MARA, "My lord.", "Polite, guarded, a curtsey of a greeting."},
+        {MEM_ASHGRAVE, "Your grandmother's light still burns on the Rock, I'm told. Does she still tell the old stories? The bell under the sea?", "Light and charming, but probing, too interested."},
+        {MEM_MARA, "Gran tells a great many stories, my lord. Most of them are about drink.", "Deflecting with a joke, a careful smile."},
+        {MEM_ASHGRAVE, "Ha! Keep her close, Captain. Some people are worth more than any ship.", "A hearty laugh, then something colder under it."},
+        {MEM_MARA, "He knows about the song. I don't know how, but he knows.", "Quiet, uneasy, after he has gone, to her friend alone."},
+        {MEM_YOU, "He's our friend, Mara.", nullptr},
+        {MEM_MARA, "I know. I know he is.", "Wanting to believe it, not quite managing."},
+        {-1, nullptr, nullptr}}},
+    {"The Last Night", "The night before the Ember Reach. The Sovereign's great cabin.", {
+        {MEM_TELL, "The night before the Ember Reach: the great cabin, the stern windows black, the squadron's lanterns strung across the dark.", nullptr},
+        {MEM_MARA, "I keep dreaming of a bell. Under the water. Every night now. Five of them, ringing out of time.", "Late at night, unsettled, haunted, speaking softly."},
+        {MEM_YOU, "It's the Reach. Everyone dreams badly near the fire mountains.", nullptr},
+        {MEM_MARA, "Do they dream what the Admiral dreams? He asked me today, out of nowhere, if I ever hear bells at sea.", "Uneasy, half a laugh, frightened underneath."},
+        {MEM_MARA, "Promise me something. If anything happens, anything, you come and find me. Wherever I am. Whatever I've become.", "Very earnest, close, emotional, a plea between friends."},
+        {MEM_YOU, "Nothing's going to happen. But yes. I promise.", nullptr},
+        {MEM_MARA, "Good. Then I'll stop worrying. Liar. I won't. But it helps.", "Relieved, a small teary laugh, affectionate."},
+        {MEM_TELL, "At dawn the Dominion hoisted a black flag. And she had made a promise she meant to keep.", nullptr},
+        {-1, nullptr, nullptr}}},
+};
+
 // What a port's keepers say once it thinks well of her (Trusted, a friend of the port, its hero: campaign::RepTier
 // 2-4), two days in three; "%s" is her name
 inline const char* const kWarm[SHOPS][3][3] = {

@@ -1119,6 +1119,12 @@ bool PlayVoice(const char* path, float vol, int prio) {
     return true;
 }
 
+void StopVoice() {  // (whoever's talking: hush - a memory left halfway through a line)
+    for (Sound& o : utterSounds)
+        if (o.frameCount && IsSoundPlaying(o)) StopSound(o);
+    utterPrio = 0;
+}
+
 uint32_t LineHash(const char* line) {
     uint32_t h = 2166136261u;
     for (const char* c = line; c && *c; ++c) { h ^= (uint8_t)*c; h *= 16777619u; }
