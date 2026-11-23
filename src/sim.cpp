@@ -305,51 +305,96 @@ static void MakeWorld(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour
             isles.push_back(p);
         }
     };
-    for (int b = 0; b < BIOMES; ++b) {
-        const int coves = b == TEMPERATE ? 1 : 2, straits = 1;  // (big rocks, few of them: every rock is an island mesh to draw)
-        for (int c = 0, made = 0; c < 300 && made < coves; ++c) {  // a cove
-            const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
-            if (BiomeAt(x0, z0) != b) continue;
-            const float R = g.R(450.0f, 750.0f), mouth = g.R(130.0f, 220.0f), facing = g.R(0.0f, 2.0f * PI);
-            const float rr = g.R(200.0f, 260.0f), Rc = R + rr * 1.1f;
-            const float half = (mouth * 0.5f + rr * 1.25f) / Rc;  // (the mouth: clear of the two heads' widest coast)
-            const float step = rr * 1.5f / Rc;
-            std::vector<Vector3> pts;
-            for (float a = facing + half; a <= facing + 2.0f * PI - half + 1e-3f; a += step) {
-                const float r = rr * g.R(0.9f, 1.15f);
-                pts.push_back({x0 + cosf(a) * Rc, z0 + sinf(a) * Rc, r});
-                if (fabsf(remainderf(a - facing, 2.0f * PI)) > half + 0.5f && g.F() < 0.5f)  // (behind the shore, away from the mouth: the land's bulk)
-                    pts.push_back({x0 + cosf(a) * (Rc + rr * 1.3f), z0 + sinf(a) * (Rc + rr * 1.3f), rr * g.R(1.1f, 1.5f)});
-            }
-            if (!featureClear(pts) || !clearOfIsles(x0, z0, R, 200.0f)) continue;
-            place(pts, b);
-            if (g.F() < 0.5f) {  // (an islet in the bay)
-                const float aa = facing + PI + g.R(-0.6f, 0.6f), d = R * 0.45f, ri = g.R(30.0f, 55.0f);
-                add(x0 + cosf(aa) * d, z0 + sinf(aa) * d, ri, heightFor(b, ri), false, b);
-            }
-            ++made;
-        }
-        for (int c = 0, made = 0; c < 300 && made < straits; ++c) {  // a strait
-            const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
-            if (BiomeAt(x0, z0) != b) continue;
-            const float len = g.R(1400.0f, 2200.0f), width = g.R(130.0f, 200.0f), dir = g.R(0.0f, PI);
-            const Vector2 al = {cosf(dir), sinf(dir)}, sd = {-al.y, al.x};
-            const float rr = g.R(190.0f, 250.0f), off = width * 0.5f + rr * 1.25f, bend = g.R(-0.00025f, 0.00025f);
-            std::vector<Vector3> pts;
-            for (float t = -len * 0.5f; t <= len * 0.5f; t += rr * 1.5f) {
-                const float curve = bend * t * t;  // (a gentle dogleg: the channel isn't a ruler line)
+    // three coves in the whole sea, each in a region of its own (not the home waters)
+    {
+        int regions[BIOMES - 1] = {TROPICS, FROZEN, EMBER, FOG};
+        for (int i = 3; i > 0; --i) std::swap(regions[i], regions[(int)(g.F() * (i + 1)) % (i + 1)]);
+        for (int n = 0; n < 3; ++n) {
+            const uint8_t b = (uint8_t)regions[n];
+            for (int c = 0; c < 300; ++c) {
+                const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
+                if (BiomeAt(x0, z0) != b) continue;
+                const float R = g.R(480.0f, 720.0f), facing = g.R(0.0f, 2.0f * PI);
+                const float p1 = g.R(0.0f, 2.0f * PI), p2 = g.R(0.0f, 2.0f * PI), thick = g.R(0.0f, 2.0f * PI);
+                const float open = g.R(1.3f, 1.8f);  // (the bay's opening, before the headlands close it)
+                const float asp = g.R(1.25f, 1.6f), ax = g.R(0.0f, PI);  // (an oval bay, its long way any way)
+                auto shoreR = [&](float a) {
+                    const float c = cosf(a - ax), sn = sinf(a - ax);
+                    const float ell = R / sqrtf(c * c / (asp * asp) + sn * sn * asp * asp / 1.0f);  // (the oval: R*asp one way, R/asp the other)
+                    return ell * (1.0f + 0.15f * sinf(2.0f * a + p1) + 0.08f * sinf(3.0f * a + p2));
+                };
+                std::vector<Vector3> pts;
+                // the shore: round the bay, its distance wandering, the rocks of every size, spaced so neighbours overlap
+                float rr = g.R(160.0f, 260.0f);
+                for (float a = facing + open * 0.5f; a <= facing + 2.0f * PI - open * 0.5f; ) {
+                    const float Rs = shoreR(a) + rr * 1.05f;
+                    pts.push_back({x0 + cosf(a) * Rs, z0 + sinf(a) * Rs, rr});
+                    // the land behind: always some, deep where the slow wave says
+                    const float depth = 0.5f + 0.5f * sinf(a + thick);
+                    for (int k = 1; k <= 3; ++k)
+                        if (k == 1 ? g.F() < 0.85f : g.F() < depth * (k == 2 ? 0.85f : 0.45f)) {
+                            const float rb = rr * g.R(1.0f, 1.5f), Rb = Rs + rr * (0.8f * k + 0.3f) + g.R(-30.0f, 50.0f);
+                            const float ab = a + g.R(-0.06f, 0.06f);
+                            pts.push_back({x0 + cosf(ab) * Rb, z0 + sinf(ab) * Rb, rb});
+                        }
+                    const float next = g.R(160.0f, 260.0f);
+                    a += (rr + next) * 0.62f / Rs;  // (by both: a big one and a small one still meet)
+                    rr = next;
+                }
+                // the headlands: either side of the opening, curling in toward each other (the mouth: off-centre)
+                const float mouth = g.R(140.0f, 230.0f), skew = g.R(-0.25f, 0.25f);
                 for (int side = -1; side <= 1; side += 2) {
-                    const float r = rr * g.R(0.9f, 1.2f), o = off * side + curve;
-                    pts.push_back({x0 + al.x * t + sd.x * o, z0 + al.y * t + sd.y * o, r});
-                    if (g.F() < 0.4f)  // (the ridge's bulk behind its shore)
-                        pts.push_back({x0 + al.x * t + sd.x * (o + side * rr * 1.4f), z0 + al.y * t + sd.y * (o + side * rr * 1.4f), rr * g.R(1.0f, 1.5f)});
+                    const float a0 = facing + side * open * 0.5f;
+                    const float Rs = shoreR(a0);
+                    const Vector2 end = {x0 + cosf(a0) * (Rs + 200.0f), z0 + sinf(a0) * (Rs + 200.0f)};
+                    const Vector2 mid = {x0 + cosf(facing + skew) * (shoreR(facing) + 260.0f), z0 + sinf(facing + skew) * (shoreR(facing) + 260.0f)};  // (the mouth's middle)
+                    const Vector2 to = Vector2Normalize(Vector2Subtract(mid, end));
+                    const float reach = fmaxf(0.0f, Vector2Distance(end, mid) - mouth * 0.5f);
+                    for (float t = 100.0f; t < reach - 140.0f; t += 150.0f) {
+                        const float rh = g.R(130.0f, 180.0f) * (1.0f - 0.35f * t / fmaxf(reach, 1.0f));  // (tapering toward its point)
+                        pts.push_back({end.x + to.x * t, end.y + to.y * t, rh});
+                    }
+                }
+                if (!featureClear(pts) || !clearOfIsles(x0, z0, R, 200.0f)) continue;
+                place(pts, b);
+                if (g.F() < 0.6f) {  // (an islet in the bay)
+                    const float aa = facing + PI + g.R(-0.7f, 0.7f), d = R * g.R(0.3f, 0.55f), ri = g.R(30.0f, 70.0f);
+                    add(x0 + cosf(aa) * d, z0 + sinf(aa) * d, ri, heightFor(b, ri), false, b);
+                }
+                break;
+            }
+        }
+    }
+    // a strait in each region: two shores of their own, a channel that widens and narrows, curving
+    for (int b = 0; b < BIOMES; ++b)
+        for (int c = 0; c < 300; ++c) {
+            const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
+            if (BiomeAt(x0, z0) != b) continue;
+            const float len = g.R(1500.0f, 2300.0f), dir = g.R(0.0f, PI), bend = g.R(-0.0005f, 0.0005f);
+            const float w0 = g.R(110.0f, 150.0f), w1 = g.R(170.0f, 260.0f), wp = g.R(0.0f, 2.0f * PI);
+            const Vector2 al = {cosf(dir), sinf(dir)}, sd = {-al.y, al.x};
+            std::vector<Vector3> pts;
+            for (int side = -1; side <= 1; side += 2) {
+                const float t0 = -len * 0.5f + g.R(0.0f, 0.3f) * len, t1 = len * 0.5f - g.R(0.0f, 0.3f) * len;  // (each shore its own length)
+                const float ph = g.R(0.0f, 2.0f * PI);
+                for (float t = t0; t <= t1; ) {
+                    const float u = (t - t0) / fmaxf(t1 - t0, 1.0f), taper = 0.55f + 0.45f * sinf(PI * u);  // (thin at the ends)
+                    const float rr = g.R(150.0f, 250.0f) * taper;
+                    const float width = w0 + (w1 - w0) * (0.5f + 0.5f * sinf(t * 0.0035f + wp));  // (the channel: narrows and opens)
+                    const float o = side * (width * 0.5f + rr * 1.25f) + bend * t * t + 40.0f * sinf(t * 0.006f + ph);
+                    pts.push_back({x0 + al.x * t + sd.x * o, z0 + al.y * t + sd.y * o, rr});
+                    if (g.F() < 0.55f * taper) {  // (the land behind this shore, uneven)
+                        const float ob = o + side * rr * g.R(1.1f, 1.9f), rb = rr * g.R(0.9f, 1.6f);
+                        const float tb = t + g.R(-60.0f, 60.0f);
+                        pts.push_back({x0 + al.x * tb + sd.x * ob, z0 + al.y * tb + sd.y * ob, rb});
+                    }
+                    t += rr * 1.45f;
                 }
             }
             if (!featureClear(pts)) continue;
-            place(pts, b);
-            ++made;
+            place(pts, (uint8_t)b);
+            break;
         }
-    }
     // archipelagos: a centre, a spread, islands round it with channels a ship can work through
     for (int c = 0, made = 0; c < 400 && made < 64; ++c) {
         const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
