@@ -76,6 +76,12 @@ for pid in want:
                 if s > best_fit[0]:
                     best_fit = (s, k, bx, by)
     score, k, bx, by = best_fit
+    if score < 0.88:  # (the idle was made from another picture of them: a full-body render of the seed, a redrawn portrait)
+        print(f"{pid}: {os.path.basename(run)} doesn't match the portrait (fit {score:.3f}) - left out", flush=True)
+        stale = os.path.join(out_dir, f"{pid}.png")
+        if os.path.exists(stale):
+            os.remove(stale)
+        continue
     w, h = round(still.width * k), round(still.height * k)
     box = (round(bx), round(by), round(bx) + w, round(by) + h)
     sheet = Image.new("RGBA", (w * COLS, h * ROWS), (0, 0, 0, 0))
