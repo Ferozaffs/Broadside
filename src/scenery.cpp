@@ -371,6 +371,7 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
 }
 
 void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
+    const double t0 = GetTime();
     for (Island& is : islands) {
         UnloadMesh(is.mesh);
         if (is.far.vertexCount) UnloadMesh(is.far);
@@ -396,20 +397,45 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
             const unsigned short* Ix = is.mesh.indices;
             const int nTri = is.mesh.triangleCount;
             const unsigned char* Col = is.mesh.colors;
+            // (the land's triangles, bucketed by where they lie: a tree's ground is found among its cell's few)
+            constexpr float kCell = 16.0f;
+            float gx0 = 1e9f, gz0 = 1e9f, gx1 = -1e9f, gz1 = -1e9f;
+            for (int t = 0; V && t < nTri; ++t) {
+                const int i0 = Ix ? Ix[t * 3] : t * 3;
+                if (Col && Col[i0 * 4 + 3] != 255) continue;
+                for (int c = 0; c < 3; ++c) {
+                    const int ii = Ix ? Ix[t * 3 + c] : t * 3 + c;
+                    gx0 = fminf(gx0, V[ii * 3]); gx1 = fmaxf(gx1, V[ii * 3]);
+                    gz0 = fminf(gz0, V[ii * 3 + 2]); gz1 = fmaxf(gz1, V[ii * 3 + 2]);
+                }
+            }
+            const int gnx = gx1 > gx0 ? (int)((gx1 - gx0) / kCell) + 1 : 0, gnz = gz1 > gz0 ? (int)((gz1 - gz0) / kCell) + 1 : 0;
+            std::vector<std::vector<int>> cells((size_t)gnx * gnz);
+            for (int t = 0; V && t < nTri && gnx > 0 && gnz > 0; ++t) {
+                const int i0 = Ix ? Ix[t * 3] : t * 3, i1 = Ix ? Ix[t * 3 + 1] : t * 3 + 1, i2 = Ix ? Ix[t * 3 + 2] : t * 3 + 2;
+                if (Col && Col[i0 * 4 + 3] != 255) continue;
+                const float x0 = fminf(V[i0 * 3], fminf(V[i1 * 3], V[i2 * 3])), x1 = fmaxf(V[i0 * 3], fmaxf(V[i1 * 3], V[i2 * 3]));
+                const float z0 = fminf(V[i0 * 3 + 2], fminf(V[i1 * 3 + 2], V[i2 * 3 + 2])), z1 = fmaxf(V[i0 * 3 + 2], fmaxf(V[i1 * 3 + 2], V[i2 * 3 + 2]));
+                const int cx0 = std::max(0, (int)((x0 - gx0) / kCell)), cx1 = std::min(gnx - 1, (int)((x1 - gx0) / kCell));
+                const int cz0 = std::max(0, (int)((z0 - gz0) / kCell)), cz1 = std::min(gnz - 1, (int)((z1 - gz0) / kCell));
+                for (int cz = cz0; cz <= cz1; ++cz)
+                    for (int cx = cx0; cx <= cx1; ++cx) cells[(size_t)cz * gnx + cx].push_back(t);
+            }
             auto ground = [&](float x, float z, float& gy, float& up) {
                 bool hit = false;
-                for (int t = 0; t < nTri; ++t) {
+                if (gnx <= 0 || gnz <= 0 || x < gx0 || z < gz0) return false;
+                const int cx = (int)((x - gx0) / kCell), cz = (int)((z - gz0) / kCell);
+                if (cx >= gnx || cz >= gnz) return false;
+                for (int t : cells[(size_t)cz * gnx + cx]) {
                     const int i0 = Ix ? Ix[t * 3] : t * 3, i1 = Ix ? Ix[t * 3 + 1] : t * 3 + 1, i2 = Ix ? Ix[t * 3 + 2] : t * 3 + 2;
-                    if (Col && Col[i0 * 4 + 3] != 255) continue;  // (the land, not the trees built on it)
-                    const float ax = V[i0 * 3], az = V[i0 * 3 + 2], bx = V[i1 * 3], bz = V[i1 * 3 + 2], cx = V[i2 * 3], cz = V[i2 * 3 + 2];
-                    if ((x < ax && x < bx && x < cx) || (x > ax && x > bx && x > cx) || (z < az && z < bz && z < cz) || (z > az && z > bz && z > cz)) continue;
-                    const float det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+                    const float ax = V[i0 * 3], az = V[i0 * 3 + 2], bx = V[i1 * 3], bz = V[i1 * 3 + 2], cx2 = V[i2 * 3], cz2 = V[i2 * 3 + 2];
+                    const float det = (bz - cz2) * (ax - cx2) + (cx2 - bx) * (az - cz2);
                     if (fabsf(det) < 1e-9f) continue;
-                    const float l0 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / det, l1 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / det, l2 = 1.0f - l0 - l1;
+                    const float l0 = ((bz - cz2) * (x - cx2) + (cx2 - bx) * (z - cz2)) / det, l1 = ((cz2 - az) * (x - cx2) + (ax - cx2) * (z - cz2)) / det, l2 = 1.0f - l0 - l1;
                     if (l0 < 0 || l1 < 0 || l2 < 0) continue;
                     const float y = l0 * V[i0 * 3 + 1] + l1 * V[i1 * 3 + 1] + l2 * V[i2 * 3 + 1];
                     if (hit && y <= gy) continue;
-                    const Vector3 A = {ax, V[i0 * 3 + 1], az}, B = {bx, V[i1 * 3 + 1], bz}, C = {cx, V[i2 * 3 + 1], cz};
+                    const Vector3 A = {ax, V[i0 * 3 + 1], az}, B = {bx, V[i1 * 3 + 1], bz}, C = {cx2, V[i2 * 3 + 1], cz2};
                     const Vector3 n = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(B, A), Vector3Subtract(C, A)));
                     gy = y;
                     up = fabsf(n.y);
@@ -439,6 +465,7 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
         is.radius = k.r * 1.5f + k.h;
         islands.push_back(is);
     }
+    if (getenv("BS_FLORALOG")) printf("[scenery] %d islands built in %.2f s\n", (int)islands.size(), GetTime() - t0);
 }
 
 static constexpr float kFarCull = 9000.0f;     // m: nothing on the voyage's long sea shows past this
@@ -705,9 +732,25 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
         // flag pole beside the lighthouse
         p.flagPole = at(p.pierTo + 8.0f, 6.0f, 3.0f);
         B.Cyl(p.flagPole, 0.22f, 0.14f, 22.0f, 8, woodDk);
-        // warehouses on the quay: plastered walls, a pitched tile roof, door and shutters; barrels and crates outside
+        // warehouses on the quay: the region's generated house (DrawHarbours), or built here - plastered walls, a pitched
+        // tile roof, door and shutters; barrels and crates outside either way
+        {
+            static const char* const kHouse[kHouseKinds] = {"house_temperate", "house_tropics", "house_frozen", "house_ember", "house_fog"};
+            const int hb = std::min<int>(campaign::BiomeAt(h.x, h.z), kHouseKinds - 1);
+            p.houseKind = FileExists(TextFormat("%sdata/parts/%s.glb", GetApplicationDirectory(), kHouse[hb])) ? hb : -1;
+        }
         for (int k = -1; k <= 1; k += 2) {
             Vector3 hc = at(p.pierFrom - 4.0f, k * 14.0f, 0);
+            p.houses[(k + 1) / 2] = {hc.x, 2.2f, hc.z};
+            if (p.houseKind >= 0) {  // (the model: only the crates and barrels outside built here)
+                const Vector3 face = Vector3Add({hc.x, 0, hc.z}, Vector3Scale(Z, -4.6f));
+                for (int q = 0; q < 5; ++q) {
+                    Vector3 bp = Vector3Add(Vector3Add({face.x, 2.2f, face.z}, Vector3Scale(X, rnd(-5.0f, 5.0f))), Vector3Scale(Z, -rnd(1.0f, 3.5f)));
+                    if (q < 3) B.Cyl(bp, 0.55f, 0.5f, 1.3f, 10, tone(wood, rnd(0.7f, 1.0f)));
+                    else B.Box(Vector3Add(bp, {0, 0.6f, 0}), {1.2f, 1.2f, 1.2f}, X, Y, Z, tone({150, 112, 70, 255}, rnd(0.8f, 1.1f)));
+                }
+                continue;
+            }
             Color wall = tone({196, 182, 154, 255}, rnd(0.9f, 1.05f)), roof = tone({140, 62, 44, 255}, rnd(0.85f, 1.1f));
             B.Box({hc.x, 1.0f, hc.z}, {10.6f, 2.4f, 8.6f}, X, Y, Z, stoneDk);  // footing
             B.Box({hc.x, 4.6f, hc.z}, {10.0f, 5.0f, 8.0f}, X, Y, Z, wall);
@@ -750,11 +793,13 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
 void Scenery::DrawPropModel(int which, Matrix world) {
     static const char* const kName[kBiomeProp + kBiomeKinds] = {"prop_cannon", "prop_anchor", "prop_launch", "prop_barrel", "prop_chest",
                                                                 "biome_palm", "biome_banana", "biome_charred", "biome_spire"};
+    static const char* const kHouse[kHouseKinds] = {"house_temperate", "house_tropics", "house_frozen", "house_ember", "house_fog"};
     PropModel& pm = propModels[which];
     if (!pm.tried) {
         pm.tried = true;
-        const bool lo = which >= kBiomeProp + kBiomeKinds;
-        const char* path = TextFormat("%sdata/parts/%s%s.glb", GetApplicationDirectory(), kName[lo ? which - kBiomeKinds : which], lo ? "_lo" : "");  // (beside the game, whatever the working folder)
+        const bool house = which >= kHouseProp, lo = !house && which >= kBiomeProp + kBiomeKinds;
+        const char* path = house ? TextFormat("%sdata/parts/%s.glb", GetApplicationDirectory(), kHouse[which - kHouseProp])
+                                 : TextFormat("%sdata/parts/%s%s.glb", GetApplicationDirectory(), kName[lo ? which - kBiomeKinds : which], lo ? "_lo" : "");  // (beside the game, whatever the working folder)
         if (FileExists(path)) {
             pm.m = LoadModel(path);
             for (int i = 0; i < pm.m.materialCount; ++i) pm.m.materials[i].shader = propMat.shader;
@@ -785,6 +830,10 @@ void Scenery::DrawHarbours(Renderer& r, const RenderView& v, const OceanCPU& oce
             DrawPropModel(1, MatrixMultiply(MatrixRotateY(p.seaYaw + 0.6f), MatrixTranslate(p.anchor.x, p.anchor.y, p.anchor.z)));
             for (int b = 0; b < 4; ++b)  // (each turned its own way: the staves and hoops don't line up like soldiers)
                 DrawPropModel(3, MatrixMultiply(MatrixRotateY(p.seaYaw + 1.7f * b + i), MatrixTranslate(p.barrels[b].x, p.barrels[b].y, p.barrels[b].z)));
+            if (p.houseKind >= 0)  // the warehouses: facing the anchorage, the second turned a little from the first
+                for (int k = 0; k < 2; ++k)
+                    DrawPropModel(kHouseProp + p.houseKind, MatrixMultiply(MatrixRotateY(p.seaYaw + (k ? 0.12f : -0.08f)),
+                                                                           MatrixTranslate(p.houses[k].x, p.houses[k].y, p.houses[k].z)));
             const float by = ocean.Height(p.launch.x, p.launch.z), bob = 0.04f * sinf(time * 1.3f + i);
             DrawPropModel(2, MatrixMultiply(MatrixMultiply(MatrixRotateZ(bob), face), MatrixTranslate(p.launch.x, by - 0.7f, p.launch.z)));
         }

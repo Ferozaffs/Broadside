@@ -56,13 +56,16 @@ private:
         // the harbour's launch moored alongside the pier
         Vector3 guns[2]{}, anchor{}, launch{};
         Vector3 barrels[4]{};  // (three by the anchor on the quay, a powder cask between the pier guns)
+        Vector3 houses[2]{};   // (the warehouses on the quay: the region's generated house, when there's one)
+        int houseKind = -1;    // (which: the region's; -1 built in code)
         float seaYaw = 0;  // (about up: +z turned to face out over the anchorage)
     };
     struct PropModel { Model m{}; bool tried = false; };
     // cannon, anchor, launch, barrel, chest; then the biome props (palm, banana, charred tree, obsidian spire), each
     // close up and (the next kBiomeKinds) its low-detail copy
     static constexpr int kBiomeKinds = 4, kBiomeProp = 5;
-    PropModel propModels[kBiomeProp + 2 * kBiomeKinds];
+    static constexpr int kHouseProp = kBiomeProp + 2 * kBiomeKinds, kHouseKinds = 5;  // (then a house for each region)
+    PropModel propModels[kHouseProp + kHouseKinds];
     void DrawPropModel(int which, Matrix world);
     std::vector<Port> ports;
     Mesh cube{}, cyl{}, cone{};

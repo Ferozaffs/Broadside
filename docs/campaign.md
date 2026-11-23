@@ -13,6 +13,10 @@ convoys, rescues, escorts, cargo, and mystery chains that lead to the big boss f
   - **The Ember Reach** (east): black volcanic rock, ash, a red glow at night.
   - **The Fog Banks** (west): thick fog, dark moss, wrecks; ghost ships, the Dutchman.
 - Islands in archipelago clusters with open sea between; 2-3 ports in each biome.
+- The sea's own shapes (2026-11-23, the user: "we dont have any tight passages and large coves"): in each region one or
+  two **coves** (a horseshoe of overlapping islands, a landmass round a sheltered bay 0.9-1.5 km across, one mouth
+  130-220 m wide) and a **strait** (two ridges of land, a channel 130-200 m wide and 1.4-2.2 km long, a gentle dogleg).
+  Big rocks (r 190-260 m), few of them: every rock is an island mesh. Ports are placed first, as before.
 - The chart (Tab): the whole sea, ports, the quest markers, where you've been.
 - Fast-sail (hold F when no enemy is near): the sea runs at 4x.
 

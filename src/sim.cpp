@@ -292,6 +292,64 @@ static void MakeWorld(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour
             if (Vector2Distance({o.x, o.y}, {x, z}) < o.z * 1.3f + r * 1.3f + gap) return false;
         return true;
     };
+    // the sea's own shapes, a few in each region: coves (a horseshoe of land round a bay, one narrow mouth) and straits
+    // (two ridges of land, a tight channel between); each one's rocks overlap (no gaps), and stand clear of the ports
+    auto featureClear = [&](const std::vector<Vector3>& pts) {
+        for (const Vector3& p : pts)
+            if (fabsf(p.x) > lim || fabsf(p.y) > lim || !clearOfPorts(p.x, p.y, 1100.0f + p.z) || !clearOfIsles(p.x, p.y, p.z, 220.0f)) return false;
+        return true;
+    };
+    auto place = [&](const std::vector<Vector3>& pts, uint8_t b) {
+        for (const Vector3& p : pts) {
+            add(p.x, p.y, p.z, heightFor(b, p.z), false, b);
+            isles.push_back(p);
+        }
+    };
+    for (int b = 0; b < BIOMES; ++b) {
+        const int coves = b == TEMPERATE ? 1 : 2, straits = 1;  // (big rocks, few of them: every rock is an island mesh to draw)
+        for (int c = 0, made = 0; c < 300 && made < coves; ++c) {  // a cove
+            const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
+            if (BiomeAt(x0, z0) != b) continue;
+            const float R = g.R(450.0f, 750.0f), mouth = g.R(130.0f, 220.0f), facing = g.R(0.0f, 2.0f * PI);
+            const float rr = g.R(200.0f, 260.0f), Rc = R + rr * 1.1f;
+            const float half = (mouth * 0.5f + rr * 1.25f) / Rc;  // (the mouth: clear of the two heads' widest coast)
+            const float step = rr * 1.5f / Rc;
+            std::vector<Vector3> pts;
+            for (float a = facing + half; a <= facing + 2.0f * PI - half + 1e-3f; a += step) {
+                const float r = rr * g.R(0.9f, 1.15f);
+                pts.push_back({x0 + cosf(a) * Rc, z0 + sinf(a) * Rc, r});
+                if (fabsf(remainderf(a - facing, 2.0f * PI)) > half + 0.5f && g.F() < 0.5f)  // (behind the shore, away from the mouth: the land's bulk)
+                    pts.push_back({x0 + cosf(a) * (Rc + rr * 1.3f), z0 + sinf(a) * (Rc + rr * 1.3f), rr * g.R(1.1f, 1.5f)});
+            }
+            if (!featureClear(pts) || !clearOfIsles(x0, z0, R, 200.0f)) continue;
+            place(pts, b);
+            if (g.F() < 0.5f) {  // (an islet in the bay)
+                const float aa = facing + PI + g.R(-0.6f, 0.6f), d = R * 0.45f, ri = g.R(30.0f, 55.0f);
+                add(x0 + cosf(aa) * d, z0 + sinf(aa) * d, ri, heightFor(b, ri), false, b);
+            }
+            ++made;
+        }
+        for (int c = 0, made = 0; c < 300 && made < straits; ++c) {  // a strait
+            const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
+            if (BiomeAt(x0, z0) != b) continue;
+            const float len = g.R(1400.0f, 2200.0f), width = g.R(130.0f, 200.0f), dir = g.R(0.0f, PI);
+            const Vector2 al = {cosf(dir), sinf(dir)}, sd = {-al.y, al.x};
+            const float rr = g.R(190.0f, 250.0f), off = width * 0.5f + rr * 1.25f, bend = g.R(-0.00025f, 0.00025f);
+            std::vector<Vector3> pts;
+            for (float t = -len * 0.5f; t <= len * 0.5f; t += rr * 1.5f) {
+                const float curve = bend * t * t;  // (a gentle dogleg: the channel isn't a ruler line)
+                for (int side = -1; side <= 1; side += 2) {
+                    const float r = rr * g.R(0.9f, 1.2f), o = off * side + curve;
+                    pts.push_back({x0 + al.x * t + sd.x * o, z0 + al.y * t + sd.y * o, r});
+                    if (g.F() < 0.4f)  // (the ridge's bulk behind its shore)
+                        pts.push_back({x0 + al.x * t + sd.x * (o + side * rr * 1.4f), z0 + al.y * t + sd.y * (o + side * rr * 1.4f), rr * g.R(1.0f, 1.5f)});
+                }
+            }
+            if (!featureClear(pts)) continue;
+            place(pts, b);
+            ++made;
+        }
+    }
     // archipelagos: a centre, a spread, islands round it with channels a ship can work through
     for (int c = 0, made = 0; c < 400 && made < 64; ++c) {
         const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
