@@ -2,7 +2,7 @@
 on y = 0 (the origin at the middle of its foot), a given height in metres, fewer triangles, smaller textures.
 
   blender -b --factory-startup --python tools/prep_part.py -- in.glb out.glb --height 2.6 [--tris 12000] [--tex 512]
-      [--length 30 --align] [--yaw 180] [--tilt deg] [--width 9] [--desat 0.65]
+      [--length 30 --align] [--yaw 180] [--tilt deg] [--width 9] [--desat 0.65] [--trim-base 0.04]
           [--yaw 0] [--tilt 0] [--align] [--length 30]
 
 --align turns the model so its longest horizontal axis runs fore and aft (a hull: then --yaw 180 if the bow ended up
@@ -63,6 +63,22 @@ if width:
     me.transform(Matrix.Diagonal((width / max((hi.x - lo.x) * s, 1e-6), 1.0, 1.0, 1.0)))
 if tilt:
     me.transform(Matrix.Rotation(math.radians(-tilt), 4, "X"))  # (forward is -Y: leaning forward turns the top toward -Y)
+# --trim-base f: cut away everything below f of the height and stand it on what's left - Flux puts a disc of sand under
+# every palm and a plate under every lava rock (the user let those references through G3 to be cut here, 2026-11-22)
+trim = opt("--trim-base", 0.0)
+if trim > 0:
+    zs = [v.co.z for v in me.vertices]
+    cut_z = min(zs) + (max(zs) - min(zs)) * trim
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    gone = [v for v in bm.verts if v.co.z < cut_z]
+    bmesh.ops.delete(bm, geom=gone, context="VERTS")
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    zs = [v.co.z for v in me.vertices]
+    me.transform(Matrix.Translation((0, 0, -min(zs))))
+    print(f"TRIMMED the bottom {trim:.0%}: {len(gone)} vertices")
 
 # fewer triangles
 n = sum(len(p.vertices) - 2 for p in me.polygons)

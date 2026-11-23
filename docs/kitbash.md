@@ -47,3 +47,22 @@ them). So a ship is built from parts:
 Eagle, lion, mermaid: `tools/prep_part.py ... --height 2.6 --tris 12000 --tex 512` -> `data/parts/figure_<name>.glb`.
 Drawn by `ShipModel::Figure` at the stem anchor (`BS_FIGPOSE "y z tilt scale"`). The kraken failed in TRELLIS (a
 shredded mesh): reroll it before adding a fourth.
+
+## Biome props (2026-11-23)
+
+The Tropics' palms and banana plants and the Ember Reach's charred trees and obsidian spires are TRELLIS models from
+approved references (ZWUUUP biome2.py / biome_3d*.ps1), prepared with `tools/prep_part.py` into `data/parts/biome_*.glb`
+plus a `_lo` copy (600 triangles, 128 px textures) for range:
+
+| prop | source | prep |
+|---|---|---|
+| biome_palm | tree_palm_semi_s65 | `--height 11 --tris 4000 --trim-base 0.06` (the sand disc, the user's G3 waiver) |
+| biome_banana | plant_banana_semi_s52 | `--height 3.6 --tris 3000` |
+| biome_charred | tree_charred_semi_s52 | `--height 8 --tris 3000 --trim-base 0.05` (its ground disc) |
+| biome_spire | spire_obsidian_semi_s26 | `--height 12 --tris 2000 --desat 0.45` (it lit up magenta) |
+
+`_lo`: the same with `--tris 600 --tex 128` (pass `--tris` once: the script reads the first). Scenery::Build scatters
+them over each Tropics / Ember island, standing them on the island's mesh as drawn (a ray down its land triangles:
+RockHeight leaves them metres under the weathering) and on ground flat enough for each; DrawIslands draws them in full
+within 320 m, the low copy to 1800 m. `BS_FLORALOG=1` prints the counts. The sandstone boulder and lava rock came out
+of TRELLIS as shards at 30k faces and are being redone.

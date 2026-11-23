@@ -28,7 +28,10 @@ public:
     static const char* PowerName(int type);
 
 private:
+    // the generated flora and rocks (data/parts/biome_*.glb) standing on an island: which, where, turned and sized
+    struct Flora { Vector3 pos; float yaw, scale; int kind; };
     struct Island {
+        std::vector<Flora> flora;
         Mesh mesh{};
         Mesh far{};  // a coarse copy for a long way off (a third of the rings and segments, a third of the trees)
         Vector3 centre{};
@@ -56,7 +59,10 @@ private:
         float seaYaw = 0;  // (about up: +z turned to face out over the anchorage)
     };
     struct PropModel { Model m{}; bool tried = false; };
-    PropModel propModels[5];  // cannon, anchor, launch, barrel, chest
+    // cannon, anchor, launch, barrel, chest; then the biome props (palm, banana, charred tree, obsidian spire), each
+    // close up and (the next kBiomeKinds) its low-detail copy
+    static constexpr int kBiomeKinds = 4, kBiomeProp = 5;
+    PropModel propModels[kBiomeProp + 2 * kBiomeKinds];
     void DrawPropModel(int which, Matrix world);
     std::vector<Port> ports;
     Mesh cube{}, cyl{}, cone{};

@@ -5,6 +5,8 @@
 #include "rlgl.h"
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 // ---- small value noise for rock detail and colour variation ----------------------
 static float Hash3(int x, int y, int z) {
@@ -376,6 +378,57 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
     for (const Rock& k : rocks) {
         Island is;
         is.mesh = BuildIsland(k, maelstrom);
+        // the generated props: the Tropics' palms and banana plants (among the palms built in BuildIsland), the Ember
+        // Reach's charred trees and obsidian spires (it had nothing growing at all)
+        if (!k.stack && !maelstrom && (k.biome == campaign::TROPICS || k.biome == campaign::EMBER)) {
+            uint32_t s = (k.seed ^ 0xF10Au) | 1;
+            auto rnd = [&](float a, float b) { s = s * 1664525u + 1013904223u; return a + (b - a) * ((s >> 8) & 0xFFFFFF) / 16777216.0f; };
+            const bool trop = k.biome == campaign::TROPICS;
+            struct Want { int kind, n; float uLo, uHi, yMin, flat, sLo, sHi; };  // (flat: the least up-ness of the ground)
+            // (an island is a few hundred metres across and a hundred high: they have to be many, and big, to read)
+            const Want wants[2] = {trop ? Want{0, (int)(k.r * 0.3f), 0.45f, 0.97f, 1.4f, 0.75f, 0.85f, 1.3f}     // palms: on the beaches
+                                        : Want{2, (int)(k.r * 0.45f), 0.0f, 0.92f, 2.5f, 0.55f, 1.0f, 1.9f},   // charred trees
+                                   trop ? Want{1, (int)(k.r * 0.25f), 0.2f, 0.9f, 2.0f, 0.75f, 0.9f, 1.5f}     // banana plants
+                                        : Want{3, (int)(k.r * 0.14f), 0.1f, 0.97f, 1.5f, 0.3f, 0.9f, 2.6f}};   // spires: steep or not
+            // (the ground as drawn: the island's mesh has weathering on top of RockHeight, metres of it on a big one)
+            const float* V = is.mesh.vertices;
+            const unsigned short* Ix = is.mesh.indices;
+            const int nTri = is.mesh.triangleCount;
+            const unsigned char* Col = is.mesh.colors;
+            auto ground = [&](float x, float z, float& gy, float& up) {
+                bool hit = false;
+                for (int t = 0; t < nTri; ++t) {
+                    const int i0 = Ix ? Ix[t * 3] : t * 3, i1 = Ix ? Ix[t * 3 + 1] : t * 3 + 1, i2 = Ix ? Ix[t * 3 + 2] : t * 3 + 2;
+                    if (Col && Col[i0 * 4 + 3] != 255) continue;  // (the land, not the trees built on it)
+                    const float ax = V[i0 * 3], az = V[i0 * 3 + 2], bx = V[i1 * 3], bz = V[i1 * 3 + 2], cx = V[i2 * 3], cz = V[i2 * 3 + 2];
+                    if ((x < ax && x < bx && x < cx) || (x > ax && x > bx && x > cx) || (z < az && z < bz && z < cz) || (z > az && z > bz && z > cz)) continue;
+                    const float det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+                    if (fabsf(det) < 1e-9f) continue;
+                    const float l0 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / det, l1 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / det, l2 = 1.0f - l0 - l1;
+                    if (l0 < 0 || l1 < 0 || l2 < 0) continue;
+                    const float y = l0 * V[i0 * 3 + 1] + l1 * V[i1 * 3 + 1] + l2 * V[i2 * 3 + 1];
+                    if (hit && y <= gy) continue;
+                    const Vector3 A = {ax, V[i0 * 3 + 1], az}, B = {bx, V[i1 * 3 + 1], bz}, C = {cx, V[i2 * 3 + 1], cz};
+                    const Vector3 n = Vector3Normalize(Vector3CrossProduct(Vector3Subtract(B, A), Vector3Subtract(C, A)));
+                    gy = y;
+                    up = fabsf(n.y);
+                    hit = true;
+                }
+                return hit;
+            };
+            if (V && nTri)
+                for (const Want& w : wants)
+                    for (int t = 0, got = 0; t < w.n * 8 && got < w.n; ++t) {
+                        const float a = rnd(0, 2 * PI), u = sqrtf(rnd(w.uLo * w.uLo, w.uHi * w.uHi));
+                        const float d = u * RockCoast(k, a), x = k.x + cosf(a) * d, z = k.z + sinf(a) * d;
+                        float y = 0.0f, up = 0.0f;
+                        if (!ground(x, z, y, up) || y < w.yMin || up < w.flat) continue;
+                        const float sc = rnd(w.sLo, w.sHi);
+                        is.flora.push_back({{x, y - 0.15f * sc, z}, rnd(0, 2 * PI), sc, w.kind});
+                        ++got;
+                    }
+        }
+        if (getenv("BS_FLORALOG") && !is.flora.empty()) printf("[flora] island at %.0f,%.0f r %.0f biome %d: %d props\n", k.x, k.z, k.r, k.biome, (int)is.flora.size());
         if (!k.stack && k.r > 40.0f) is.far = BuildIsland(k, maelstrom, true);
         is.centre = {k.x, k.h * 0.4f, k.z};
         is.radius = k.r * 1.5f + k.h;
@@ -385,6 +438,7 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
 
 static constexpr float kFarCull = 9000.0f;     // m: nothing on the voyage's long sea shows past this
 static constexpr float kCoarseFrom = 1400.0f;  // m past an island's edge: its coarse copy
+static constexpr float kFloraNear = 320.0f, kFloraFar = 1800.0f;  // m: the generated props in full, in low detail, gone
 
 void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
     if (!ready) return;
@@ -393,6 +447,8 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
     r.SetLitParams(0.0f, 0.0f);
     r.SetShore(1.0f);
     rlDisableBackfaceCulling();  // ragged cliffs can fold over a little
+    static std::vector<const Island*> floraOf;
+    floraOf.clear();
     for (const Island& is : islands) {
         if (cull && Vector3DotProduct(Vector3Subtract(is.centre, v.pos), fwd) < -is.radius) continue;  // behind the camera
         float d = Vector3Distance(is.centre, v.pos);
@@ -404,10 +460,33 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
         }
         // a long way off: the coarse copy (it has to be well out, its coastline is a little different)
         DrawMesh(cull && is.far.vertexCount && d - is.radius > kCoarseFrom ? is.far : is.mesh, rockMat, MatrixIdentity());
+        // its generated palms, plants and spires: close up in full, the low-detail copy further out, none far off (for
+        // the sun's shadow, cull off: the low copies round the shadow's centre)
+        if (!is.flora.empty() && (cull ? d - is.radius < kFloraFar : Vector3Distance(is.centre, v.target) - is.radius < 1400.0f)) floraOf.push_back(&is);
+    }
+    rlDrawRenderBatchActive();
+    r.SetShore(0.0f);
+    if (getenv("BS_FLORALOG") && cull) {
+        static int fr = 0;
+        if (fr++ % 120 == 0) {
+            int n = 0, nearN = 0;
+            float best = 1e9f;
+            for (const Island* isp : floraOf)
+                for (const Flora& f : isp->flora) { ++n; const float fd = Vector3Distance(f.pos, v.pos); nearN += fd < kFloraNear; best = fminf(best, fd); }
+            printf("[flora] cam %.0f,%.0f,%.0f: %d islands, %d props, %d near, nearest %.0f m, model %d meshes\n", v.pos.x, v.pos.y, v.pos.z, (int)floraOf.size(), n, nearN, best, propModels[kBiomeProp].m.meshCount);
+        }
+    }
+    for (const Island* isp : floraOf) {
+            for (const Flora& f : isp->flora) {
+                const float fd = Vector3Distance(f.pos, v.pos);
+                if (cull && fd > kFloraFar) continue;
+                if (cull && fd > 60.0f && Vector3DotProduct(Vector3Subtract(f.pos, v.pos), fwd) < -20.0f) continue;
+                const int which = kBiomeProp + f.kind + (!cull || fd > kFloraNear ? kBiomeKinds : 0);
+                DrawPropModel(which, MatrixMultiply(MatrixMultiply(MatrixScale(f.scale, f.scale, f.scale), MatrixRotateY(f.yaw)), MatrixTranslate(f.pos.x, f.pos.y, f.pos.z)));
+            }
     }
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
-    r.SetShore(0.0f);
 }
 
 // ---- harbours ------------------------------------------------------------------------
@@ -662,11 +741,13 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
 }
 
 void Scenery::DrawPropModel(int which, Matrix world) {
-    static const char* const kName[5] = {"cannon", "anchor", "launch", "barrel", "chest"};
+    static const char* const kName[kBiomeProp + kBiomeKinds] = {"prop_cannon", "prop_anchor", "prop_launch", "prop_barrel", "prop_chest",
+                                                                "biome_palm", "biome_banana", "biome_charred", "biome_spire"};
     PropModel& pm = propModels[which];
     if (!pm.tried) {
         pm.tried = true;
-        const char* path = TextFormat("%sdata/parts/prop_%s.glb", GetApplicationDirectory(), kName[which]);  // (beside the game, whatever the working folder)
+        const bool lo = which >= kBiomeProp + kBiomeKinds;
+        const char* path = TextFormat("%sdata/parts/%s%s.glb", GetApplicationDirectory(), kName[lo ? which - kBiomeKinds : which], lo ? "_lo" : "");  // (beside the game, whatever the working folder)
         if (FileExists(path)) {
             pm.m = LoadModel(path);
             for (int i = 0; i < pm.m.materialCount; ++i) pm.m.materials[i].shader = propMat.shader;
