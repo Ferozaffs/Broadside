@@ -806,7 +806,14 @@ struct Monster {
 struct Harbour {
     float x, z;  // where ships tie up (the pier runs from here to the island behind it)
     float ang;   // the way out to the pier and the island behind it (on the Isles: the bearing from the arena centre)
+    // (the campaign: a port in a cove or a strait - its ways in: a gate at the mouth or the channel's end, a point
+    // outside it; reach: how far round the port the shape's land lies)
+    uint8_t shape = 0;  // HARBOUR_OPEN, HARBOUR_COVE, HARBOUR_STRAIT
+    uint8_t ways = 0;
+    float reach = 0.0f;
+    Vector2 gate[2]{}, outside[2]{};
 };
+enum { HARBOUR_OPEN = 0, HARBOUR_COVE = 1, HARBOUR_STRAIT = 2 };
 std::vector<Harbour> MakeHarbours(uint32_t seed, uint8_t arena = ARENA_ISLES);
 // Who may use harbour i: -1 anyone, else that team (in pirate mode team 1 is the pirate, harbour 0 his cove)
 int HarbourOwner(int mode, int i);

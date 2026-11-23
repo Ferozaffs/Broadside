@@ -305,69 +305,174 @@ static void MakeWorld(uint32_t seed, std::vector<Rock>& out, std::vector<Harbour
             isles.push_back(p);
         }
     };
-    // three coves in the whole sea, each in a region of its own (not the home waters)
+    // a bay's land: round an oval (R*asp along ax, R/asp across it) from one side of the opening to the other, the
+    // shore wandering, the land behind always there (deep where the slow wave says), two headlands curling in toward
+    // an off-centre mouth. Returns the mouth's middle in *gate.
+    auto bayPts = [&](float x0, float z0, float R, float asp, float ax, float facing, float open, float mouth, float skew, Vector2* gate) {
+        const float p1 = g.R(0.0f, 2.0f * PI), p2 = g.R(0.0f, 2.0f * PI), thick = g.R(0.0f, 2.0f * PI);
+        auto shoreR = [&](float a) {
+            const float c = cosf(a - ax), sn = sinf(a - ax);
+            const float ell = R / sqrtf(c * c / (asp * asp) + sn * sn * asp * asp);
+            return ell * (1.0f + 0.15f * sinf(2.0f * a + p1) + 0.08f * sinf(3.0f * a + p2));
+        };
+        std::vector<Vector3> pts;
+        float rr = g.R(160.0f, 260.0f);
+        for (float a = facing + open * 0.5f; a <= facing + 2.0f * PI - open * 0.5f; ) {
+            const float Rs = shoreR(a) + rr * 1.05f;
+            pts.push_back({x0 + cosf(a) * Rs, z0 + sinf(a) * Rs, rr});
+            const float depth = 0.5f + 0.5f * sinf(a + thick);
+            for (int k = 1; k <= 3; ++k)
+                if (k == 1 ? g.F() < 0.85f : g.F() < depth * (k == 2 ? 0.85f : 0.45f)) {
+                    const float rb = rr * g.R(1.0f, 1.5f), Rb = Rs + rr * (0.8f * k + 0.3f) + g.R(-30.0f, 50.0f);
+                    const float ab = a + g.R(-0.06f, 0.06f);
+                    pts.push_back({x0 + cosf(ab) * Rb, z0 + sinf(ab) * Rb, rb});
+                }
+            const float next = g.R(160.0f, 260.0f);
+            a += (rr + next) * 0.62f / Rs;  // (by both: a big one and a small one still meet)
+            rr = next;
+        }
+        const Vector2 mid = {x0 + cosf(facing + skew) * (shoreR(facing) + 260.0f), z0 + sinf(facing + skew) * (shoreR(facing) + 260.0f)};
+        for (int side = -1; side <= 1; side += 2) {
+            const float a0 = facing + side * open * 0.5f;
+            const float Rs = shoreR(a0);
+            const Vector2 end = {x0 + cosf(a0) * (Rs + 200.0f), z0 + sinf(a0) * (Rs + 200.0f)};
+            const Vector2 to = Vector2Normalize(Vector2Subtract(mid, end));
+            const float reach = fmaxf(0.0f, Vector2Distance(end, mid) - mouth * 0.5f);
+            for (float t = 100.0f; t < reach - 140.0f; t += 150.0f) {
+                const float rh = g.R(130.0f, 180.0f) * (1.0f - 0.35f * t / fmaxf(reach, 1.0f));  // (tapering toward its point)
+                pts.push_back({end.x + to.x * t, end.y + to.y * t, rh});
+            }
+        }
+        if (gate) *gate = mid;
+        return pts;
+    };
+    // a port's own shape: clear of the other ports and of every island but its own, its anchorage kept open
+    auto portShapeClear = [&](const std::vector<Vector3>& pts, int i, float keep) {
+        for (const Vector3& p : pts) {
+            if (fabsf(p.x) > lim || fabsf(p.y) > lim) return false;
+            for (int j = 0; j < (int)ports.size(); ++j) {
+                const float d = Vector2Distance({ports[j].x, ports[j].z}, {p.x, p.y});
+                if (j == i ? d < keep + p.z * 1.25f : d < 1100.0f + p.z) return false;
+            }
+            for (int k = 0; k < (int)isles.size(); ++k)
+                if (k != i && Vector2Distance({isles[k].x, isles[k].y}, {p.x, p.y}) < isles[k].z * 1.3f + p.z * 1.3f + 220.0f) return false;
+        }
+        return true;
+    };
+    // two ports at the back of a cove, two on the side of a strait: each in a region of its own, never the home port
+    bool coveIn[BIOMES] = {}, straitIn[BIOMES] = {};
+    {
+        int order[kPorts - 1];
+        for (int i = 0; i < kPorts - 1; ++i) order[i] = i < homePort ? i : i + 1;
+        for (int i = kPorts - 2; i > 0; --i) std::swap(order[i], order[(int)(g.F() * (i + 1)) % (i + 1)]);
+        bool used[BIOMES] = {};
+        int coves = 0, straits = 0;
+        for (int n = 0; n < kPorts - 1 && (coves < 2 || straits < 2); ++n) {
+            const int i = order[n];
+            const uint8_t b = PortBiome(i);
+            if (used[b]) continue;
+            Harbour& hb = ports[i];
+            const Vector2 in = {cosf(hb.ang), sinf(hb.ang)};  // (toward the port's island)
+            const float pr = isles[i].z;
+            bool made = false;
+            for (int c = 0; c < 40 && !made && coves < 2 && b != TEMPERATE; ++c) {
+                // the bay: long along the way in, the anchorage toward its back, the island at the back of it
+                const float R = g.R(560.0f, 760.0f), asp = g.R(1.1f, 1.3f);
+                const float d = Clamp(R * asp - (2.0f * pr + 70.0f) + 60.0f, 0.2f * R, 0.55f * R);
+                const float x0 = hb.x - in.x * d, z0 = hb.z - in.y * d;
+                const float facing = hb.ang + PI + g.R(-0.3f, 0.3f);
+                Vector2 gate;
+                std::vector<Vector3> pts = bayPts(x0, z0, R, asp, hb.ang, facing, g.R(1.2f, 1.6f), g.R(300.0f, 400.0f), g.R(-0.12f, 0.12f), &gate);
+                if (!portShapeClear(pts, i, 260.0f)) continue;
+                place(pts, b);
+                hb.shape = HARBOUR_COVE;
+                hb.ways = 1;
+                hb.gate[0] = gate;
+                const Vector2 out = Vector2Normalize(Vector2Subtract(gate, {x0, z0}));
+                hb.outside[0] = Vector2Add(gate, Vector2Scale(out, 380.0f));
+                hb.reach = Vector2Distance({hb.x, hb.z}, gate) + 250.0f;
+                coveIn[b] = true;
+                ++coves;
+                made = true;
+            }
+            for (int c = 0; c < 40 && !made && straits < 2; ++c) {
+                // the strait: along the island's shore, the island one side of it, a basin off the anchorage
+                const Vector2 al = {-in.y, in.x};
+                const float len = g.R(1900.0f, 2600.0f), bend = g.R(-0.00012f, 0.00012f), wp = g.R(0.0f, 2.0f * PI);
+                const float w0 = g.R(220.0f, 260.0f), w1 = g.R(280.0f, 340.0f), basin = 470.0f, edge = 85.0f;
+                auto width = [&](float t) {
+                    const float wc = w0 + (w1 - w0) * (0.5f + 0.5f * sinf(t * 0.0035f + wp));
+                    return wc + (basin - wc) * expf(-(t / 520.0f) * (t / 520.0f));
+                };
+                std::vector<Vector3> pts;
+                float tEnd[2] = {0.0f, 0.0f};  // (where the channel opens out, each way)
+                for (int side = -1; side <= 1; side += 2) {  // (+1: the island's shore)
+                    const float t0 = -len * 0.5f + g.R(0.0f, 0.2f) * len, t1 = len * 0.5f - g.R(0.0f, 0.2f) * len;
+                    const float ph = g.R(0.0f, 2.0f * PI);
+                    tEnd[0] = fminf(tEnd[0], t0);
+                    tEnd[1] = fmaxf(tEnd[1], t1);
+                    for (float t = t0; t <= t1; ) {
+                        const float u = (t - t0) / fmaxf(t1 - t0, 1.0f), taper = 0.55f + 0.45f * sinf(PI * u);
+                        const float rr = g.R(150.0f, 250.0f) * taper;
+                        const float shore = side > 0 ? edge : edge - width(t);
+                        const float o = shore + side * rr * 1.05f + bend * t * t + 30.0f * sinf(t * 0.006f + ph);
+                        if (side < 0 || fabsf(t) > pr + 40.0f) {  // (the island is this shore's middle)
+                            pts.push_back({hb.x + al.x * t + in.x * o, hb.z + al.y * t + in.y * o, rr});
+                            if (g.F() < 0.55f * taper) {
+                                const float ob = o + side * rr * g.R(1.1f, 1.9f), rb = rr * g.R(0.9f, 1.6f), tb = t + g.R(-60.0f, 60.0f);
+                                pts.push_back({hb.x + al.x * tb + in.x * ob, hb.z + al.y * tb + in.y * ob, rb});
+                            }
+                        }
+                        t += rr * 1.45f;
+                    }
+                }
+                if (!portShapeClear(pts, i, 100.0f)) continue;
+                place(pts, b);
+                hb.shape = HARBOUR_STRAIT;
+                hb.ways = 2;
+                for (int e = 0; e < 2; ++e) {
+                    const float t = tEnd[e], o = edge - width(t) * 0.5f + bend * t * t;  // (the channel's middle at its end)
+                    hb.gate[e] = {hb.x + al.x * t + in.x * o, hb.z + al.y * t + in.y * o};
+                    const float sg = e ? 1.0f : -1.0f;
+                    hb.outside[e] = {hb.gate[e].x + al.x * sg * 380.0f, hb.gate[e].y + al.y * sg * 380.0f};
+                }
+                hb.reach = len * 0.5f + 250.0f;
+                straitIn[b] = true;
+                ++straits;
+                made = true;
+            }
+            if (made) used[b] = true;
+        }
+    }
+    // the free coves: three in the sea with the ports' (each in a region of its own, not the home waters)
     {
         int regions[BIOMES - 1] = {TROPICS, FROZEN, EMBER, FOG};
         for (int i = 3; i > 0; --i) std::swap(regions[i], regions[(int)(g.F() * (i + 1)) % (i + 1)]);
-        for (int n = 0; n < 3; ++n) {
+        int have = 0;
+        for (bool c : coveIn) have += c;
+        for (int n = 0; n < 4 && have < 3; ++n) {
             const uint8_t b = (uint8_t)regions[n];
+            if (coveIn[b]) continue;
             for (int c = 0; c < 300; ++c) {
                 const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
                 if (BiomeAt(x0, z0) != b) continue;
                 const float R = g.R(480.0f, 720.0f), facing = g.R(0.0f, 2.0f * PI);
-                const float p1 = g.R(0.0f, 2.0f * PI), p2 = g.R(0.0f, 2.0f * PI), thick = g.R(0.0f, 2.0f * PI);
-                const float open = g.R(1.3f, 1.8f);  // (the bay's opening, before the headlands close it)
-                const float asp = g.R(1.25f, 1.6f), ax = g.R(0.0f, PI);  // (an oval bay, its long way any way)
-                auto shoreR = [&](float a) {
-                    const float c = cosf(a - ax), sn = sinf(a - ax);
-                    const float ell = R / sqrtf(c * c / (asp * asp) + sn * sn * asp * asp / 1.0f);  // (the oval: R*asp one way, R/asp the other)
-                    return ell * (1.0f + 0.15f * sinf(2.0f * a + p1) + 0.08f * sinf(3.0f * a + p2));
-                };
-                std::vector<Vector3> pts;
-                // the shore: round the bay, its distance wandering, the rocks of every size, spaced so neighbours overlap
-                float rr = g.R(160.0f, 260.0f);
-                for (float a = facing + open * 0.5f; a <= facing + 2.0f * PI - open * 0.5f; ) {
-                    const float Rs = shoreR(a) + rr * 1.05f;
-                    pts.push_back({x0 + cosf(a) * Rs, z0 + sinf(a) * Rs, rr});
-                    // the land behind: always some, deep where the slow wave says
-                    const float depth = 0.5f + 0.5f * sinf(a + thick);
-                    for (int k = 1; k <= 3; ++k)
-                        if (k == 1 ? g.F() < 0.85f : g.F() < depth * (k == 2 ? 0.85f : 0.45f)) {
-                            const float rb = rr * g.R(1.0f, 1.5f), Rb = Rs + rr * (0.8f * k + 0.3f) + g.R(-30.0f, 50.0f);
-                            const float ab = a + g.R(-0.06f, 0.06f);
-                            pts.push_back({x0 + cosf(ab) * Rb, z0 + sinf(ab) * Rb, rb});
-                        }
-                    const float next = g.R(160.0f, 260.0f);
-                    a += (rr + next) * 0.62f / Rs;  // (by both: a big one and a small one still meet)
-                    rr = next;
-                }
-                // the headlands: either side of the opening, curling in toward each other (the mouth: off-centre)
-                const float mouth = g.R(140.0f, 230.0f), skew = g.R(-0.25f, 0.25f);
-                for (int side = -1; side <= 1; side += 2) {
-                    const float a0 = facing + side * open * 0.5f;
-                    const float Rs = shoreR(a0);
-                    const Vector2 end = {x0 + cosf(a0) * (Rs + 200.0f), z0 + sinf(a0) * (Rs + 200.0f)};
-                    const Vector2 mid = {x0 + cosf(facing + skew) * (shoreR(facing) + 260.0f), z0 + sinf(facing + skew) * (shoreR(facing) + 260.0f)};  // (the mouth's middle)
-                    const Vector2 to = Vector2Normalize(Vector2Subtract(mid, end));
-                    const float reach = fmaxf(0.0f, Vector2Distance(end, mid) - mouth * 0.5f);
-                    for (float t = 100.0f; t < reach - 140.0f; t += 150.0f) {
-                        const float rh = g.R(130.0f, 180.0f) * (1.0f - 0.35f * t / fmaxf(reach, 1.0f));  // (tapering toward its point)
-                        pts.push_back({end.x + to.x * t, end.y + to.y * t, rh});
-                    }
-                }
+                std::vector<Vector3> pts = bayPts(x0, z0, R, g.R(1.25f, 1.6f), g.R(0.0f, PI), facing, g.R(1.3f, 1.8f), g.R(140.0f, 230.0f), g.R(-0.25f, 0.25f), nullptr);
                 if (!featureClear(pts) || !clearOfIsles(x0, z0, R, 200.0f)) continue;
                 place(pts, b);
                 if (g.F() < 0.6f) {  // (an islet in the bay)
                     const float aa = facing + PI + g.R(-0.7f, 0.7f), d = R * g.R(0.3f, 0.55f), ri = g.R(30.0f, 70.0f);
                     add(x0 + cosf(aa) * d, z0 + sinf(aa) * d, ri, heightFor(b, ri), false, b);
                 }
+                coveIn[b] = true;
+                ++have;
                 break;
             }
         }
     }
-    // a strait in each region: two shores of their own, a channel that widens and narrows, curving
+    // a strait in each region that hasn't a port's: two shores of their own, a channel that widens and narrows, curving
     for (int b = 0; b < BIOMES; ++b)
-        for (int c = 0; c < 300; ++c) {
+        for (int c = 0; c < 300 && !straitIn[b]; ++c) {
             const float x0 = g.R(-lim, lim), z0 = g.R(-lim, lim);
             if (BiomeAt(x0, z0) != b) continue;
             const float len = g.R(1500.0f, 2300.0f), dir = g.R(0.0f, PI), bend = g.R(-0.0005f, 0.0005f);
@@ -3873,6 +3978,37 @@ void World::BotThink(Ship& s, float dt) {
             float rad = rel.x * axis.x + rel.y * axis.y + 730.0f, lat = fabsf(rel.x * axis.y - rel.y * axis.x);
             if (lat > 45.0f + fmaxf(0.0f, 600.0f - rad) * 0.6f) aim = {h.x - axis.x * 190.0f, 0.0f, h.z - axis.y * 190.0f};
             break;
+        }
+        if (BigSea()) {
+            // a port in a cove or a strait: bound in or out with the way blocked, make for its gate (or the point outside
+            // the gate when even that's hidden behind the land)
+            auto clearTo = [&](Vector2 q) {
+                const Vector2 p0 = {s.pos.x, s.pos.z};
+                const float L = Vector2Distance(p0, q);
+                for (float u = 40.0f; u < L - 20.0f; u += 40.0f)
+                    if (RocksHeight(rocks, p0.x + (q.x - p0.x) * u / L, p0.y + (q.y - p0.y) * u / L) > -6.0f) return false;
+                return true;
+            };
+            for (const Harbour& h : harbours) {
+                if (!h.ways) continue;
+                const bool meIn = Vector2Distance({h.x, h.z}, {s.pos.x, s.pos.z}) < h.reach, goalIn = Vector2Distance({h.x, h.z}, {aim.x, aim.z}) < h.reach;
+                if (!meIn && !goalIn) continue;
+                if (clearTo({aim.x, aim.z})) break;
+                int w = 0;
+                float bestW = 1e18f;
+                for (int e = 0; e < h.ways; ++e) {
+                    const float c = Vector2Distance({s.pos.x, s.pos.z}, h.gate[e]) + Vector2Distance(h.gate[e], {aim.x, aim.z});
+                    if (c < bestW) { bestW = c; w = e; }
+                }
+                const bool inbound = Vector2Distance({h.x, h.z}, {aim.x, aim.z}) < Vector2Distance({h.x, h.z}, {s.pos.x, s.pos.z});
+                if (Vector2Distance({s.pos.x, s.pos.z}, h.gate[w]) < 140.0f) {  // (at the gate: in, the feelers take her the rest; out, on out)
+                    if (!inbound) aim = {h.outside[w].x, 0.0f, h.outside[w].y};
+                    break;
+                }
+                const Vector2 to = clearTo(h.gate[w]) ? h.gate[w] : h.outside[w];
+                aim = {to.x, 0.0f, to.y};
+                break;
+            }
         }
         desired = atan2f(aim.x - s.pos.x, aim.z - s.pos.z);
         goalDist = flat(goal, s.pos);

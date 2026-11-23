@@ -19,6 +19,14 @@ convoys, rescues, escorts, cargo, and mystery chains that lead to the big boss f
   narrowing an off-centre mouth 140-230 m wide; and a **strait** in each region - two shores of their own length,
   tapering at the ends, a channel that narrows and opens (110-260 m) and curves, 1.5-2.3 km long. Big rocks
   (r 150-280 m), spaced by both neighbours so they meet. Ports are placed first, as before.
+- Ports in those shapes (the user: "Would be nice if some of the ports were in a cove or a straight"): two ports sit at
+  the back of a **cove** of their own (the bay long along the way in, the port's island at its back, a mouth of
+  300-400 m) and two on the side of a **strait** (the port's island one shore, a basin of about 470 m off the
+  anchorage, the channel 220-340 m either way), each in a region of its own and never the home port; they stand in for
+  that region's free cove or strait (still three coves, five straits). Harbour::shape / gate / outside: a bot bound in
+  or out whose way is hidden by land sails for the gate (the mouth, the channel's end), or the point outside it.
+  simtest CAMPTEST floods the water from every anchorage out to the open sea; the fan straight out is checked for the
+  open ports only.
 - The chart (Tab): the whole sea, ports, the quest markers, where you've been.
 - Fast-sail (hold F when no enemy is near): the sea runs at 4x.
 

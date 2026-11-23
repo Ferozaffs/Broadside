@@ -941,10 +941,36 @@ static int CampaignTest() {
                 const float ang = hb.ang + PI + a * 0.35f;
                 if (RocksHeight(g.rocks, hb.x + cosf(ang) * r, hb.z + sinf(ang) * r) > -8.0f) { ++blocked; break; }
             }
-        const bool bad = here > -15.0f || coast < 0.0f || blocked > 1 || campaign::BiomeAt(hb.x, hb.z) != campaign::PortBiome(h);
+        // the way out to the open sea: a flood fill through deep enough water, from the anchorage to the edge of a box
+        bool reach = false;
+        {
+            const float cell = 25.0f, half = fmaxf(1800.0f, hb.reach + 700.0f);
+            const int n = (int)(2.0f * half / cell) + 1;
+            std::vector<uint8_t> seen((size_t)n * n, 0);
+            std::vector<int> q;
+            const int c0 = n / 2;
+            q.push_back(c0 * n + c0);
+            seen[(size_t)c0 * n + c0] = 1;
+            for (size_t qi = 0; qi < q.size() && !reach; ++qi) {
+                const int ci = q[qi] % n, cj = q[qi] / n;
+                if (ci == 0 || cj == 0 || ci == n - 1 || cj == n - 1) { reach = true; break; }
+                const int di[4] = {1, -1, 0, 0}, dj[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; ++k) {
+                    const int ni = ci + di[k], nj = cj + dj[k];
+                    if (seen[(size_t)nj * n + ni]) continue;
+                    seen[(size_t)nj * n + ni] = 1;
+                    const float x = hb.x - half + ni * cell, z = hb.z - half + nj * cell;
+                    if (RocksHeight(g.rocks, x, z) < -8.0f) q.push_back(nj * n + ni);
+                }
+            }
+        }
+        static const char* const kShape[3] = {"open", "cove", "strait"};
+        const bool bad = here > -15.0f || coast < 0.0f || !reach || (hb.shape == HARBOUR_OPEN && blocked > 1) ||
+                         campaign::BiomeAt(hb.x, hb.z) != campaign::PortBiome(h);
         problems += bad;
-        printf("   %-13s %-20s at (%6.0f, %6.0f): depth %.0f m, pier %.0f m, %d of 5 approaches blocked%s\n", campaign::PortName(h),
-               campaign::kBiomeNames[campaign::PortBiome(h)], hb.x, hb.z, here, coast, blocked, bad ? "   <-- PROBLEM" : "");
+        printf("   %-13s %-20s at (%6.0f, %6.0f) %-6s: depth %.0f m, pier %.0f m, %d of 5 approaches blocked, %s%s\n", campaign::PortName(h),
+               campaign::kBiomeNames[campaign::PortBiome(h)], hb.x, hb.z, kShape[hb.shape % 3], here, coast, blocked,
+               reach ? "open sea reached" : "NO WAY OUT", bad ? "   <-- PROBLEM" : "");
     }
     // a captain: first in the home port, then out in the Ember Reach
     g.campBotCaptain = true;
