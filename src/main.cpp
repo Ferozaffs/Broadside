@@ -7595,6 +7595,11 @@ void Game::Frame() {
                 rv.target = {hb.x + o.x * c[0] + sd.x * c[1], c[2], hb.z + o.y * c[0] + sd.y * c[1]};
                 rv.pos = {hb.x + o.x * c[3] + sd.x * c[4], c[5], hb.z + o.y * c[3] + sd.y * c[4]};
             }
+            if (getenv("BS_HOUSECAM") && sscanf(getenv("BS_HOUSECAM"), "%f %f %f", &c[0], &c[1], &c[2]) == 3 && opt.harbourCam < scenery.PortCount()) {
+                const Vector3 h = scenery.Houses(opt.harbourCam);  // (BS_HOUSECAM "back side y": the warehouses, from seaward of them)
+                rv.target = {h.x, h.y + 4.0f, h.z};
+                rv.pos = {h.x - o.x * c[0] + sd.x * c[1], h.y + c[2], h.z - o.y * c[0] + sd.y * c[1]};
+            }
         }
         if (opt.crateCam && !crates.empty()) {
             rv.target = {crates[0].x, Ocean().Height(crates[0].x, crates[0].z) + 2.0f, crates[0].z};

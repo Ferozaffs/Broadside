@@ -66,3 +66,16 @@ them over each Tropics / Ember island, standing them on the island's mesh as dra
 RockHeight leaves them metres under the weathering) and on ground flat enough for each; DrawIslands draws them in full
 within 320 m, the low copy to 1800 m. `BS_FLORALOG=1` prints the counts. The sandstone boulder and lava rock came out
 of TRELLIS as shards at 30k faces and are being redone.
+
+## Harbour houses (2026-11-23)
+
+Each region's warehouse is a TRELLIS model from an approved reference (ZWUUUP houses.py, cut out with BiRefNet by
+`cut_refs.py`, then `houses_3d.ps1`), prepared with `tools/prep_part.py --height 10 --tris 8000 --tex 1024` into
+`data/parts/house_<region>.glb` (temperate, tropics, frozen, ember, fog). Scenery::BuildHarbours uses the region's model
+when its file is there (the built house otherwise): two to a harbour, either side of the pier, each on a stone quay of
+its own just seaward of where the land rises on its side (its back to the rock: against a cliff the old place on the
+pier's line put the house inside it), the quay's top at 3.4 m, above the swell. `BS_HOUSECAM="back side y"` with
+`--harbour-cam i` looks at harbour i's houses (screenshots); `BS_FLORALOG` prints where they stand.
+
+Builder::Box mirrors an axis when it's handed a left-handed frame (the harbours' X across, Y up, Z out is one): every
+harbour box had been inside out, culled - thin planks hid it, a quay didn't.

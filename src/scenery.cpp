@@ -565,6 +565,9 @@ struct Builder {
     }
     // box of size s centred at c, its local axes x, y, z (unit vectors)
     void Box(Vector3 c, Vector3 s, Vector3 x, Vector3 y, Vector3 z, Color col) {
+        // (a left-handed frame - the harbours' X across, Y up, Z out is one - turned every face inside out, culled: a box
+        // is the same box with an axis mirrored, and the faces then wind outward)
+        if (Vector3DotProduct(Vector3CrossProduct(x, y), z) < 0.0f) x = Vector3Negate(x);
         Vector3 hx = Vector3Scale(x, s.x * 0.5f), hy = Vector3Scale(y, s.y * 0.5f), hz = Vector3Scale(z, s.z * 0.5f);
         auto V = [&](float i, float j, float k) {
             return Vector3Add(c, Vector3Add(Vector3Scale(hx, i), Vector3Add(Vector3Scale(hy, j), Vector3Scale(hz, k))));
@@ -740,12 +743,28 @@ void Scenery::BuildHarbours(const std::vector<Harbour>& hs, const std::vector<Ro
             p.houseKind = FileExists(TextFormat("%sdata/parts/%s.glb", GetApplicationDirectory(), kHouse[hb])) ? hb : -1;
         }
         for (int k = -1; k <= 1; k += 2) {
-            Vector3 hc = at(p.pierFrom - 4.0f, k * 14.0f, 0);
-            p.houses[(k + 1) / 2] = {hc.x, 2.2f, hc.z};
+            // (this side's own shore: where the land rises past the quay's height, along the line the house stands on)
+            float shore = p.pierFrom + 20.0f;
+            for (float r = p.pierTo + 12.0f; r < p.pierFrom + 20.0f; r += 1.0f) {
+                const Vector3 q = at(r, k * 14.0f, 0);
+                if (RocksHeight(rocks, q.x, q.z) > 1.5f) { shore = r; break; }
+            }
+            const float back = shore + 1.0f, mid = back - 4.6f;  // (its back wall against the rock, the house 8-9 m deep)
+            Vector3 hc = at(mid, k * 14.0f, 0);
+            p.houses[(k + 1) / 2] = {hc.x, p.houseKind >= 0 ? 3.4f : 2.2f, hc.z};  // (a quay above the swell, about the pier's deck)
+            // the quay it stands on: dressed stone from the rock out past the crates, a darker course at the waterline
+            {
+                const float q0 = mid - 10.0f, q1 = back + 2.0f;
+                B.Box(at((q0 + q1) * 0.5f, k * 14.0f, -1.0f), {12.5f, 8.8f, q1 - q0}, X, Y, Z, tone(stoneDk, rnd(0.75f, 0.9f)));
+                B.Box(at((q0 + q1) * 0.5f, k * 14.0f, -4.6f), {12.9f, 1.6f, q1 - q0 + 0.4f}, X, Y, Z, tone(stoneDk, 0.6f));
+                B.Box(at(q0 + 0.25f, k * 14.0f, 3.55f), {12.5f, 0.3f, 0.5f}, X, Y, Z, tone(stoneDk, 0.7f));  // (the coping along its edge)
+            }
+            if (getenv("BS_FLORALOG"))  // (screenshots: where to point the camera)
+                printf("[harbour] %d house %d at %.1f,%.1f out %.3f,%.3f kind %d\n", (int)ports.size(), (k + 1) / 2, hc.x, hc.z, p.out.x, p.out.y, p.houseKind);
             if (p.houseKind >= 0) {  // (the model: only the crates and barrels outside built here)
                 const Vector3 face = Vector3Add({hc.x, 0, hc.z}, Vector3Scale(Z, -4.6f));
                 for (int q = 0; q < 5; ++q) {
-                    Vector3 bp = Vector3Add(Vector3Add({face.x, 2.2f, face.z}, Vector3Scale(X, rnd(-5.0f, 5.0f))), Vector3Scale(Z, -rnd(1.0f, 3.5f)));
+                    Vector3 bp = Vector3Add(Vector3Add({face.x, 3.4f, face.z}, Vector3Scale(X, rnd(-5.0f, 5.0f))), Vector3Scale(Z, -rnd(1.0f, 3.5f)));
                     if (q < 3) B.Cyl(bp, 0.55f, 0.5f, 1.3f, 10, tone(wood, rnd(0.7f, 1.0f)));
                     else B.Box(Vector3Add(bp, {0, 0.6f, 0}), {1.2f, 1.2f, 1.2f}, X, Y, Z, tone({150, 112, 70, 255}, rnd(0.8f, 1.1f)));
                 }
