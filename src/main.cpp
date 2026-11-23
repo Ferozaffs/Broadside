@@ -465,10 +465,12 @@ public:
     std::map<std::string, std::string> faceOf;  // (whose -> face)
     std::map<std::string, uint32_t> faceLast;   // (face -> when last seen)
     uint32_t faceClock = 0;
-    std::string PickFace(const std::string& who, const std::vector<std::string>& pool);
+    // sex: 1 only women's faces, 2 only men's (a name that says which), 0 any
+    std::string PickFace(const std::string& who, const std::vector<std::string>& pool, int sex = 0);
     std::string PirateFaceFor(int ship) {
         std::vector<std::string> pool(std::begin(people::kPiratePool), std::end(people::kPiratePool));
-        return PickFace(std::string("pirate|") + NameOf(ship), pool);
+        const std::string name = NameOf(ship);
+        return PickFace(std::string("pirate|") + name, pool, people::NameSex(name));
     }
     void DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
                   float age, float alpha, const std::string* idleOf = nullptr);
@@ -9424,8 +9426,13 @@ void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, 
     }
 }
 
-std::string Game::PickFace(const std::string& who, const std::vector<std::string>& pool) {
-    if (pool.empty()) return "";
+std::string Game::PickFace(const std::string& who, const std::vector<std::string>& all, int sex) {
+    if (all.empty()) return "";
+    std::vector<std::string> pool;
+    if (sex)  // (the faces that go with the name, if any of them has been imported)
+        for (const std::string& f : all)
+            if (people::WomanFace(f) == (sex == 1) && Portrait(f)) pool.push_back(f);
+    if (pool.empty()) pool = all;
     if (faceOf.size() > 4000) faceOf.clear();
     auto it = faceOf.find(who);
     std::string face;
@@ -9454,8 +9461,9 @@ void Game::Say(const std::string& id, const std::string& name, const std::string
     int n = 0;
     if (const people::FacePick* pool = people::FacePool(id, n)) {
         std::vector<std::string> ids;
-        for (int k = 0; k < n; ++k) ids.push_back(pool[k].id);
-        face = PickFace(key.empty() ? id + "|" + name + "|" + title : key, ids);
+        bool named = false;  // (a pool whose faces have names of their own: theirs is used, whatever was asked)
+        for (int k = 0; k < n; ++k) { ids.push_back(pool[k].id); named |= pool[k].name != nullptr; }
+        face = PickFace(key.empty() ? id + "|" + name + "|" + title : key, ids, named ? 0 : people::NameSex(name));
         for (int k = 0; k < n; ++k)
             if (face == pool[k].id && pool[k].name) who = pool[k].name;
         if (!Portrait(face)) face = id;

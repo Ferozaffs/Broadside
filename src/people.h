@@ -586,6 +586,46 @@ inline const char* const kPirateLines[PB_COUNT][6] = {
 
 // The people at sea, more than one face each: whoever speaks for a merchantman, the navy, castaways and captives gets
 // one of these (by the ship's name, so the same ship keeps the same captain); name nullptr keeps the speaker's own
+// Who's a woman among the faces (from ZWUUUP's voices.json, the voice each was given), and whether a name is a woman's
+// or a man's: a named pirate, rival or smuggler gets a face to go with the name (the user, 2026-11-23: "male get male
+// names and female get female names?" - "Dread Ned" had come out with a woman's face)
+inline const char* const kWomenFaces[] = {
+    "ashfall_harbour", "ashfall_wright", "captive_f_1", "captive_f_2", "captive_f_3", "captive_f_4", "captive_f_5",
+    "captive_f_6", "captive_f_7", "castaway_1", "castaway_4", "castaway_5", "castaway_7", "castaway_9",
+    "cinderport_tavern", "coral_harbour", "dorada_tavern", "dorada_wright", "dread_calypso", "dread_kate",
+    "dread_widow", "fleet_1", "fleet_4", "frostholm_harbour", "frostholm_wright", "greywater_tavern",
+    "haverly_harbour", "iceward_tavern", "lantern_tavern", "merchant_2", "merchant_4", "merchant_5", "merchant_6",
+    "mournwick_tavern", "navy_2", "navy_4", "navy_6", "officer_fairweather", "officer_penhallow", "palmhaven_tavern",
+    "pirate_10", "pirate_12", "pirate_2", "pirate_7", "rival_1", "rival_3", "rival_5", "saltmarsh_tavern",
+    "sea_captive", "sea_navy", "smuggler_2", "smuggler_3", "smuggler_4", "smuggler_5", "smuggler_7", "story_mara",
+};
+inline bool WomanFace(const std::string& id) {
+    for (const char* w : kWomenFaces)
+        if (id == w) return true;
+    return false;
+}
+inline int NameSex(const std::string& name) {  // 1 a woman's name, 2 a man's, 0 can't tell (Cpt. Scurvy, Old Salt)
+    static const char* const kF[] = {"Meg", "Bess", "Kate", "Sue", "Anne", "Stella", "Mistress", "Nell", "Lady", "Molly", "Mary", "Sal",
+                                     "Wen", "Nan", "Rose", "Tilly", "Mother", "Polly", "Jean", "Queen", "Widow", "Madam"};
+    static const char* const kM[] = {"Ned", "Pete", "Jack", "Bart", "Gus", "Tom", "Joe", "Finn", "Hob", "Jim", "Hal", "Piet", "Billy",
+                                     "Hugo", "Jonas", "Scratch", "Silas", "Rupert", "Sam", "Morgan", "Kit", "King", "Lord", "Sir"};
+    std::string w;
+    auto word = [&](const char* const* list, size_t n) {
+        for (size_t i = 0; i < n; ++i)
+            if (w == list[i]) return true;
+        return false;
+    };
+    for (size_t i = 0; i <= name.size(); ++i) {
+        const char c = i < name.size() ? name[i] : ' ';
+        if (c == ' ' || c == '-' || c == '.' || c == '\'') {
+            if (word(kF, sizeof kF / sizeof kF[0])) return 1;
+            if (word(kM, sizeof kM / sizeof kM[0])) return 2;
+            w.clear();
+        } else w += c;
+    }
+    return 0;
+}
+
 struct FacePick { const char* id; const char* name; };
 inline const FacePick* FacePool(const std::string& base, int& n) {
     // (every face once: the game picks the one she's seen least lately, Game::PickFace; those not imported are skipped)
@@ -604,12 +644,17 @@ inline const FacePick* FacePool(const std::string& base, int& n) {
                                    {"captive_m_4", nullptr}};
     static const FacePick rival[] = {{"rival_1", nullptr}, {"rival_2", nullptr}, {"rival_3", nullptr}, {"rival_4", nullptr}, {"rival_5", nullptr},
                                      {"rival_6", nullptr}};
+    static const FacePick pirate[] = {{"sea_pirate", nullptr}, {"pirate_1", nullptr}, {"pirate_2", nullptr}, {"pirate_3", nullptr},
+                                      {"pirate_4", nullptr}, {"pirate_5", nullptr}, {"pirate_6", nullptr}, {"pirate_7", nullptr},
+                                      {"pirate_8", nullptr}, {"pirate_9", nullptr}, {"pirate_10", nullptr}, {"pirate_11", nullptr},
+                                      {"pirate_12", nullptr}};  // (a quest's named pirate: a face to go with the name)
     static const FacePick smuggler[] = {{"smuggler_1", nullptr}, {"smuggler_2", nullptr}, {"smuggler_3", nullptr}, {"smuggler_4", nullptr},
                                         {"smuggler_5", nullptr}, {"smuggler_6", nullptr}, {"smuggler_7", nullptr}};
     struct P { const char* base; const FacePick* f; int n; };
 #define BS_POOL(b, a) {b, a, (int)(sizeof a / sizeof a[0])}
     static const P k[] = {BS_POOL("sea_merchant", merchant), BS_POOL("sea_navy", navy), BS_POOL("sea_castaway", castaway), BS_POOL("sea_captive", woman),
-                          BS_POOL("sea_captive_m", man), BS_POOL("rival", rival), BS_POOL("smuggler", smuggler)};
+                          BS_POOL("sea_captive_m", man), BS_POOL("rival", rival), BS_POOL("smuggler", smuggler),
+                          BS_POOL("sea_pirate", pirate)};
 #undef BS_POOL
     for (const P& p : k)
         if (base == p.base) { n = p.n; return p.f; }
