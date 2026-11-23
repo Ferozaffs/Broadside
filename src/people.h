@@ -451,6 +451,7 @@ inline const Voice kVoices[] = {
     {"navy_4", 195, 1.11f, 0.08f, 0.05f, 0}, {"merchant_5", 175, 1.07f, 0.25f, 0.25f, 1},
     {"fleet_1", 220, 1.17f, 0.10f, 0.00f, 1}, {"fleet_2", 105, 0.95f, 0.20f, 0.40f, 2}, {"fleet_3", 100, 0.94f, 0.08f, 0.05f, 0},
     {"fleet_4", 200, 1.13f, 0.15f, 0.00f, 0}, {"fleet_5", 90, 0.92f, 0.10f, 0.30f, 1}, {"fleet_6", 125, 1.00f, 0.20f, 0.20f, 0},
+    {"fleet_7", 115, 0.97f, 0.12f, 0.10f, 0},  // (the user himself, 2026-11-23: one of her own captains)
     {"pirate_1", 95, 0.93f, 0.15f, 0.40f, 2}, {"pirate_2", 215, 1.15f, 0.20f, 0.05f, 1}, {"pirate_3", 80, 0.88f, 0.10f, 0.45f, 2},
     {"pirate_4", 130, 1.00f, 0.40f, 0.10f, 3}, {"pirate_5", 140, 1.03f, 0.10f, 0.00f, 1}, {"pirate_6", 100, 0.95f, 0.30f, 0.20f, 3},
     // the sea's second cast (2026-11-22)
@@ -554,7 +555,7 @@ inline const char* const kWarm[SHOPS][3][3] = {
 // Barks: a word now and then from her fleet's captains and from the pirates come to fight her (a small portrait, one line).
 // Every face once: the game picks whichever she's seen least lately (Game::PickFace), and only those imported
 // (data/portraits/<id>.png), so a new face in a pool turns up as soon as its portrait does.
-inline const char* const kFleetPool[] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6"};
+inline const char* const kFleetPool[] = {"fleet_1", "fleet_2", "fleet_3", "fleet_4", "fleet_5", "fleet_6", "fleet_7"};
 inline const char* const kPiratePool[] = {"pirate_1", "pirate_2", "pirate_3", "pirate_4", "pirate_5", "pirate_6",
                                          "pirate_7", "pirate_8", "pirate_9", "pirate_10", "pirate_11", "pirate_12"};
 inline const char* FleetFace(int seed) {  // (her own fleet: few, and each keeps its captain for good)
