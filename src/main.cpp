@@ -3136,7 +3136,7 @@ void Game::PlayEvent(const GameEvent& e) {
                     if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present && (view[f.ship].s.flags & SF_ALIVE)) mine.push_back(&f);
                 if (!mine.empty() && GetRandomValue(0, 1) == 0) {
                     const Snapshot::CampFleet& f = *mine[(size_t)GetRandomValue(0, (int)mine.size() - 1)];
-                    AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[people::FB_KILL][GetRandomValue(0, 5)], ui::kGreen);
+                    AddBark(people::FleetFace(f.seed), people::FleetCaptain(f.seed, campaign::FleetName(f.seed)), people::kFleetLines[people::FB_KILL][GetRandomValue(0, 5)], ui::kGreen);
                 }
             }
             if (e.flags & EF_CRIPPLE) {  // a race: crippled, not sunk
@@ -9627,7 +9627,7 @@ void Game::UpdateBarks() {
     for (const Snapshot::CampFleet& f : campFleetC)
         if (f.ship >= 0 && f.ship < NumShips() && view[f.ship].present && (view[f.ship].s.flags & SF_ALIVE)) mine.push_back(&f);
     auto fleetSays = [&](const Snapshot::CampFleet& f, int kind) {
-        AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[kind][pick(6)], ui::kGreen);
+        AddBark(people::FleetFace(f.seed), people::FleetCaptain(f.seed, campaign::FleetName(f.seed)), people::kFleetLines[kind][pick(6)], ui::kGreen);
         barkFleetAt = now;
     };
     if (!mine.empty()) {
@@ -9643,7 +9643,7 @@ void Game::UpdateBarks() {
     static size_t fleetWas = (size_t)-1;  // (a ship new to her fleet says hello)
     if (fleetWas != (size_t)-1 && campFleetC.size() > fleetWas) {
         const Snapshot::CampFleet& f = campFleetC.back();
-        AddBark(people::FleetFace(f.seed), TextFormat("the %s", campaign::FleetName(f.seed)), people::kFleetLines[people::FB_JOINED][pick(6)], ui::kGreen);
+        AddBark(people::FleetFace(f.seed), people::FleetCaptain(f.seed, campaign::FleetName(f.seed)), people::kFleetLines[people::FB_JOINED][pick(6)], ui::kGreen);
         barkFleetAt = now;
     }
     fleetWas = campFleetC.size();

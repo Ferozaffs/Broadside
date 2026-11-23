@@ -561,6 +561,12 @@ inline const char* const kPiratePool[] = {"pirate_1", "pirate_2", "pirate_3", "p
 inline const char* FleetFace(int seed) {  // (her own fleet: few, and each keeps its captain for good)
     return kFleetPool[(unsigned)seed % (sizeof kFleetPool / sizeof kFleetPool[0])];
 }
+// who's speaking for one of her fleet: the ship ("the Swallow"), or, for a captain with a name of his own, him and his
+// ship (fleet_7 is the user himself, 2026-11-23: "His name is Dong Bang")
+inline std::string FleetCaptain(int seed, const char* ship) {
+    if (!strcmp(FleetFace(seed), "fleet_7")) return std::string("Captain Dong Bang, the ") + ship;
+    return std::string("the ") + ship;
+}
 enum FleetBark { FB_IDLE = 0, FB_ENEMY, FB_HURT, FB_KILL, FB_JOINED, FB_COUNT };
 inline const char* const kFleetLines[FB_COUNT][6] = {
     {"Fair wind today, Captain. Long may it last.", "The men are in good spirits. Mostly about the rum.", "Keeping station off your quarter, Captain.",
