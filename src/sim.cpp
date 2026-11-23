@@ -1748,6 +1748,7 @@ void World::Respawn(Ship& s) {
         voyageHeading = atan2f(Vector3RotateByQuaternion({0, 0, 1}, s.rot).x, Vector3RotateByQuaternion({0, 0, 1}, s.rot).z);
     }
     if (mode == MODE_CAMPAIGN && !s.raider && s.leader < 0 && campPrologue >= campaign::PRO_FIGHT && !s.isBot) EndPrologue(s);  // (washed up at Haverly)
+    if (mode == MODE_CAMPAIGN && !s.raider && s.leader < 0 && campMemory && !s.isBot) EndMemory(s);  // (sunk in a memory: as she was)
     if (mode == MODE_CAMPAIGN && !s.raider) {  // the campaign: back in the last port put into
         s.team = 0;
         PlaceInHarbour(s, campLastPort, 0);
@@ -2012,7 +2013,7 @@ void World::Damage(Ship& v, float amount, int attacker) {
                         campSaveDue = true;
                         break;
                     }
-            if (!v.isBot && v.leader < 0 && campPrologue != campaign::PRO_NONE) {  // (the prologue: the Sovereign goes down; nothing else is lost)
+            if (!v.isBot && v.leader < 0 && (campPrologue != campaign::PRO_NONE || campMemory)) {  // (the prologue: the Sovereign goes down; nothing else is lost - nor in a memory)
             } else if (!v.isBot && v.leader < 0) {  // ours: the salvors take their share, and she's back in port
                 int held = 0;
                 for (uint8_t o : campOfficer) held += o > 0;
@@ -3748,6 +3749,13 @@ void World::BotThink(Ship& s, float dt) {
         const bool last = campBotWp + 1 >= (int)campBotPath.size();
         in.sail = last && campBotStop ? Clamp((Vector2Distance({s.pos.x, s.pos.z}, g) - 20.0f) / 160.0f, 0.0f, 1.0f) : 1.0f;
     }
+    if (mode == MODE_CAMPAIGN && campBotCaptain && campMemory && campMemHasGoal && !s.raider && !s.merchant && !s.npc && s.leader < 0 &&
+        (!target || best > 450.0f || campMemory != 4)) {  // (tests: a memory played by the bot - its goal; only the Sovereign's first day is a fight)
+        goal = {campMemGoal.x, 0.0f, campMemGoal.y};
+        haveGoal = true;
+        fight = false;
+        in.sail = 1.0f;
+    }
     float goalDist = 1e9f;
     if (haveGoal) {
         // Bound for a harbour: the stacks either side of its mouth are left standing, so line up on it from the
@@ -5042,6 +5050,11 @@ bool World::CampaignAct(int shipId, int act, int arg) {
         case campaign::ACT_FAST_ON: campWantFast = true; return true;
         case campaign::ACT_FAST_OFF: campWantFast = false; return true;
         case campaign::ACT_HANDLING: realistic = arg != 0; return true;  // (the solo campaign: hers to change at any time)
+        case campaign::ACT_MEMORY: return StartMemory(s, arg);
+        case campaign::ACT_MEMORY_END:
+            if (!campMemory) return false;
+            EndMemory(s);
+            return true;
         case campaign::ACT_SKIPPROLOGUE:
             if (campPrologue == campaign::PRO_NONE) return false;
             if (campPrologue < campaign::PRO_FIGHT) campPrologue = campaign::PRO_FIGHT;  // (not begun yet: end it all the same)
@@ -5150,6 +5163,260 @@ void World::UpdatePrologue(float dt, Ship& cap) {
     (void)around;
 }
 
+// ---- the Memories (people.h kMemories: the lines, played by the client on EV_MEMORY) ----
+// Where each happened: by a port of its own (out from it to sea), or the prologue's water for the last night
+static const int kMemPort[campaign::memoryCount] = {2, 11, 6, 0, -1};  // (Greywater, Lantern Rock, Frostholm, Port Haverly; the Reach's edge)
+
+bool World::StartMemory(Ship& cap, int k) {
+    using namespace campaign;
+    int told = 0;
+    for (int b = 0; b < BIOMES; ++b) told += campChain[b] > chainSteps;
+    if (k < 0 || k >= memoryCount || k >= told || campMemory || campPrologue != PRO_NONE || campDocked < 0 || !cap.alive) return false;
+    MemStash& m = campMemStash;
+    m.pos = cap.pos; m.vel = cap.vel; m.rot = cap.rot; m.hp = cap.hp; m.clock = campClock;
+    m.cls = cap.cls; m.nextCls = cap.nextCls; m.fixedCls = cap.fixedCls;
+    m.docked = campDocked; m.anchored = cap.anchored;
+    for (int u = 0; u < kUpgradeCount; ++u) m.upg[u] = campUpg[u];
+    for (int o = 0; o < OFFICERS; ++o) { m.officer[o] = campOfficer[o]; m.officerSeed[o] = campOfficerSeed[o]; }
+    for (FleetShip& f : campFleet) {  // (her fleet put by: SyncFleet brings them back round her afterwards)
+        if (f.ship >= 0 && f.ship < ShipCount() && ships[f.ship].active) {
+            if (ships[f.ship].alive) f.hull = Clamp(ships[f.ship].hp / fmaxf(ships[f.ship].maxHp, 1.0f), 0.05f, 1.0f);
+            RemoveShip(f.ship);
+        }
+        f.ship = -1;
+    }
+    // where: out from the port to sea (the way its harbour opens), on open water
+    Vector2 start, sea;
+    if (kMemPort[k] >= 0 && kMemPort[k] < (int)harbours.size()) {
+        const Harbour& hb = harbours[kMemPort[k]];
+        static const float kOut[memoryCount] = {1750.0f, 1500.0f, 1900.0f, 1100.0f, 0.0f};  // (how far out she starts)
+        const float out = kOut[k];
+        sea = {-cosf(hb.ang), -sinf(hb.ang)};
+        start = {hb.x + sea.x * out, hb.z + sea.y * out};
+        for (int t = 0; t < 24; ++t) {  // (land in the way, or another region: a little round, a little nearer)
+            const float a = (t % 2 ? 1.0f : -1.0f) * 0.27f * ((t + 1) / 2), d = out - 25.0f * t;
+            const Vector2 dir = {sea.x * cosf(a) - sea.y * sinf(a), sea.x * sinf(a) + sea.y * cosf(a)};
+            const Vector2 p = {hb.x + dir.x * d, hb.z + dir.y * d};
+            bool open = BiomeAt(p.x, p.y) == PortBiome(kMemPort[k]);  // (in the port's own region, open water all the way in)
+            for (float f = 0.0f; f <= 1.0f && open; f += 0.125f) {
+                const float r = 240.0f + (d - 240.0f) * f;
+                open = RocksHeight(rocks, hb.x + dir.x * r, hb.z + dir.y * r) < -12.0f;
+            }
+            if (open) { start = p; sea = dir; break; }
+        }
+        campMemGoal = {hb.x + sea.x * 240.0f, hb.z + sea.y * 240.0f};
+    } else {
+        sea = {1.0f, 0.0f};
+        for (int t = 0; t < 16; ++t) {  // (open water for the run east, a little north or south of the prologue's)
+            const float z = prologueZ + (t % 2 ? 1.0f : -1.0f) * 150.0f * ((t + 1) / 2);
+            start = {prologueX + 2600.0f, z};
+            campMemGoal = {prologueX + 1500.0f, z};
+            if (RocksHeight(rocks, start.x, start.y) < -12.0f && RocksHeight(rocks, campMemGoal.x, campMemGoal.y) < -12.0f &&
+                RocksHeight(rocks, (start.x + campMemGoal.x) * 0.5f, start.y) < -12.0f) break;
+        }
+    }
+    const float h0 = atan2f(-sea.x, -sea.y);  // (heading in: toward the land, or east into the Reach)
+    cap.pos = {start.x, ocean.Height(start.x, start.y) + 1.0f, start.y};
+    cap.rot = QuaternionFromAxisAngle({0, 1, 0}, h0);
+    cap.vel = {sinf(h0) * 6.0f, 0.0f, cosf(h0) * 6.0f};
+    cap.angVel = {0, 0, 0};
+    cap.anchored = 0;
+    // the ship she had then, and what was aboard her
+    static const uint8_t kCls[memoryCount] = {SC_CUTTER, SC_FRIGATE, SC_FRIGATE, SC_LINE, SC_LINE};
+    static const float kHour[memoryCount] = {0.70f, 0.82f, 0.45f, 0.38f, 0.86f};  // (of the day: dusk, night, noon, morning, night)
+    cap.cls = cap.nextCls = kCls[k];
+    cap.fixedCls = true;
+    for (int u = 0; u < kUpgradeCount; ++u) campUpg[u] = k >= 3 ? kUpgrades[u].max : (uint8_t)(k >= 1 ? std::min<int>(kUpgrades[u].max, 1) : 0);
+    for (int o = 0; o < OFFICERS; ++o) { campOfficer[o] = 0; campOfficerSeed[o] = 0; }
+    ApplyCampPerks(cap);
+    campPerkKey = -1;
+    cap.maxHp = MaxHpOf(cap);
+    cap.hp = cap.maxHp;
+    campClock = dayLength * (floorf(campClock / dayLength) + kHour[k]);
+    campMemory = (uint8_t)(k + 1);
+    campMemStage = 0;
+    campMemT = 0.0f;
+    campMemWp = 0;
+    campMemHasGoal = true;
+    campMemShips.clear();
+    const Vector2 fw = {sinf(h0), cosf(h0)}, rt = {fw.y, -fw.x};
+    auto at = [&](float ahead, float side) { return Vector2{start.x + fw.x * ahead + rt.x * side, start.y + fw.y * ahead + rt.y * side}; };
+    auto raider = [&](Vector2 p, float hdg, int cls, float hull) {
+        const int before = ShipCount();
+        SpawnRaider(p, hdg, cls, hull);
+        for (int i = 0; i < ShipCount(); ++i)  // (the one just made)
+            if (ships[i].active && ships[i].raider && std::find(campMemShips.begin(), campMemShips.end(), (int16_t)i) == campMemShips.end() &&
+                Vector2Distance({ships[i].pos.x, ships[i].pos.z}, p) < 5.0f) { campMemShips.push_back((int16_t)i); break; }
+        (void)before;
+    };
+    auto navy = [&](Vector2 p, float hdg, int cls, const char* name, bool escort, float hull) {
+        const int id = SpawnNpc(NPC_NAVY, p, hdg, cls, 0, false, hull, name);
+        if (id < 0) return -1;
+        ships[id].laneFrom = -2;
+        ships[id].laneTo = -1;
+        if (escort) { ships[id].leader = (int16_t)cap.id; ships[id].slot = (uint8_t)(campMemShips.size() % 3); }
+        campMemShips.push_back((int16_t)id);
+        return id;
+    };
+    switch (k) {
+        case 0:  // the Grey Isle: the brig, her master dead, two luggers on her heels; make for the fort's guns
+            raider(at(-150.0f, -50.0f), h0, SC_CUTTER, 0.55f);
+            raider(at(-190.0f, 60.0f), h0, SC_CUTTER, 0.55f);
+            cap.hp = cap.maxHp * 0.7f;  // (she's been knocked about already)
+            break;
+        case 1: {  // Lantern Rock: a squall; the Dominion at anchor in the lee
+            const int d = navy({campMemGoal.x + rt.x * 160.0f + sea.x * 60.0f, campMemGoal.y + rt.y * 160.0f + sea.y * 60.0f}, h0 + PI, SC_LINE, "the Dominion", false, 1.4f);
+            if (d >= 0) ships[d].anchored = 1;
+            break;
+        }
+        case 2: {  // the ice: the Admiral's channel, five marks through it
+            campMemWp = 0;
+            break;
+        }
+        case 3:  // the Sovereign's first day: the Dominion alongside, a pirate band in the approaches
+            navy(at(-40.0f, 130.0f), h0, SC_LINE, "the Dominion", true, 1.4f);
+            for (int p = 0; p < 4; ++p) raider(at(-750.0f - 60.0f * p, -240.0f + 160.0f * p), h0, p % 2 ? SC_GUNBOAT : SC_FRIGATE, 0.9f);  // (a real fight, for a ship like her)
+            break;
+        case 4:  // the last night: the squadron in company, the Dominion ahead
+            navy(at(160.0f, 120.0f), h0, SC_LINE, "the Dominion", true, 1.4f);
+            navy(at(-120.0f, -110.0f), h0, SC_FRIGATE, "the Resolute", true, 1.0f);
+            navy(at(-180.0f, 100.0f), h0, SC_CUTTER, "the Merryweather", true, 1.0f);
+            break;
+    }
+    campMemStart = start;
+    campMemEnd = campMemGoal;
+    if (k == 2) {  // (the channel's marks: from where she lies to the goal, zigzagging)
+        const Vector2 g = campMemGoal;
+        campMemGoal = {start.x + (g.x - start.x) * 0.2f + rt.x * 120.0f, start.y + (g.y - start.y) * 0.2f + rt.y * 120.0f};
+    }
+    campSpawn = 999.0f;
+    campEventT = 999.0f;
+    GameEvent e{EventType::CampEvent};
+    e.b = EV_MEMORY;
+    e.a = cap.id;
+    e.flags = (uint8_t)(k << 4 | 1);
+    e.pos = {campMemGoal.x, 1.0f, campMemGoal.y};
+    events.push_back(e);
+    campMemStage = 1;
+    return true;
+}
+
+void World::UpdateMemory(float dt, Ship& cap) {
+    using namespace campaign;
+    const int k = campMemory - 1;
+    campMemT += dt;
+    campSpawn = 999.0f;  // (nothing else at sea, years ago)
+    campEventT = 999.0f;
+    campClock -= dt;     // (the hour holds)
+    if (!cap.alive) return;
+    auto stage = [&](uint8_t st, bool goal) {
+        campMemStage = st;
+        campMemT = 0.0f;
+        campMemHasGoal = goal;
+        GameEvent e{EventType::CampEvent};
+        e.b = EV_MEMORY;
+        e.a = cap.id;
+        e.flags = (uint8_t)(k << 4 | st);
+        e.pos = {campMemGoal.x, goal ? 1.0f : 0.0f, campMemGoal.y};
+        events.push_back(e);
+    };
+    const float toGoal = Vector2Distance({cap.pos.x, cap.pos.z}, campMemGoal);
+    int left = 0;
+    for (int16_t id : campMemShips)
+        left += id >= 0 && id < ShipCount() && ships[id].active && ships[id].alive && ships[id].raider && !ships[id].struck;  // (struck her colours: beaten)
+    switch (k) {
+        case 0:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.35f);  // (the luggers hurt her, but she makes it)
+            if (campMemStage == 1 && toGoal < 140.0f) {
+                for (int16_t id : campMemShips)  // (the fort's guns speak once: the luggers think better of it)
+                    if (id >= 0 && id < ShipCount() && ships[id].active && ships[id].raider) RemoveShip(id);
+                stage(2, false);
+            } else if (campMemStage == 2 && campMemT > 58.0f) EndMemory(cap);
+            break;
+        case 1:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.4f);
+            if (campMemStage == 1) {  // the squall: the sea knocks her about and works her hull
+                if (fmodf(campMemT, 5.0f) < dt) ApplyImpulse(cap, {0.0f, -tune::ballKnockback * 1.4f, 0.0f}, Vector3Add(cap.pos, {(RandF() - 0.5f) * 6.0f, 6.0f, 0.0f}), {tune::hitPitch, 0.6f, 1.0f});
+                cap.hp -= cap.maxHp * 0.016f * dt;  // (more than her carpenters keep up with)
+                if (campMemT > 30.0f) stage(2, true);  // (Mara sings, and the wind falls away)
+            } else if (campMemStage == 2 && toGoal < 140.0f && campMemT > 28.0f) stage(3, false);
+            else if (campMemStage == 3 && campMemT > 13.0f) EndMemory(cap);
+            break;
+        case 2:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.4f);
+            if ((campMemStage == 1 || campMemStage == 2) && toGoal < 150.0f) {  // the next mark in the channel (passed close by)
+                ++campMemWp;
+                if (campMemWp >= 5) { stage(3, false); break; }
+                const Vector2 a = campMemStart, b = campMemEnd, along = Vector2Normalize(Vector2Subtract(b, a)), rt = {along.y, -along.x};
+                const float f = (campMemWp + 1) / 5.0f, side = campMemWp == 4 ? 0.0f : (campMemWp % 2 ? -1.0f : 1.0f) * 120.0f;
+                campMemGoal = {a.x + (b.x - a.x) * f + rt.x * side, a.y + (b.y - a.y) * f + rt.y * side};
+                if (campMemWp == 2 && campMemStage == 1) stage(2, true);  // (the Admiral's letter)
+                else stage(campMemStage, true);
+            } else if (campMemStage == 3 && campMemT > 12.0f) EndMemory(cap);
+            break;
+        case 3:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.4f);
+            if (campMemStage == 1) {
+                for (int16_t id : campMemShips)  // (one that's run 1.4 km off: driven away, that's done too)
+                    if (id >= 0 && id < ShipCount() && ships[id].active && ships[id].raider &&
+                        Vector2Distance({cap.pos.x, cap.pos.z}, {ships[id].pos.x, ships[id].pos.z}) > 1400.0f) {
+                        RemoveShip(id);
+                        --left;
+                    }
+                if (left > 0) {  // (the band in the approaches: the goal is the nearest of them)
+                    float best = 1e9f;
+                    for (int16_t id : campMemShips)
+                        if (id >= 0 && id < ShipCount() && ships[id].active && ships[id].alive && ships[id].raider && !ships[id].struck) {
+                            const float d = Vector2Distance({cap.pos.x, cap.pos.z}, {ships[id].pos.x, ships[id].pos.z});
+                            if (d < best) { best = d; campMemGoal = {ships[id].pos.x, ships[id].pos.z}; }
+                        }
+                } else if (campMemT > 10.0f) stage(2, false);
+            } else if (campMemStage == 2 && campMemT > 55.0f) EndMemory(cap);
+            break;
+        case 4:
+            cap.hp = fmaxf(cap.hp, cap.maxHp * 0.5f);
+            if (campMemStage == 1 && toGoal < 160.0f && campMemT > 52.0f) stage(2, false);
+            else if (campMemStage == 2 && campMemT > 11.0f) EndMemory(cap);
+            break;
+    }
+}
+
+void World::EndMemory(Ship& cap) {
+    using namespace campaign;
+    if (!campMemory) return;
+    const int k = campMemory - 1;
+    for (int16_t id : campMemShips)
+        if (id >= 0 && id < ShipCount() && ships[id].active && id != cap.id) RemoveShip(id);
+    campMemShips.clear();
+    for (Monster& mo : monsters) mo = Monster{};
+    const MemStash& m = campMemStash;
+    for (int u = 0; u < kUpgradeCount; ++u) campUpg[u] = m.upg[u];
+    for (int o = 0; o < OFFICERS; ++o) { campOfficer[o] = m.officer[o]; campOfficerSeed[o] = m.officerSeed[o]; }
+    cap.cls = m.cls; cap.nextCls = m.nextCls; cap.fixedCls = m.fixedCls;
+    ApplyCampPerks(cap);
+    campPerkKey = -1;
+    cap.maxHp = MaxHpOf(cap);
+    cap.alive = true;
+    cap.hp = fminf(m.hp, cap.maxHp);
+    cap.pos = m.pos; cap.vel = {0, 0, 0}; cap.rot = m.rot; cap.angVel = {0, 0, 0};
+    cap.anchored = m.anchored;
+    if (m.docked >= 0) { campDocked = m.docked; campLastPort = m.docked; }  // (in port again, where she was)
+    cap.burnT = 0.0f;
+    campClock = m.clock;
+    campMemory = 0;
+    campMemStage = 0;
+    campMemHasGoal = false;
+    campSpawn = fmaxf(campSpawn > 500.0f ? 60.0f : campSpawn, 60.0f);
+    campEventT = 90.0f;
+    SyncFleet(cap);  // (her own fleet, round her again)
+    GameEvent e{EventType::CampEvent};
+    e.b = EV_MEMORY;
+    e.a = cap.id;
+    e.flags = (uint8_t)(k << 4 | memoryOver);
+    events.push_back(e);
+    campSaveDue = true;
+}
+
 void World::EndPrologue(Ship& cap) {
     using namespace campaign;
     for (int i = 0; i < ShipCount(); ++i)  // (the night's ships: gone)
@@ -5188,8 +5455,9 @@ void World::UpdateCampaign(float dt) {
         if (s.active && (!s.isBot || (campBotCaptain && !s.raider)) && s.leader < 0) { cap = &s; break; }
     if (!cap) return;
     if (campPrologue != campaign::PRO_NONE) UpdatePrologue(dt, *cap);
+    if (campMemory) UpdateMemory(dt, *cap);
     if (cap->cls < SC_PLAYABLE) campLoadCls = cap->cls;  // (her ship and hull as they are, for the save: she may be gone when it's written)
-    if ((int)(campClock * 2.0f) != (int)((campClock - dt) * 2.0f)) SyncFleet(*cap);  // (twice a second)
+    if (!campMemory && (int)(campClock * 2.0f) != (int)((campClock - dt) * 2.0f)) SyncFleet(*cap);  // (twice a second; in a memory her fleet's put by)
     {  // her perks as her upgrades and officers make them (cheap to check: a sum)
         int want = 0, have = 0;
         for (int i = 0; i < campaign::kUpgradeCount; ++i) want += campUpg[i] * (i + 1);
@@ -5205,7 +5473,7 @@ void World::UpdateCampaign(float dt) {
     // in port: lying slowly within reach of a harbour's anchorage
     const float spd = Vector2Length({cap->vel.x, cap->vel.z});
     int near = -1;
-    for (int h = 0; h < (int)harbours.size(); ++h)
+    for (int h = 0; h < (int)harbours.size() && !campMemory; ++h)  // (years ago, in a memory: not in port)
         if (Vector2Distance({harbours[h].x, harbours[h].z}, {cap->pos.x, cap->pos.z}) < (campDocked == h ? dockRadius * 1.6f : dockRadius)) near = h;
     if (campDocked >= 0 && (near != campDocked || !cap->alive)) campDocked = -1;  // (sailed out)
     if (campDocked < 0 && near >= 0 && cap->alive && spd < 5.0f) {
@@ -5273,7 +5541,7 @@ void World::UpdateCampaign(float dt) {
     }
     UpdateQuests(dt, *cap);
     if (mode != MODE_CAMPAIGN) return;  // (into a lair: the rest is a boss fight's business)
-    UpdateSeaLife(dt, *cap, nearFoe);
+    if (!campMemory) UpdateSeaLife(dt, *cap, nearFoe);
     for (const Ship& p : ships)  // (the quests' pirates count as near too)
         if (p.active && p.alive && (p.questSlot >= 0 || p.npc == NPC_RIVAL || p.npc == NPC_GHOST) && p.team == 1 && !p.struck)
             nearFoe = fminf(nearFoe, Vector2Distance({cap->pos.x, cap->pos.z}, {p.pos.x, p.pos.z}));
@@ -5316,7 +5584,7 @@ void World::UpdateCampaign(float dt) {
     {
         const int hb = BiomeAt(cap->pos.x, cap->pos.z);
         // the Frozen North: ice on her rigging, building at sea (ten minutes to the worst of it); gone in port, melting out of the cold
-        if (campDocked >= 0) campIce = 0.0f;
+        if (campDocked >= 0 || campMemory) campIce = 0.0f;
         else if (hb == FROZEN) campIce = fminf(1.0f, campIce + dt / 600.0f);
         else campIce = fmaxf(0.0f, campIce - dt / 90.0f);
         // the law: wanted, the navy turns on her (the warships come for her, as they would for a pirate)
@@ -5326,7 +5594,7 @@ void World::UpdateCampaign(float dt) {
         // the Tropics: the hurricane - lightning on what's in it
         Vector2 hc;
         float hr;
-        if (Hurricane(campClock, hc, hr)) {
+        if (!campMemory && Hurricane(campClock, hc, hr)) {
             campStormT -= dt;
             if (campStormT <= 0.0f) {
                 campStormT = 3.0f + RandF() * 5.0f;
@@ -5348,7 +5616,7 @@ void World::UpdateCampaign(float dt) {
         }
         // the Ember Reach: volcanic bombs round its islands (and on one about to blow: an evacuation)
         bool nearFire = false;
-        if (hb == EMBER && campDocked < 0)
+        if (hb == EMBER && campDocked < 0 && !campMemory)
             for (const Rock& r : rocks)
                 if (!r.stack && r.r > 60.0f && Vector2Distance({r.x, r.z}, {cap->pos.x, cap->pos.z}) < r.r + 1300.0f && BiomeAt(r.x, r.z) == EMBER) { nearFire = true; break; }
         bool evac = false;
@@ -6673,6 +6941,7 @@ void World::SeaEvent(Ship& cap) {
 // The save: a few lines of text beside the game
 bool World::SaveCampaign() const {
     if (campSavePath.empty() || mode != MODE_CAMPAIGN) return false;
+    if (campMemory) return false;  // (in a memory: EndMemory saves, as she really is)
     const Ship* cap = nullptr;
     for (const Ship& s : ships)
         if (s.active && !s.isBot && s.leader < 0) { cap = &s; break; }

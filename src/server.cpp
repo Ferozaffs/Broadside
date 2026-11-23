@@ -89,9 +89,13 @@ void GameServer::SendCrewInfo(int id, int toPeer) {
 
 void GameServer::AnnounceShips() {
     if ((int)announced.size() < world.ShipCount()) announced.resize(world.ShipCount(), false);
+    if ((int)announcedAs.size() < world.ShipCount()) announcedAs.resize(world.ShipCount());
     for (int i = 0; i < world.ShipCount(); ++i) {
         bool on = world.ships[i].active;
-        if (on && !announced[i]) SendPlayerInfo(i, -1);
+        if (on && (!announced[i] || announcedAs[i] != world.ships[i].name)) {  // (new, or a new ship in an old slot: the memories' pirates)
+            SendPlayerInfo(i, -1);
+            announcedAs[i] = world.ships[i].name;
+        }
         if (!on && announced[i]) {
             ByteWriter w;
             w.Put(MSG_PLAYER_LEFT);

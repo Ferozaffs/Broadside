@@ -513,7 +513,9 @@ enum Act : uint8_t { ACT_REPAIR = 0, ACT_FAST_ON = 1, ACT_FAST_OFF = 2, ACT_ACCE
                      ACT_SELL_ESCORT = 9, // ...arg = which of the fleet
                      ACT_PRIZE = 10,      // alongside a struck pirate: take her into the fleet (arg 1) or plunder her (arg 0)
                      ACT_HANDLING = 11,   // arcade (arg 0) or realistic (arg 1) handling, whenever she likes
-                     ACT_SKIPPROLOGUE = 12 };  // straight to Port Haverly
+                     ACT_SKIPPROLOGUE = 12,  // straight to Port Haverly
+                     ACT_MEMORY = 13,        // in port: play a memory (arg: which, 0..4; one for each story told)
+                     ACT_MEMORY_END = 14 };  // ...leave it (Esc): back in port as she was
 // The fleet: up to three ships of her own sailing with her (bought, or taken as prizes); sunk, they're gone
 constexpr int fleetMax = 3;
 int ShipPrice(int cls);               // the shipwright's price for a hull of this class (escorts: the cutter and the gunboat only)
@@ -556,6 +558,7 @@ std::string OfficerName(uint16_t seed);
 // the Dominion turning on her; the deep: the beast that drags her down. Then Port Haverly, a cutter, nothing else.
 enum Prologue : uint8_t { PRO_NONE = 0, PRO_BEGIN, PRO_FIGHT, PRO_BETRAYAL, PRO_DEEP, PRO_ASHORE };
 constexpr float prologueX = -7200.0f, prologueZ = 1500.0f;  // (open water at the Reach's edge: east is -x)
+constexpr int memoryCount = 5, memoryOver = 15;  // (the memories: people.h kMemories; stage 15 = over)
 constexpr float prologueFightMax = 100.0f, prologueBetrayal = 34.0f;  // s
 struct OldHand { uint8_t role, step; uint16_t seed; };
 inline constexpr OldHand kOldHand[BIOMES] = {{OF_BOSUN, 0, 6 + 16 * 12}, {OF_NAVIGATOR, 1, 5 + 16 * 8}, {OF_GUNNER, 0, 4 + 16 * 9},
@@ -648,7 +651,8 @@ enum SeaEvent : uint8_t { EV_WRECK = 1, EV_DISTRESS, EV_MONSTER, EV_DREAD, EV_SA
                           EV_OLDHAND,      // (the story: one of the Sovereign's officers back aboard, flags = the role)
                           EV_SOVEREIGN,    // (the Armada broken: the Sovereign is hers again)
                           EV_MARA,         // (the Storm Caller beaten: Mara is free)
-                          EV_PROLOGUE };   // (the prologue's next stage: flags = campaign::Prologue)
+                          EV_PROLOGUE,     // (the prologue's next stage: flags = campaign::Prologue)
+                          EV_MEMORY };     // (a memory's next stage: flags = which << 4 | stage, 15 over; pos = where to sail (y 1), value = s)
 // The Tropics' hurricane: a storm wandering the region on the campaign's clock (the same on every client): lightning
 // in it, the sea and sky wild. False when it has blown itself out (between storms)
 inline bool Hurricane(float clock, Vector2& c, float& r) {
@@ -1219,6 +1223,26 @@ public:
     uint8_t campPrologue = 0;      // campaign::Prologue (a new career's, from the menu: the server sets PRO_BEGIN)
     float campProT = 0.0f;         // s in its stage
     int16_t campProDominion = -1;  // Ashgrave's flagship
+    // a memory being played (campaign::ACT_MEMORY): which (k + 1; 0 none), its stage and time in it, where she's to sail,
+    // its ships, and what she was before it (all of it put back at the end)
+    uint8_t campMemory = 0, campMemStage = 0;
+    float campMemT = 0.0f;
+    Vector2 campMemGoal{}, campMemStart{}, campMemEnd{};  // (where to sail now; where she began, the last goal: the ice's channel between)
+    bool campMemHasGoal = false;
+    int campMemWp = 0;
+    std::vector<int16_t> campMemShips;
+    struct MemStash {
+        Vector3 pos{}, vel{};
+        Quaternion rot{};
+        float hp = 0.0f, clock = 0.0f;
+        uint8_t cls = 0, nextCls = 0;
+        bool fixedCls = false;
+        int8_t docked = -1;
+        uint8_t anchored = 0;
+        uint8_t upg[campaign::kUpgradeCount] = {};
+        uint8_t officer[campaign::OFFICERS] = {};
+        uint16_t officerSeed[campaign::OFFICERS] = {};
+    } campMemStash;
     float campSpawn = 0.0f;        // s to the next band of pirates
     bool campWantFast = false;     // the captain asks for fast-sail...
     bool campFast = false;         // ...and has it (no enemy near, not in port)
@@ -1456,6 +1480,9 @@ private:
     void UpdateCampaign(float dt);
     void UpdatePrologue(float dt, Ship& cap);
     void EndPrologue(Ship& cap);  // (Port Haverly, a cutter: the career as a new one starts)
+    bool StartMemory(Ship& cap, int k);
+    void UpdateMemory(float dt, Ship& cap);
+    void EndMemory(Ship& cap);  // (all of it put back: in port as she was)
     void UpdateQuests(float dt, Ship& cap);
     void UpdateSeaLife(float dt, Ship& cap, float nearFoe);  // traffic, events, dread pirates
     void SeaEvent(Ship& cap);

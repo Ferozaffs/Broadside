@@ -80,14 +80,25 @@ Ashgrave comes for it.
    back to sleep for good. Then the sea is hers.
 
 **Memories** (flashbacks; the user, 2026-11-23: "flesh out the relationship with Mara and the Admiral ... optional for
-those that want story"). Five scenes from the years before the prologue (people.h kMemories), one more for each
-region's story told, always in order whatever the region: I *The Grey Isle* (she comes to the Admiral's notice; "the
-sea wants a hand on it"), II *Lantern Rock* (she meets Mara, who sings a squall still; someone on the flagship hears),
-III *The Ice* (the Admiral asks for Mara; Mara refuses him: "I go where you go"), IV *The Sovereign* (he gives her
-the ship and asks Mara about the bell), V *The Last Night* (Mara dreams of five bells; "come and find me, whatever
-I've become"). Never in the way: a notice when one returns, then in port, "Memories" beside Set sail (a gold dot for
-one not yet watched; watched ones in memories.cfg). Mara's and the Admiral's lines are voiced; hers are text.
-BS_MEMORY="k line" or "list" opens one in port, for screenshots.
+those that want story", then "should be like prologue small gameplay sections. Maybe we need a narrator"). Five short
+played scenes from the years before the prologue (people.h kMemories: the lines; World::StartMemory/UpdateMemory/
+EndMemory: the play), one more for each region's story told, always in order whatever the region; a notice when one
+returns, then in port "Memories" beside Set sail (a gold dot for one not yet played; memories.cfg). Her ship, upgrades,
+officers, fleet and the hour are put by and given back after, docked where she was (Esc: "Leave the memory"; sunk in
+one: nothing lost). A narrator tells it (a voice of its own, across the top); Mara and the Admiral speak as the people
+at sea do; her own words are text.
+- I *The Grey Isle* (Greywater, dusk; a cutter): the Merryweather's master dead, two luggers astern - make the fort's
+  guns; then the Admiral's study ("the sea wants a hand on it. One hand").
+- II *Lantern Rock* (night; the frigate Wren): a squall knocks her about and works her hull; Mara sings it still; into
+  the lee, where the Dominion lies at anchor.
+- III *The Ice* (Frostholm; the Wren): five marks of the Admiral's channel out of the ice; his letter asks for Mara;
+  she refuses him ("I go where you go").
+- IV *The Sovereign* (Port Haverly, morning; the Sovereign, every upgrade): clear the approaches of a pirate band with
+  the Dominion alongside; he asks Mara about the bell.
+- V *The Last Night* (the Reach's edge, night; the squadron in company): Mara dreams of five bells - "come and find me,
+  whatever I've become" - and the black flag at dawn leads into the prologue.
+Tests: BS_MEMTEST (each played by a bot from Port Haverly, and everything put back; BS_MEMONLY=k, BS_MEMLOG);
+BS_MEMORY=k (or "list") in port starts one, for screenshots.
 
 ## Quests
 Every quest is a template with a giver, a place, a goal and a reward, rolled for the biome:

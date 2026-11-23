@@ -36,4 +36,5 @@ private:
     std::vector<uint8_t> peerLivery[kMaxPeers];  // each captain's paint (Livery::Encode), passed on with their ship's info
     void SendCrewInfo(int crewId, int toPeer);
     std::deque<bool> announced;  // (grows with the world's ship list)
+    std::deque<std::string> announcedAs;  // (the name each was announced under: a slot freed and filled in one tick is a new ship)
 };

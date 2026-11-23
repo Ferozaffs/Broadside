@@ -440,8 +440,13 @@ public:
     const Texture2D* IdleFrame(const std::string& id, Rectangle& src);
     // the Memories (people::kMemories): one for each story told, in order; watched in port, or not
     bool memList = false;            // (the list open over the port screen)
-    int memPlay = -1, memLine = 0, memVoiced = -1;
-    double memAt = 0.0;
+    int memActive = -1, memStage = 0;  // (the memory being played, from EV_MEMORY; -1 none)
+    Vector3 memGoal{};
+    bool memHasGoal = false;
+    std::string memNarr;             // (the telling, across the top)
+    double memNarrAt = -100.0, memAt = 0.0, memEndedAt = -100.0;
+    void MemoryScript(int flags, Vector3 goal);
+    void DrawMemoryHud(float W, float H);
     int memSeen = -1;                // (a bit a memory watched; memories.cfg next to the game; -1: not read yet)
     int memKnown = -1;               // (how many she had: one more, and she's told)
     int MemoriesUnlocked() const {
@@ -451,7 +456,6 @@ public:
     }
     void MemSeenLoad();
     void MemSeenSave();
-    void DrawMemory(float W, float H);
     void DrawMemoryList(float W, float H);
     int talkKey = -1;                // the port screen: the port and shop of whoever's talking (a new one: the line's typed out again)
     double talkAt = 0.0;
@@ -901,7 +905,7 @@ private:
     std::string BearingFrom(Vector3 p) const;
     std::string NameOf(int id) const {
         if (id < 0 || id >= NumShips()) return "the sea";
-        int lead = info[id].leader >= 0 ? info[id].leader : view[id].s.leader;
+        int lead = view[id].present ? view[id].s.leader : info[id].leader;  // (what she is now: a slot an escort had may be a pirate's)
         if (lead >= 0 && lead < NumShips() && lead != id) {  // an escort: no name of its own
             if (lead == myId) return "your escort";
             std::string cap = info[lead].name.empty() ? std::string(TextFormat("Ship %d", lead)) : info[lead].name;
@@ -1563,8 +1567,7 @@ void Game::UpdateInput(float dt) {
     if (autoPause && GetTime() - sessionStart > 4.0) { autoPause = false; paused = true; EnableCursor(); }
     if (campYard && (campDocked < 0 || !campaign || myId < 0 || !view[myId].present)) { yard.Close(); campYard = false; }  // (sunk, or gone)
     if (IsKeyPressed(KEY_ESCAPE) && !campYard) {  // (painting: the Shipwright's own Esc)
-        if (portOpen && memPlay >= 0) { memPlay = -1; sfx::StopVoice(); }  // (out of the memory, back to the list)
-        else if (portOpen && memList) memList = false;
+        if (portOpen && memList) memList = false;
         else if (portOpen) { portOpen = false; DisableCursor(); }
         else if (chartOpen) chartOpen = false;
         else {
@@ -1583,7 +1586,7 @@ void Game::UpdateInput(float dt) {
             CampaignAct(campWantFast ? campaign::ACT_FAST_OFF : campaign::ACT_FAST_ON);
             Feed(campWantFast ? "Fast-sail off  (F)" : "Fast-sail: when no enemy is near  (F)", ui::kDim);
         }
-        if (IsKeyPressed(KEY_E) && campDocked >= 0 && !(portOpen && (memList || memPlay >= 0))) {
+        if (IsKeyPressed(KEY_E) && campDocked >= 0 && !(portOpen && memList)) {
             portOpen = !portOpen;
             if (myId >= 0 && view[myId].present && (portOpen ? !view[myId].s.anchored : view[myId].s.anchored == 1)) anchorSeq++;  // (ashore: she lies to her anchor; away: weighed)
             talkKey = talkVoiced = -1;  // (ashore again: they greet you again)
@@ -1593,7 +1596,7 @@ void Game::UpdateInput(float dt) {
         }
     }
     if (portOpen && (campDocked < 0 || !campaign)) { portOpen = false; DisableCursor(); }  // (sailed out, or sunk)
-    if (!portOpen) { memList = false; memPlay = -1; }
+    if (!portOpen) memList = false;
     if (campaign) {  // a story told: a memory comes back (watched in port, if she likes)
         const int known = MemoriesUnlocked();
         if (memKnown >= 0 && known > memKnown) {
@@ -3511,6 +3514,7 @@ void Game::PlayEvent(const GameEvent& e) {
                     sfx::PlayFlat(sfx::Treasure, 1.0f, 0.7f);
                     break;
                 case EV_PROLOGUE: PrologueScript(e.flags); break;
+                case EV_MEMORY: MemoryScript(e.flags, e.pos); break;
                 case EV_SOVEREIGN:
                     Notice("THE SOVEREIGN IS YOURS AGAIN", ui::kGold, 6.0f);
                     Feed3("THE SOVEREIGN", "  in her iron, at the shipwright's for you: sail her from any port", "", ui::kGold, ui::kText);
@@ -5812,8 +5816,11 @@ void Game::DrawHUD() {
     if (curMode == MODE_BOSS && matchState == 0) DrawBossBar(W);
     if (curMode == MODE_CAMPAIGN) {
         DrawCampaignHud(W, H);
-        DrawQuests(W, H);
-        DrawSeaLife(W, H);
+        if (memActive >= 0) DrawMemoryHud(W, H);  // (years ago: her quests aren't hers yet)
+        else {
+            DrawQuests(W, H);
+            DrawSeaLife(W, H);
+        }
         if (!portOpen && !chartOpen) {
             UpdateHails();
             UpdateBarks();
@@ -5822,6 +5829,11 @@ void Game::DrawHUD() {
                 script.pop_front();
                 if (l.id == "!feed") Feed3(l.name, l.line, "", ui::kGold, ui::kText);
                 else if (l.id == "!notice") Notice(l.line, ui::kGold, 6.0f);
+                else if (l.id == "!narrate") {  // (a memory's telling: across the top, in the narrator's voice)
+                    memNarr = l.line;
+                    memNarrAt = GetTime();
+                    people::Voiced("narrator", l.line.c_str(), 7u, 3);
+                }
                 else Say(l.id, l.name, l.title, l.line, "script|" + l.id);
             }
             DrawSeaSay(W, H);
@@ -6330,6 +6342,15 @@ void Game::DrawHUD() {
         Text("the sea, however, is not", W * 0.5f, H * 0.5f - 88, 18, kDim, false, Center);
         if (Button({W * 0.5f - 150, H * 0.5f - 30, 300, 52}, "Resume", true)) { paused = false; DisableCursor(); }
         float yb = H * 0.5f + 34;
+        if (campaign && memActive >= 0) {  // (a memory: back to port, as she was)
+            if (Button({W * 0.5f - 150, yb, 300, 52}, "Leave the memory")) {
+                CampaignAct(campaign::ACT_MEMORY_END);
+                script.clear();
+                paused = false;
+                DisableCursor();
+            }
+            yb += 64;
+        }
         if (campaign && !IsCrew() && campPrologueC >= campaign::PRO_BEGIN && campPrologueC <= campaign::PRO_DEEP) {
             if (Button({W * 0.5f - 150, yb, 300, 52}, "Skip the prologue")) {
                 CampaignAct(campaign::ACT_SKIPPROLOGUE);
@@ -8767,6 +8788,7 @@ void Game::DrawPerkPicker(float W, float H) {
 // ----------------------------------------------------------------------------
 // The campaign: the purse and the region at the top, the chart (Tab), a port's services (E)
 // ----------------------------------------------------------------------------
+static const char* const kMemNumeral[5] = {"I", "II", "III", "IV", "V"};
 static const char* const kBiomeLine[campaign::BIOMES] = {
     "green islands and safe harbours",
     "white sand, warm water, and pirates in every cove",
@@ -9177,9 +9199,22 @@ void Game::DrawCampaignHud(float W, float H) {
     const NetShip* me = myId >= 0 && myId < NumShips() && view[myId].present ? &view[myId].s : nullptr;
     const Vector3 at = me ? me->pos : rv.pos;
     const int b = campaign::BiomeAt(at.x, at.z);
-    if (b != campBiome) {  // into a new region: its name across the top a while
+    if (b != campBiome) {  // into a new region: its name across the top a while (not into a memory, nor back from one)
         campBiome = b;
-        campBiomeAt = GetTime();
+        campBiomeAt = memActive >= 0 || GetTime() - memEndedAt < 5.0 ? -100.0 : GetTime();
+    }
+    if (memActive >= 0) {  // years ago: the memory's name, not her purse and her day
+        const std::string ttl = TextToUpper(people::kMemories[memActive].title), whn = TextToUpper(people::kMemories[memActive].when);  // (TextToUpper: one buffer)
+        const std::string line = TextFormat("A MEMORY   \xC2\xB7   %s.  %s   \xC2\xB7   %s", kMemNumeral[memActive], ttl.c_str(), whn.c_str());
+        const Vector2 m = Measure(line.c_str(), 16, true);
+        const Rectangle r = {W * 0.5f - m.x * 0.5f - 18, 6, m.x + 36, 28};
+        Panel(r, A(kPanel, 0.85f), 8);
+        Text(line.c_str(), W * 0.5f, r.y + 5, 16, kGold, true, Center);
+        const char* sub = "ESC: LEAVE THE MEMORY";
+        const Vector2 ms = Measure(sub, 13, true);
+        Panel({W * 0.5f - ms.x * 0.5f - 12, r.y + r.height + 4, ms.x + 24, 20}, A(kPanel, 0.7f), 6);
+        Text(sub, W * 0.5f, r.y + r.height + 6, 13, kDim, true, Center);
+        return;
     }
     // the purse, the region, the day
     const int day = (int)(campClock / campaign::dayLength) + 1;
@@ -10004,13 +10039,13 @@ void Game::DrawPort(float W, float H) {
     }
     if (const char* mk = getenv("BS_MEMORY"); mk) {  // (screenshots: "k line" opens memory k at that line, "list" the list)
         static bool once = false;
-        if (!once && memN > 0) {
+        if (!once && memN > 0 && GetTime() - sessionStart > 6.5) {
             once = true;
+            int k = 0;
             if (!strcmp(mk, "list")) memList = true;
-            else if (sscanf(mk, "%d %d", &memPlay, &memLine) >= 1) { memPlay = std::min(std::max(memPlay, 0), memN - 1); memAt = GetTime(); memVoiced = -1; }
+            else if (sscanf(mk, "%d", &k) == 1) { CampaignAct(campaign::ACT_MEMORY, std::min(std::max(k, 0), memN - 1)); portOpen = false; DisableCursor(); }
         }
     }
-    if (memPlay >= 0) { DrawMemory(W, H); return; }
     if (memList) { DrawMemoryList(W, H); return; }
     if (Button({sailX, r.y + ph - 64, sailW, 44}, "Set sail  (E)", true)) {
         portOpen = false;
@@ -10037,7 +10072,6 @@ void Game::MemSeenSave() {
     }
 }
 
-static const char* const kMemNumeral[5] = {"I", "II", "III", "IV", "V"};
 
 void Game::DrawMemoryList(float W, float H) {
     using namespace ui;
@@ -10047,17 +10081,17 @@ void Game::DrawMemoryList(float W, float H) {
     DrawRectangle(0, 0, (int)W, (int)H, {0, 0, 0, 120});
     Panel(r, A(kPanel, 0.98f), 14);
     Text("Memories", r.x + 28, r.y + 20, 30, kText, true);
-    Label("BEFORE THE SOVEREIGN WENT DOWN: ONE FOR EACH STORY TOLD", r.x + 30, r.y + 58, 11, kGold);
+    Label("BEFORE THE SOVEREIGN WENT DOWN: ONE FOR EACH STORY TOLD  \xC2\xB7  ESC LEAVES ONE", r.x + 30, r.y + 58, 11, kGold);
     float y = r.y + 88;
     for (int k = 0; k < 5; ++k) {
         const people::Memory& m = people::kMemories[k];
         if (k < n) {
             const bool fresh = !((memSeen >> k) & 1);
-            if (Button({r.x + 28, y, pw - 56, 46}, TextFormat("%s.  %s", kMemNumeral[k], m.title), fresh)) {
-                memPlay = k;
-                memLine = 0;
-                memVoiced = -1;
-                memAt = GetTime();
+            if (Button({r.x + 28, y, pw - 56, 46}, TextFormat("%s.  %s", kMemNumeral[k], m.title), fresh)) {  // (played: out at sea, years ago)
+                CampaignAct(campaign::ACT_MEMORY, k);
+                memList = false;
+                portOpen = false;
+                DisableCursor();
             }
             Label(TextToUpper(m.when), r.x + 44, y + 52, 9, fresh ? kGold : kDim);
         } else
@@ -10067,80 +10101,109 @@ void Game::DrawMemoryList(float W, float H) {
     if (Button({r.x + pw - 130, r.y + 20, 102, 34}, "Close")) memList = false;
 }
 
-// A memory: the warm dark of the past, the place and the year, then each line in turn - the telling across the middle,
-// Mara from the left and the Admiral from the right in their portraits, her own words in a box of her own; a click (or
-// Space) types the line out at once, then the next; Esc leaves it
-void Game::DrawMemory(float W, float H) {
-    using namespace ui;
-    const people::Memory& m = people::kMemories[memPlay];
-    const double now = GetTime();
-    DrawRectangleGradientV(0, 0, (int)W, (int)H, {38, 27, 18, 255}, {11, 8, 6, 255});
-    for (int k = 0; k < 6; ++k)  // (the edges darker: an old picture)
-        DrawRectangleLinesEx({(float)k * 14, (float)k * 14, W - k * 28.0f, H - k * 28.0f}, 14.0f, {0, 0, 0, (unsigned char)(70 - k * 11)});
-    const float head = Clamp((float)(now - memAt) / 0.6f, 0.0f, 1.0f);
-    const std::string title = TextFormat("%s.  %s", kMemNumeral[memPlay], m.title);
-    Text(title.c_str(), W * 0.5f, 34, 30, A(kGold, memLine == 0 ? head : 1.0f), true, Center);
-    Label(TextToUpper(m.when), W * 0.5f, 72, 11, A({214, 196, 164, 255}, memLine == 0 ? head : 1.0f), Center);
-    const people::MemoryLine& l = m.lines[memLine];
-    const float age = (float)(now - memAt) - (memLine == 0 ? 0.8f : 0.0f);
-    if (memVoiced != memLine && age >= 0.0f) {
-        memVoiced = memLine;
-        if (const char* face = people::MemoryFace(l.who)) people::Voiced(face, l.text, (uint32_t)(memPlay * 31 + memLine), 3);
+// A memory's stage (EV_MEMORY): its lines queued (the telling in the narrator's voice across the top; Mara and the
+// Admiral as the people at sea; her own words, no voice; what she's to do, in the feed), the goal marked; over: gone
+void Game::MemoryScript(int flags, Vector3 goal) {
+    using namespace campaign;
+    const int k = (flags >> 4) % memoryCount, st = flags & 15;
+    if (st == memoryOver) {
+        script.clear();
+        sfx::StopVoice();
+        memActive = -1;
+        memHasGoal = false;
+        memNarr.clear();
+        memEndedAt = GetTime();
+        if (memSeen < 0) MemSeenLoad();
+        memSeen |= 1 << k;
+        MemSeenSave();
+        return;
     }
-    static const char* const kRank[5] = {"Midshipman", "Lieutenant of the Wren", "Lieutenant of the Wren", "Captain of the Sovereign", "Captain of the Sovereign"};
-    static const char* const kMaraIs[5] = {"", "Master's mate of the Wren", "Master's mate of the Wren", "First mate of the Sovereign", "First mate of the Sovereign"};
-    const float a = Clamp(age / 0.3f, 0.0f, 1.0f);
-    if (age >= 0.0f) {
-        if (l.who == people::MEM_TELL) {  // the telling: across the middle, no face
-            const float ts = fmaxf(22.0f, H * 0.028f), lh = ts * 1.45f, ww = fminf(W * 0.62f, 900.0f);
-            const std::vector<std::string> lines = Wrap(l.text, ts, ww);
-            float y = H * 0.5f - lines.size() * lh * 0.5f;
-            int left = (int)(age * 60.0f) + 1;
-            for (const std::string& t : lines) {
+    memGoal = {goal.x, 0.0f, goal.z};
+    memHasGoal = goal.y > 0.5f;
+    if (memActive == k && st == memStage) return;  // (only the goal moved: the next mark in the channel)
+    if (memActive != k) {
+        memAt = GetTime();
+        script.clear();
+        Notice(TextFormat("%s.  %s", kMemNumeral[k], std::string(TextToUpper(people::kMemories[k].title)).c_str()), ui::kGold, 5.0f);
+    }
+    memActive = k;
+    memStage = st;
+    const people::Memory& m = people::kMemories[k];
+    for (const people::MemoryLine& l : m.lines) {
+        if (l.who < 0) break;
+        if (l.stage != st) continue;
+        switch (l.who) {
+            case people::MEM_TELL: Script(l.at, "!narrate", "", "", l.text); break;
+            case people::MEM_GOAL: Script(l.at, "!feed", "MEMORY", (std::string("  ") + l.text).c_str(), ""); break;
+            case people::MEM_YOU: Script(l.at, "you", "You", m.you, l.text); break;
+            case people::MEM_MARA: Script(l.at, "story_mara", "Mara Vell", m.mara, l.text); break;
+            case people::MEM_ASHGRAVE: Script(l.at, "story_ashgrave", "Lord Admiral Ashgrave", "Lord Admiral of the Isles", l.text); break;
+        }
+    }
+}
+
+// In a memory: the sea warmed and darkened at the edges like an old picture, the year under the title, the telling
+// across the top, the goal (marked, and which way)
+void Game::DrawMemoryHud(float W, float H) {
+    using namespace ui;
+    if (memActive < 0) return;
+    const double now = GetTime();
+    BeginBlendMode(BLEND_MULTIPLIED);
+    DrawRectangle(0, 0, (int)W + 1, (int)H + 1, {255, 232, 200, 255});
+    EndBlendMode();
+    {  // (the edges darker, smoothly: an old picture)
+        const Color e = {20, 12, 4, 110}, c = {20, 12, 4, 0};
+        const int bx = (int)(W * 0.16f), by = (int)(H * 0.18f);
+        DrawRectangleGradientH(0, 0, bx, (int)H + 1, e, c);
+        DrawRectangleGradientH((int)W - bx, 0, bx + 1, (int)H + 1, c, e);
+        DrawRectangleGradientV(0, 0, (int)W + 1, by, e, c);
+        DrawRectangleGradientV(0, (int)H - by, (int)W + 1, by + 1, c, e);
+    }
+    const people::Memory& m = people::kMemories[memActive];
+    const float t0 = (float)(now - memAt);
+    if (t0 < 9.0f) {  // (the year, under the title's notice)
+        const float a = Clamp(t0 / 1.0f, 0.0f, 1.0f) * Clamp((9.0f - t0) / 1.5f, 0.0f, 1.0f);
+        Label(TextToUpper(m.when), W * 0.5f, H * 0.5f - 120, 14, A({236, 222, 194, 255}, a), Center);
+    }
+    if (!memNarr.empty()) {  // the telling: across the top, typed out, gone after a while
+        const float age = (float)(now - memNarrAt), life = 4.0f + memNarr.size() * 0.06f;
+        if (age < life) {
+            const float a = Clamp(age / 0.4f, 0.0f, 1.0f) * Clamp((life - age) / 0.8f, 0.0f, 1.0f);
+            const float ts = fmaxf(20.0f, H * 0.024f), lh = ts * 1.45f, ww = fminf(W * 0.6f, 880.0f);
+            const std::vector<std::string> lines = Wrap(memNarr.c_str(), ts, ww);
+            const float y0 = 96.0f;
+            DrawRectangleGradientV((int)(W * 0.5f - ww * 0.5f - 30), (int)(y0 - 14), (int)(ww + 60), (int)(lines.size() * lh + 28), {10, 6, 2, (unsigned char)(150 * a)}, {10, 6, 2, 0});
+            int left = (int)(age * 55.0f) + 1;
+            float y = y0;
+            for (const std::string& l : lines) {
                 if (left <= 0) break;
-                const std::string part = t.substr(0, (size_t)std::min<int>((int)t.size(), left));
-                left -= (int)t.size() + 1;
-                Text(part.c_str(), W * 0.5f - ww * 0.5f, y, ts, A({236, 222, 194, 255}, a), false);
+                const std::string part = l.substr(0, (size_t)std::min<int>((int)l.size(), left));
+                left -= (int)l.size() + 1;
+                Text(part.c_str(), W * 0.5f - ww * 0.5f, y, ts, A({240, 226, 198, 255}, a), false);
                 y += lh;
-            }
-        } else if (l.who == people::MEM_YOU) {
-            const float bw = fminf(620.0f, W * 0.46f);
-            DrawTalk(nullptr, {}, W * 0.5f - bw * 0.5f, bw, H - 70.0f, "You", kRank[memPlay], l.text, age, a);
-        } else {
-            const bool mara = l.who == people::MEM_MARA;
-            const Texture2D* tex = Portrait(mara ? "story_mara" : "story_ashgrave");
-            const float bw = fminf(600.0f, W * 0.42f);
-            Rectangle pb{};
-            float bx = mara ? W * 0.06f : W - W * 0.06f - bw;
-            if (tex) {
-                const float h = H * 0.84f, w = h * tex->width / tex->height;
-                pb = mara ? Rectangle{W * 0.03f, H - h, w, h} : Rectangle{W - W * 0.03f - w, H - h, w, h};
-                bx = mara ? pb.x + w * 0.72f : pb.x + w * 0.28f - bw;
-            }
-            const std::string id = mara ? "story_mara" : "story_ashgrave";
-            DrawTalk(tex, pb, bx, bw, H - 70.0f, mara ? "Mara Vell" : "Lord Admiral Ashgrave", mara ? kMaraIs[memPlay] : "Lord Admiral of the Isles",
-                     l.text, age, a, &id);
-            if (tex) {  // (warmed, like an old painting: the past)
-                BeginBlendMode(BLEND_MULTIPLIED);
-                DrawRectangleRec(pb, {255, 228, 192, 255});
-                EndBlendMode();
             }
         }
     }
-    Label("CLICK OR SPACE: ON     \xC2\xB7     ESC: BACK", W * 0.5f, H - 30, 10, A(kDim, 0.8f), Center);
-    const bool next = IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER);
-    if (next && age >= 0.0f) {
-        const float typed = l.who == people::MEM_TELL ? age * 60.0f : age * 75.0f;
-        if (typed < (float)strlen(l.text)) memAt = now - 100.0;  // (all of it at once)
-        else if (memLine + 1 < 14 && m.lines[memLine + 1].who >= 0) {
-            ++memLine;
-            memAt = now;
-        } else {  // the end: watched
-            if (memSeen < 0) MemSeenLoad();
-            memSeen |= 1 << memPlay;
-            MemSeenSave();
-            memPlay = -1;
-            sfx::StopVoice();
+    if (memHasGoal) {  // where she's to sail: marked, and the way to it at the edge of the screen when it's off it
+        Vector3 at = {memGoal.x, 30.0f, memGoal.z};
+        const float d = Vector2Distance({rv.pos.x, rv.pos.z}, {at.x, at.z});
+        Vector2 sp;
+        const Vector3 camF = Vector3Normalize(Vector3Subtract(rv.target, rv.pos));
+        if (Vector3DotProduct(Vector3Subtract(at, rv.pos), camF) > 0.0f && rv.Project(at, sp) && sp.x > 20 && sp.y > 20 && sp.x < W - 20 && sp.y < H - 20) {
+            DrawPoly(sp, 4, 13.0f, 45.0f, {0, 0, 0, 170});
+            DrawPoly(sp, 4, 10.0f, 45.0f, kGold);
+            Text(TextFormat("%d m", (int)d), sp.x, sp.y + 15, 13, kGold, false, Center);
+        } else {
+            Vector3 to = Vector3Subtract(at, rv.pos);
+            Vector3 right = Vector3Normalize(Vector3CrossProduct(camF, {0, 1, 0}));
+            const float ax = Vector3DotProduct(to, right), ay = -Vector3DotProduct(to, camF) * 0.35f;
+            const float ang = atan2f(ay, ax);
+            const Vector2 dir = {cosf(ang), sinf(ang)};
+            const Vector2 p = {W * 0.5f + dir.x * (W * 0.5f - 60), H * 0.5f + dir.y * (H * 0.5f - 80)};
+            const Vector2 tip = Vector2Add(p, Vector2Scale(dir, 18)), l = Vector2Add(p, {-dir.y * 12, dir.x * 12}), r = Vector2Add(p, {dir.y * 12, -dir.x * 12});
+            DrawTriangle(tip, r, l, kGold);
+            DrawTriangle(tip, l, r, kGold);
+            Text(TextFormat("%d m", (int)d), p.x - dir.x * 30, p.y - dir.y * 30 - 6, 12, kGold, false, Center);
         }
     }
 }

@@ -1,5 +1,6 @@
 // Headless physics test harness: `broadside --simtest`
 #include "sim.h"
+#include "people.h"
 #include "maelstrom.h"
 #include "livery.h"
 #include "protocol.h"
@@ -990,6 +991,90 @@ static int CampaignTest() {
     printf("   tick avg %.2f ms\n", sum / ticks * 1000.0);
     problems += spawned == 0;
     printf("campaign: %d problem(s)\n", problems);
+    return problems ? 1 : 0;
+}
+
+// The memories (World::StartMemory): each played by a bot captain from Port Haverly - it starts, its stages come in
+// turn, it ends by itself in a few minutes; and afterwards she's exactly as she was (ship, upgrades, officers, fleet,
+// the hour, in port)
+static int MemoryTest() {
+    using namespace campaign;
+    World g;
+    g.Init(getenv("BS_SEED") ? (uint32_t)atoi(getenv("BS_SEED")) : 7u, 0, 0, MODE_CAMPAIGN, false, ARENA_WORLD);
+    g.campBotCaptain = true;
+    const int me = g.AddShip("captain", true, SC_FRIGATE);
+    for (int b = 0; b < BIOMES; ++b) g.campChain[b] = chainSteps + 1;  // (every region's story told)
+    g.campUpg[0] = 2; g.campUpg[3] = 1;
+    g.campOfficer[1] = 2; g.campOfficerSeed[1] = 77;
+    for (int k = 0; k < 2; ++k) { World::FleetShip f; f.cls = SC_CUTTER; f.seed = (uint16_t)(k + 5); g.campFleet.push_back(f); }
+    int problems = 0;
+    auto settle = [&]() {
+        for (int i = 0; i < 60 * 8; ++i) {
+            Ship& c = g.ships[me];
+            c.input.sail = 0.0f;
+            c.vel = Vector3Scale(c.vel, 0.9f);
+            g.Step();
+            g.events.clear();
+        }
+    };
+    settle();
+    printf("in port: %s (docked %d), fleet %d at sea\n", g.campDocked == 0 ? "yes" : "NO", g.campDocked, (int)g.campFleet.size());
+    problems += g.campDocked != 0;
+    for (int k = 0; k < memoryCount; ++k) {
+        if (getenv("BS_MEMONLY") && atoi(getenv("BS_MEMONLY")) != k + 1) continue;
+        Ship& c = g.ships[me];
+        const uint8_t cls0 = c.cls, upg0 = g.campUpg[0], off0 = g.campOfficer[1];
+        const float clock0 = g.campClock;
+        const Vector3 pos0 = c.pos;
+        if (!g.CampaignAct(me, ACT_MEMORY, k)) { printf("   memory %d: would NOT start\n", k + 1); ++problems; continue; }
+        printf("   memory %d (%s): she's a %s in %s, %.0f m from port, hour %.2f, %d ships of then\n", k + 1, people::kMemories[k].title, ClassOf(c.cls).name,
+               kBiomeNames[BiomeAt(c.pos.x, c.pos.z)],
+               Vector2Distance({c.pos.x, c.pos.z}, {pos0.x, pos0.z}), fmodf(g.campClock / dayLength, 1.0f), (int)g.campMemShips.size());
+        int lastStage = 1, minHpPct = 100;
+        float t = 0.0f;
+        bool over = false;
+        std::string stages = "1";
+        while (t < 420.0f) {
+            g.Step();
+            t += SIM_DT;
+            minHpPct = std::min(minHpPct, (int)(100.0f * g.ships[me].hp / fmaxf(g.ships[me].maxHp, 1.0f)));
+            for (const GameEvent& e : g.events)
+                if (e.type == EventType::CampEvent && e.b == EV_MEMORY) {
+                    const int st = e.flags & 15;
+                    if (st == memoryOver) over = true;
+                    else if (st != lastStage) { stages += TextFormat(" %d@%.0fs", st, t); lastStage = st; }
+                }
+            g.events.clear();
+            if (over) break;
+            if (getenv("BS_MEMLOG") && fmodf(t, 10.0f) < SIM_DT)
+                printf("        t %3.0f: at (%.0f, %.0f) %.1f m/s, goal (%.0f, %.0f) %.0f m off, ground there %.0f, wp %d, stage %d\n", t, g.ships[me].pos.x, g.ships[me].pos.z,
+                       Vector3Length(g.ships[me].vel), g.campMemGoal.x, g.campMemGoal.y, Vector2Distance({g.ships[me].pos.x, g.ships[me].pos.z}, g.campMemGoal),
+                       RocksHeight(g.rocks, g.campMemGoal.x, g.campMemGoal.y), g.campMemWp, g.campMemStage);
+        }
+        settle();
+        Ship& d = g.ships[me];
+        const bool same = d.cls == cls0 && g.campUpg[0] == upg0 && g.campOfficer[1] == off0 && fabsf(g.campClock - clock0) < 30.0f;
+        int fleet = 0;
+        for (const World::FleetShip& f : g.campFleet) fleet += f.ship >= 0 && g.ships[f.ship].active;
+        int left = 0;
+        for (const Ship& s : g.ships) left += s.active && (s.raider || s.npc == NPC_NAVY) && Vector2Distance({s.pos.x, s.pos.z}, {d.pos.x, d.pos.z}) > 3000.0f;
+        const bool bad = !over || !same || g.campDocked != 0 || fleet != 2 || g.campMemory != 0;
+        if (g.campDocked != 0)
+            printf("      (not docked: %.0f m from %s, %.1f m/s, alive %d, anchored %d)\n", Vector2Distance({d.pos.x, d.pos.z}, {g.harbours[0].x, g.harbours[0].z}),
+                   PortName(0), Vector3Length(d.vel), (int)d.alive, (int)d.anchored);
+        problems += bad;
+        printf("      stages %s, %s after %.0f s (her hull at least %d%%); after: %s, docked %d, fleet %d at sea, %d of its ships left far off%s\n", stages.c_str(),
+               over ? "over" : "NOT OVER", t, minHpPct, same ? "as she was" : "NOT as she was", g.campDocked, fleet, left, bad ? "   <-- PROBLEM" : "");
+    }
+    // left halfway: Esc
+    g.CampaignAct(me, ACT_MEMORY, 3);
+    for (int i = 0; i < 60 * 20; ++i) { g.Step(); g.events.clear(); }
+    g.CampaignAct(me, ACT_MEMORY_END, 0);
+    settle();
+    const bool ok = g.campMemory == 0 && g.campDocked == 0 && g.ships[me].cls == SC_FRIGATE;
+    problems += !ok;
+    printf("   left halfway (Esc): %s\n", ok ? "back as she was" : "NOT back   <-- PROBLEM");
+    printf("memories: %d problem(s)\n", problems);
     return problems ? 1 : 0;
 }
 
@@ -2679,6 +2764,7 @@ int RunSimTest() {
     if (getenv("BS_SEALIFETEST")) return SeaLifeTest();
     if (getenv("BS_CHAINTEST")) return ChainTest();
     if (getenv("BS_QUESTTEST")) return QuestTest();
+    if (getenv("BS_MEMTEST")) return MemoryTest();
     if (getenv("BS_CAMPTEST")) return CampaignTest();
     if (getenv("BS_BOSSTEST")) return BossTest();
     if (getenv("BS_ODYSSEYTEST")) return OdysseyTest();
