@@ -296,6 +296,7 @@ public:
     // the Shipwright: our own paint, everyone else's (by ship: escorts wear their leader's), and the editor
     Livery myLivery;
     LiveryGpu myLiveryGpu;
+    LiveryGpu memLiveryGpu;  // (in a memory: her ship's paint then)
     std::deque<LiveryGpu> shipLivery;
     Shipyard yard;
     Vector3 yardPos{};
@@ -304,6 +305,8 @@ public:
     void CampYardCamera();
     const LiveryGpu* LiveryFor(int id) const {
         if (id < 0 || id >= NumShips()) return nullptr;
+        if (memActive >= 0 && id == myId) return memLiveryGpu.on ? &memLiveryGpu : nullptr;  // (years ago: not today's paint)
+        if (memActive >= 0 && view[id].s.leader == myId) return nullptr;                     // (the squadron: its own colours)
         int o = view[id].s.leader >= 0 && view[id].s.leader < NumShips() ? view[id].s.leader : id;
         if (shipLivery[o].on) return &shipLivery[o];
         if (getenv("BS_LIVERYALL") && myLiveryGpu.on) return &myLiveryGpu;  // (testing: everyone in our paint)
@@ -10113,6 +10116,7 @@ void Game::MemoryScript(int flags, Vector3 goal) {
         memHasGoal = false;
         memNarr.clear();
         memEndedAt = GetTime();
+        memLiveryGpu.Clear();
         if (memSeen < 0) MemSeenLoad();
         memSeen |= 1 << k;
         MemSeenSave();
@@ -10124,6 +10128,14 @@ void Game::MemoryScript(int flags, Vector3 goal) {
     if (memActive != k) {
         memAt = GetTime();
         script.clear();
+        static const Color kHull[campaign::memoryCount] = {{26, 40, 70, 255}, {40, 40, 44, 255}, {40, 40, 44, 255}, {28, 26, 24, 255}, {28, 26, 24, 255}};
+        static const Color kTrim[campaign::memoryCount] = {{196, 156, 66, 255}, {150, 44, 36, 255}, {150, 44, 36, 255}, {198, 152, 60, 255}, {198, 152, 60, 255}};
+        Livery then;  // (the ship she had then: plain paint, no figurehead, no picture)
+        then.hull = kHull[k];
+        then.trim = kTrim[k];
+        then.sail = {232, 226, 210, 255};
+        then.logoWhere = LOGO_OFF;
+        memLiveryGpu.Set(then);
         Notice(TextFormat("%s.  %s", kMemNumeral[k], std::string(TextToUpper(people::kMemories[k].title)).c_str()), ui::kGold, 5.0f);
     }
     memActive = k;
