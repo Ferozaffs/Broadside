@@ -377,6 +377,32 @@ Buf SynthConfirm() {
     return b;
 }
 
+Buf SynthHitMark(uint32_t seed) {
+    Rng r(seed);
+    Buf b = Make(0.35f);
+    // the body: a low thump, its pitch dropping fast (a mallet on a cask)
+    float ph = 0;
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR;
+        ph += TAU * (95.0f + 150.0f * expf(-t / 0.012f)) / SR;
+        b[i] = sinf(ph) * Env(t, 0.0015f, 0.07f) * 1.1f;
+    }
+    // the wood: a short burst of noise through two hollow resonances, damped quickly (a thock, not a ring)
+    Biquad w1, w2, click;
+    w1.Band(r.R(380, 420), 5);
+    w2.Band(r.R(820, 900), 4);
+    click.High(3000);
+    for (size_t i = 0; i < b.size(); ++i) {
+        float t = (float)i / SR;
+        float x = r.W() * expf(-t / 0.006f);
+        b[i] += (w1.Run(x) * 2.6f + w2.Run(x) * 1.4f) * expf(-t / 0.045f) + click.Run(x) * 0.35f * expf(-t / 0.002f);
+    }
+    Soft(b, 1.6f);
+    FadeOut(b, 0.08f);
+    Normalize(b, 0.8f);
+    return b;
+}
+
 Buf SynthSink(uint32_t seed) {
     Rng r(seed);
     Buf b = Make(4.5f);
@@ -510,12 +536,13 @@ std::vector<Buf> Variants(Id id) {
         case Step: for (uint32_t s = 1; s <= 6; ++s) v.push_back(SynthStep(s * 43)); break;
         case Roar: for (uint32_t s = 1; s <= 2; ++s) v.push_back(SynthRoar(s * 47)); break;
         case Bite: for (uint32_t s = 1; s <= 3; ++s) v.push_back(SynthBite(s * 53)); break;
+        case HitMark: for (uint32_t s = 1; s <= 3; ++s) v.push_back(SynthHitMark(s * 59)); break;
         default: break;
     }
     return v;
 }
 
-const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm", "step", "roar", "bite"};
+const char* kNames[Count] = {"cannon", "cannon_far", "hit", "rock_hit", "splash", "skip", "slam", "whoosh", "creak", "thunder", "chime", "treasure", "sink", "confirm", "step", "roar", "bite", "hit_mark"};
 
 // ---- live ambience (audio thread) ------------------------------------------------------------
 struct AmbienceGen {

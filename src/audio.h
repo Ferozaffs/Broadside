@@ -26,6 +26,7 @@ enum Id {
     Step,        // a boot on deck planking (crew)
     Roar,        // the kraken: a long, deep, wet growl
     Bite,        // the megalodon's jaws in a hull: a thump and splintering timber
+    HitMark,     // your shot landed: a deep wooden thock, felt more than heard (no ring: the old bell tick read as coins)
     Count
 };
 

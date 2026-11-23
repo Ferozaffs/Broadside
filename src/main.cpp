@@ -3091,7 +3091,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 flash = fmaxf(flash, 0.25f);
             }
             if (e.a == myId && e.b != myId) {
-                sfx::PlayFlat(sfx::Confirm, 0.45f, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 0.85f : 1.0f);
+                sfx::PlayFlat(sfx::HitMark, 0.6f, (e.flags & (EF_PLUNGING | EF_AIRSHOT)) ? 0.85f : 1.0f);
                 hitMarker = 0.35f;
                 hitMarkerGold = (e.flags & (EF_PLUNGING | EF_AIRSHOT | EF_RAKE)) != 0;
                 std::string t = TextFormat("+%d", (int)roundf(e.value));
@@ -3829,7 +3829,7 @@ void Game::PlayEvent(const GameEvent& e) {
                         for (int i = 0; i < 24; ++i) Emit(e.pos, Vector3Add(RandDir(6.0f), {0, Rnd(3, 9), 0}), Rnd(0.6f, 1.4f), Rnd(0.3f, 0.7f), 0.4f, {150, 18, 22, 235}, 0);
                     sfx::Play(sfx::Hit, e.pos, 0.7f, 0.55f);
                     if (e.a == myId) {
-                        sfx::PlayFlat(sfx::Confirm, 0.45f, 0.8f);
+                        sfx::PlayFlat(sfx::HitMark, 0.6f, 0.85f);
                         hitMarker = 0.35f;
                         hitMarkerGold = true;
                         floats.push_back({Vector3Add(e.pos, {0, 6, 0}), TextFormat("+%d", (int)roundf(e.value)), ui::kGold, 1.6f});
@@ -4055,7 +4055,7 @@ void Game::PlayEvent(const GameEvent& e) {
             }
             sfx::Play(sfx::Hit, e.pos, 0.7f, 0.55f);
             if (e.a == myId) {
-                sfx::PlayFlat(sfx::Confirm, 0.45f, 0.8f);
+                sfx::PlayFlat(sfx::HitMark, 0.6f, 0.85f);
                 hitMarker = 0.35f;
                 hitMarkerGold = e.b < 8;
                 floats.push_back({Vector3Add(e.pos, {0, 6, 0}), TextFormat("+%d%s", (int)roundf(e.value), e.b < 8 ? " ARM" : ""), e.b < 8 ? ui::kGold : ui::kText, 1.6f});
@@ -6049,7 +6049,7 @@ void Game::DrawHUD() {
         }
     }
 
-    // ---- state pill (airborne / submerged / sunk) ----
+    // ---- state pill (submerged / sunk) ----
     auto Pill = [&](const char* label, const char* value, Color col) {
         Vector2 lm = Measure(value, 28, true);
         float pw = fmaxf(150.0f, lm.x + 44), ph = 54;
@@ -6058,12 +6058,8 @@ void Game::DrawHUD() {
         Label(label, W * 0.5f, r.y + 7, 10, col, Center);
         Text(value, W * 0.5f, r.y + 19, 28, kText, true, Center);
     };
-    if (alive && matchState == 0 && me->airTime > 0.5f) {  // (a real jump, not every crest)
-        int spin = (int)(fabsf(me->airSpin) * RAD2DEG);
-        const char* v = spin >= 90 ? TextFormat("%.1fs  %d\xC2\xB0", me->airTime, spin) : TextFormat("%.1fs", me->airTime);
-        Pill(spin >= 330 ? "SPINNING" : "AIRBORNE", v, me->airTime > 2.0f || spin >= 330 ? kGold : kBlue);
-    }
-    else if (alive && matchState == 0 && me->depthBelow > 5.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
+    // (no AIRBORNE timer pill: the user found it annoying, 2026-11-23)
+    if (alive && matchState == 0 && me->depthBelow > 5.0f) Pill("SUBMERGED", TextFormat("%.1f m", me->depthBelow), kBlue);
 
     if (me && !alive && me->downed) {  // boss mode: disabled, waiting for a friend
         Text("DISABLED", W * 0.5f, H * 0.5f - 150, 56, kGold, true, Center);
