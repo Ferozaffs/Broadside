@@ -242,7 +242,8 @@ static Mesh BuildIsland(const Rock& k, bool vortex, bool coarse = false) {
     if (!k.stack) {
         uint32_t s = k.seed | 1;
         auto rnd = [&](float a, float b) { s = s * 1664525u + 1013904223u; return a + (b - a) * ((s >> 8) & 0xFFFFFF) / 16777216.0f; };
-        const float treeK = k.biome == campaign::EMBER ? 0.0f : k.biome == campaign::FROZEN ? 0.35f : k.biome == campaign::TROPICS ? 1.4f : 1.0f;
+        // (the Tropics' palms close up are the generated ones, Scenery::Build: built here only for the coarse copy, a long way off)
+        const float treeK = k.biome == campaign::EMBER ? 0.0f : k.biome == campaign::FROZEN ? 0.35f : k.biome == campaign::TROPICS ? (coarse ? 1.4f : 0.0f) : 1.0f;
         int want = (int)(k.r * 1.1f * treeK) / (coarse ? 3 : 1);
         const int SL = 7;
         for (int t = 0; t < want * 6 && want > 0 && P.size() + 100 < 65000; ++t) {
@@ -386,9 +387,9 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
             const bool trop = k.biome == campaign::TROPICS;
             struct Want { int kind, n; float uLo, uHi, yMin, flat, sLo, sHi; };  // (flat: the least up-ness of the ground)
             // (an island is a few hundred metres across and a hundred high: they have to be many, and big, to read)
-            const Want wants[2] = {trop ? Want{0, (int)(k.r * 0.3f), 0.45f, 0.97f, 1.4f, 0.75f, 0.85f, 1.3f}     // palms: on the beaches
+            const Want wants[2] = {trop ? Want{0, (int)(k.r * 2.2f), 0.0f, 0.97f, 1.4f, 0.72f, 1.0f, 1.6f}    // palms: groves, the odd lone one
                                         : Want{2, (int)(k.r * 0.45f), 0.0f, 0.92f, 2.5f, 0.55f, 1.0f, 1.9f},   // charred trees
-                                   trop ? Want{1, (int)(k.r * 0.25f), 0.2f, 0.9f, 2.0f, 0.75f, 0.9f, 1.5f}     // banana plants
+                                   trop ? Want{1, (int)(k.r * 0.6f), 0.15f, 0.9f, 2.0f, 0.72f, 1.0f, 1.6f}    // banana plants, among them
                                         : Want{3, (int)(k.r * 0.14f), 0.1f, 0.97f, 1.5f, 0.3f, 0.9f, 2.6f}};   // spires: steep or not
             // (the ground as drawn: the island's mesh has weathering on top of RockHeight, metres of it on a big one)
             const float* V = is.mesh.vertices;
@@ -423,6 +424,10 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
                         const float d = u * RockCoast(k, a), x = k.x + cosf(a) * d, z = k.z + sinf(a) * d;
                         float y = 0.0f, up = 0.0f;
                         if (!ground(x, z, y, up) || y < w.yMin || up < w.flat) continue;
+                        if (trop) {  // (in groves, as the palms built in BuildIsland were: woods, and the odd lone tree)
+                            const float grove = Fbm(x * 0.018f + (float)(k.seed % 1000), 3.0f, z * 0.018f);
+                            if (grove < 0.5f && rnd(0, 1) > 0.15f) continue;
+                        }
                         const float sc = rnd(w.sLo, w.sHi);
                         is.flora.push_back({{x, y - 0.15f * sc, z}, rnd(0, 2 * PI), sc, w.kind});
                         ++got;
@@ -438,7 +443,7 @@ void Scenery::Build(const std::vector<Rock>& rocks, bool maelstrom) {
 
 static constexpr float kFarCull = 9000.0f;     // m: nothing on the voyage's long sea shows past this
 static constexpr float kCoarseFrom = 1400.0f;  // m past an island's edge: its coarse copy
-static constexpr float kFloraNear = 320.0f, kFloraFar = 1800.0f;  // m: the generated props in full, in low detail, gone
+static constexpr float kFloraNear = 220.0f, kFloraFar = 1800.0f;  // m: the generated props in full, in low detail, gone
 
 void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
     if (!ready) return;
@@ -462,7 +467,9 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
         DrawMesh(cull && is.far.vertexCount && d - is.radius > kCoarseFrom ? is.far : is.mesh, rockMat, MatrixIdentity());
         // its generated palms, plants and spires: close up in full, the low-detail copy further out, none far off (for
         // the sun's shadow, cull off: the low copies round the shadow's centre)
-        if (!is.flora.empty() && (cull ? d - is.radius < kFloraFar : Vector3Distance(is.centre, v.target) - is.radius < 1400.0f)) floraOf.push_back(&is);
+        // (as long as the island's close copy is drawn: the coarse one has its own palms built in)
+        if (!is.flora.empty() && (cull ? !(is.far.vertexCount && d - is.radius > kCoarseFrom) && d - is.radius < kFloraFar
+                                       : Vector3Distance(is.centre, v.target) - is.radius < 1400.0f)) floraOf.push_back(&is);
     }
     rlDrawRenderBatchActive();
     r.SetShore(0.0f);
@@ -473,13 +480,13 @@ void Scenery::DrawIslands(Renderer& r, const RenderView& v, bool cull) {
             float best = 1e9f;
             for (const Island* isp : floraOf)
                 for (const Flora& f : isp->flora) { ++n; const float fd = Vector3Distance(f.pos, v.pos); nearN += fd < kFloraNear; best = fminf(best, fd); }
-            printf("[flora] cam %.0f,%.0f,%.0f: %d islands, %d props, %d near, nearest %.0f m, model %d meshes\n", v.pos.x, v.pos.y, v.pos.z, (int)floraOf.size(), n, nearN, best, propModels[kBiomeProp].m.meshCount);
+            printf("[flora] cam %.0f,%.0f,%.0f: %d islands, %d props, %d near, nearest %.0f m, model %d meshes, %d fps\n", v.pos.x, v.pos.y, v.pos.z, (int)floraOf.size(), n, nearN, best, propModels[kBiomeProp].m.meshCount, GetFPS());
         }
     }
+    if (getenv("BS_NOFLORA")) floraOf.clear();  // (A/B: the frame rate without them)
     for (const Island* isp : floraOf) {
             for (const Flora& f : isp->flora) {
                 const float fd = Vector3Distance(f.pos, v.pos);
-                if (cull && fd > kFloraFar) continue;
                 if (cull && fd > 60.0f && Vector3DotProduct(Vector3Subtract(f.pos, v.pos), fwd) < -20.0f) continue;
                 const int which = kBiomeProp + f.kind + (!cull || fd > kFloraNear ? kBiomeKinds : 0);
                 DrawPropModel(which, MatrixMultiply(MatrixMultiply(MatrixScale(f.scale, f.scale, f.scale), MatrixRotateY(f.yaw)), MatrixTranslate(f.pos.x, f.pos.y, f.pos.z)));
