@@ -32,6 +32,9 @@
 #include <algorithm>
 #include <deque>
 #include <thread>
+#include <atomic>
+#include <memory>
+#include <fstream>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -421,6 +424,20 @@ public:
     // the campaign's people: their portraits (data/portraits/<id>.png, loaded when first wanted) and who's talking
     std::map<std::string, Texture2D> portraits;
     const Texture2D* Portrait(const std::string& id);
+    // ...and their idles (data/idles/<id>.png: 48 frames, 8 across and 6 down, a loop at 16 fps, frame 0 the still):
+    // read and decoded on a worker thread when they're first wanted, then uploaded a strip of frames a frame (one
+    // 76 MB texture in one go is a hitch), dropped when nobody's shown them for a while
+    struct IdleDecode { std::atomic<int> done{0}; Image img{}; };
+    struct IdleAnim {
+        int state = 0;  // 0 reading, 1 uploading, 2 playing, -1 none
+        std::shared_ptr<IdleDecode> job;
+        Texture2D tex{};
+        int rowsUp = 0;
+        double used = 0.0;
+    };
+    std::map<std::string, IdleAnim> idles;
+    // the idle's texture and this moment's frame of it, if it's ready (else null: draw the still)
+    const Texture2D* IdleFrame(const std::string& id, Rectangle& src);
     int talkKey = -1;                // the port screen: the port and shop of whoever's talking (a new one: the line's typed out again)
     double talkAt = 0.0;
     int talkVoiced = -1;             // (the last one whose voice was heard)
@@ -454,7 +471,7 @@ public:
         return PickFace(std::string("pirate|") + NameOf(ship), pool);
     }
     void DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
-                  float age, float alpha);
+                  float age, float alpha, const std::string* idleOf = nullptr);
     void DrawSeaSay(float W, float H);
     void UpdateHails();
     // barks: a quick word from her fleet's captains and from the pirates (a small portrait and one line, on the right)
@@ -9308,10 +9325,80 @@ const Texture2D* Game::Portrait(const std::string& id) {
 
 // Someone talking: their portrait standing in pb (bottom-aligned, if there is one), and in front of it a box with
 // their name on a plate and their line, typed out as they say it
+const Texture2D* Game::IdleFrame(const std::string& id, Rectangle& src) {
+    constexpr int COLS = 8, ROWS = 6;
+    const double now = GetTime();
+    for (auto it = idles.begin(); it != idles.end();) {  // (nobody's shown them for half a minute: let them go)
+        IdleAnim& a = it->second;
+        if (it->first != id && now - a.used > 30.0 && a.state != 0) {
+            if (a.tex.id) UnloadTexture(a.tex);
+            if (a.job && a.job->img.data) UnloadImage(a.job->img);
+            it = idles.erase(it);
+        } else ++it;
+    }
+    if (getenv("BS_NOIDLES")) return nullptr;
+    auto it = idles.find(id);
+    if (it == idles.end()) {
+        IdleAnim a;
+        const std::string path = std::string(GetApplicationDirectory()) + "data/idles/" + id + ".png";
+        if (!FileExists(path.c_str())) a.state = -1;
+        else {
+            a.job = std::make_shared<IdleDecode>();
+            std::shared_ptr<IdleDecode> job = a.job;
+            std::thread([job, path] {  // (from memory: raylib's file callbacks are the ship packs', not for a worker)
+                std::ifstream f(path, std::ios::binary);
+                std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                if (!bytes.empty()) {
+                    Image im = LoadImageFromMemory(".png", bytes.data(), (int)bytes.size());
+                    if (im.data && im.format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8) ImageFormat(&im, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                    job->img = im;
+                }
+                job->done = 1;
+            }).detach();
+        }
+        it = idles.emplace(id, a).first;
+    }
+    IdleAnim& a = it->second;
+    a.used = now;
+    if (a.state == 0 && a.job->done) {
+        Image& im = a.job->img;
+        if (!im.data || im.width < COLS || im.height < ROWS) a.state = -1;
+        else {
+            a.tex.id = rlLoadTexture(nullptr, im.width, im.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+            a.tex.width = im.width;
+            a.tex.height = im.height;
+            a.tex.mipmaps = 1;
+            a.tex.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+            a.state = a.tex.id ? 1 : -1;
+        }
+    }
+    if (a.state == 1) {  // a row of frames a frame
+        Image& im = a.job->img;
+        const int fh = im.height / ROWS, y = a.rowsUp * fh, h = a.rowsUp == ROWS - 1 ? im.height - y : fh;
+        rlUpdateTexture(a.tex.id, 0, y, im.width, h, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, (unsigned char*)im.data + (size_t)y * im.width * 4);
+        if (++a.rowsUp == ROWS) {
+            GenTextureMipmaps(&a.tex);
+            SetTextureFilter(a.tex, TEXTURE_FILTER_TRILINEAR);
+            SetTextureWrap(a.tex, TEXTURE_WRAP_CLAMP);
+            UnloadImage(im);
+            im = Image{};
+            a.state = 2;
+        }
+    }
+    if (a.state != 2) return nullptr;
+    const float fw = (float)(a.tex.width / COLS), fh = (float)(a.tex.height / ROWS);
+    const int k = (int)(now * 16.0) % (COLS * ROWS);
+    src = {(k % COLS) * fw, (k / COLS) * fh, fw, fh};
+    return &a.tex;
+}
+
 void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
-                    float age, float alpha) {
+                    float age, float alpha, const std::string* idleOf) {
     using namespace ui;
-    if (tex)
+    Rectangle src{};
+    if (const Texture2D* anim = tex && idleOf ? IdleFrame(*idleOf, src) : nullptr)  // (in motion, where they've an idle)
+        DrawTexturePro(*anim, src, pb, {0, 0}, 0.0f, Fade(WHITE, alpha));
+    else if (tex)
         DrawTexturePro(*tex, {0, 0, (float)tex->width, (float)tex->height}, pb, {0, 0}, 0.0f, Fade(WHITE, alpha));
     const float ts = boxW < 460.0f ? 16.0f : 18.0f, lh = ts * 1.35f;
     const std::vector<std::string> lines = Wrap(line, ts, boxW - 44.0f);
@@ -9392,7 +9479,7 @@ void Game::DrawSeaSay(float W, float H) {
         pb = {6.0f, bottom - h, w, h};
         bx = 6.0f + w * 0.72f;
     }
-    DrawTalk(tex, pb, bx, fminf(520.0f, W * 0.42f), bottom, seaSay.name.c_str(), seaSay.title.c_str(), seaSay.line.c_str(), age, alpha);
+    DrawTalk(tex, pb, bx, fminf(520.0f, W * 0.42f), bottom, seaSay.name.c_str(), seaSay.title.c_str(), seaSay.line.c_str(), age, alpha, &seaSay.id);
 }
 
 void Game::AddBark(const std::string& id, const std::string& name, const std::string& line, Color c) {
@@ -9677,7 +9764,8 @@ void Game::DrawPort(float W, float H) {
             pb = {fmaxf(0.0f, (room - h * aspect) * 0.5f), H - h, h * aspect, h};
         }
         const float bx = 16.0f, bw = fminf(room - 16.0f, 600.0f);
-        DrawTalk(tex, pb, bx, bw, H - 20.0f, who.name, who.title, line, (float)(GetTime() - talkAt), 1.0f);
+        const std::string whoId = who.id;
+        DrawTalk(tex, pb, bx, bw, H - 20.0f, who.name, who.title, line, (float)(GetTime() - talkAt), 1.0f, &whoId);
     }
     Panel(r, A(kPanel, 0.97f), 14);
     const int b = PortBiome(campDocked);
