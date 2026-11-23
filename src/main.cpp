@@ -8227,9 +8227,9 @@ void Game::DrawKrakenQueen(float dt) {
 float Game::GhostAlpha() const {
     if (!bossView.hasBoss || bossView.bossKind != BOSS_DUTCHMAN) return 1.0f;
     switch (bossView.bossState) {
-        case fd::MATERIALISING: return 0.08f + 0.62f * Clamp(bossView.bossT / 2.0f, 0.0f, 1.0f);
-        case fd::SOLID: return 0.72f;
-        case fd::FADING: return 0.72f * Clamp(1.0f - bossView.bossT / 1.5f, 0.0f, 1.0f) + 0.04f;
+        case fd::MATERIALISING: return 0.08f + 0.82f * Clamp(bossView.bossT / 2.0f, 0.0f, 1.0f);
+        case fd::SOLID: return 0.9f;  // (the user: a 10% see-through, or she's too hard to see)
+        case fd::FADING: return 0.9f * Clamp(1.0f - bossView.bossT / 1.5f, 0.0f, 1.0f) + 0.04f;
         default: return 0.05f;  // (ethereal: the faintest shimmer)
     }
 }

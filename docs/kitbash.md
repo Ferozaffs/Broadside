@@ -12,6 +12,12 @@ them). So a ship is built from parts:
 2. **Prep** (here): `blender -b --factory-startup --python tools/prep_part.py -- hull.glb hull_prepped.glb --align
    --length 30 --tris 40000 --tex 1024 [--yaw 180]`. `--align` lays the long axis fore and aft but can't tell bow
    from stern: render it, and if the bowsprit lands on the transom, prep again with `--yaw 180`.
+2b. **Transom** (here, for a double-ended hull): `blender -b --factory-startup --python tools/transom.py --
+   hull_prepped.glb hull_t.glb [--cut 0.06] [--fill 0.72] [--windows 4|0] [--paint r g b]`. TRELLIS often makes the
+   stern a second stem, so the ship reads as having two fronts (the user, 2026-11-23): this fills out the quarters,
+   cuts the stern off square (raked), caps it with a planked board (gold rail, stern windows) and hangs a rudder.
+   Run it on both the hull and its `_lo` hull. The cutter: `--windows 4 --paint 0.07 0.10 0.20`; the gunboat
+   (a launch): `--windows 0 --cut 0.07 --paint 0.09 0.06 0.04`.
 3. **Rig** (here): `blender -b --factory-startup --python tools/rig_ship.py -- hull_prepped.glb ship.glb --type
    brig|cutter|ship [--masts 0.30 0.58] [--rig-scale 1] [--preview dir]`. It reads the deck and the beam off the
    hull, then builds masts, yards, square sails (canvas texture: seams, tabling, weathering), a gaff spanker, jibs,
@@ -32,7 +38,7 @@ them). So a ship is built from parts:
 
 | Class | Hull | Rig | Notes |
 |---|---|---|---|
-| cutter (`assets/ship_cutter`) | ZWUUUP `assets/parts/hull2_brig/hull2_brig_semi_s33` -> `assets/3d/hull2_brig_semi_s33` | `--type brig` (prep `--yaw 180`) | a blue-and-gold brig, carved scroll bow, 10 guns (57k triangles) |
+| cutter (`assets/ship_cutter`) | ZWUUUP `assets/parts/hull2_brig/hull2_brig_semi_s33` -> `assets/3d/hull2_brig_semi_s33` | prep `--yaw 180`, transom, `--type brig --no-course` (two square sails a mast) | a blue-and-gold brig, carved scroll bow, 10 guns (57k triangles) |
 | gunboat (`assets/ship_gunboat`) | `hull_cutter_semi_s33` (an open launch) | `--type cutter --masts 0.38 --rig-scale 0.9 --bow-gun --bow-gun-at 0.21` | gaff mainsail and two jibs, a bow chaser (33k) |
 | ghost: the Flying Dutchman and the Fog's "Drowned" ships (`assets/ship_ghost`) | ZWUUUP `hull4_ghost_semi_s99` (hulls3's s22 failed the frame checks; hull4 asked for a small ship on a plain ground) | prep `--align --yaw 180 --length 30 --width 9 --desat 0.65`, rig `--type ship --tattered --guns 6`; cfg `keel=-4` | rotten grey-green canvas, rents and ragged feet per sail; TRELLIS made her tubby (12.5 m beam on 30 m), so `--width` narrows her (66k / lo 7.8k) |
 

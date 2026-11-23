@@ -150,6 +150,7 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
     uv = bm.loops.layers.uv.new("UVMap")
     nu, nv = (6, 4) if lite else (28, 20) if tattered else (16, 12)  # (torn: a finer weave, so the holes are small and ragged)
     grid = []
+    roach = 0.09 * (top_c - bot_c).length  # (the foot cut up in a curve, as a real sail's is)
     for j in range(nv + 1):
         v = j / nv
         row = []
@@ -157,8 +158,9 @@ def square_sail(name, top_c, top_w, bot_c, bot_w, belly):
             u = i / nu
             c = top_c.lerp(bot_c, v)
             w = top_w + (bot_w - top_w) * v
-            p = c + Vector(((u - 0.5) * w, 0, 0))
-            p.y -= belly * math.sin(math.pi * u) * math.sin(math.pi * min(1.0, v * 1.1 + 0.05))  # (filled forward: -Y)
+            p = c + Vector(((u - 0.5) * w * (1.0 - 0.035 * math.sin(math.pi * v)), 0, 0))  # (the leeches drawn in a little)
+            p.y -= belly * math.sin(math.pi * u) ** 0.8 * math.sin(math.pi * (0.12 + 0.76 * v))  # (filled forward, -Y, most of it low; the foot still out)
+            p.z += roach * math.sin(math.pi * u) * v ** 3
             row.append(bm.verts.new(p))
         grid.append(row)
     if tattered:  # each sail its own rents (a few ragged-edged round holes, one long split) and a foot torn to rags
@@ -195,7 +197,7 @@ def tri_sail(name, a, b, c, belly_dir, belly):
             u, v = i / n, j / n
             w = 1 - u - v
             p = a * w + b * u + c * v
-            p = p + belly_dir * belly * 4 * u * v * w * 3
+            p = p + belly_dir.normalized() * belly * 27 * u * v * w  # (deepest in the middle: belly there)
             pts[(i, j)] = (bm.verts.new(p), (u + v * 0.5, v))
     for i in range(n):
         for j in range(n - i):
@@ -287,7 +289,12 @@ for k, f in enumerate(masts_f):
     disc(spars, (0, y, lower), r * 4.5, 0.25)  # (the top)
     disc(spars, (0, y + 0.05, top), r * 2.5, 0.15)  # (the crosstrees)
     heads.append((y, deck, beam, rail, lower, top, tg, h))
-    if kind == "cutter":
+    if kind == "cutter":  # the square topsail, between a spreader yard at the top and its own yard on the topmast
+        yw = YARD * 0.62
+        yards = [(lower + 0.2, yw), (top - 0.4, yw * 0.74)]
+        for (yz, w) in yards:
+            tube(spars, (-w / 2, y - 0.4, yz), (w / 2, y - 0.4, yz), r * 0.4, r * 0.4, 8)
+        square_sail(f"sail_top_{k}", Vector((0, y - 0.5, yards[1][0] - 0.2)), yards[1][1] * 0.94, Vector((0, y - 0.5, yards[0][0] + 0.3)), yards[0][1] * 0.95, 0.065 * L)
         continue
     # yards and square sails: course, topsail, topgallant
     yw = YARD * scale
@@ -295,7 +302,7 @@ for k, f in enumerate(masts_f):
     for (yz, w) in yards:
         tube(spars, (-w / 2, y - 0.4, yz), (w / 2, y - 0.4, yz), r * 0.45, r * 0.45, 8)
     foot = deck + 0.18 * h
-    belly = 0.045 * L
+    belly = 0.08 * L  # (as deep as the frigate's)
     if not no_course:
         square_sail(f"sail_course_{k}", Vector((0, y - 0.5, yards[0][0] - 0.2)), yards[0][1] * 0.94, Vector((0, y - 0.5, foot)), yards[0][1] * 1.0, belly)
     square_sail(f"sail_top_{k}", Vector((0, y - 0.5, yards[1][0] - 0.2)), yards[1][1] * 0.94, Vector((0, y - 0.5, yards[0][0] + 0.3)), yards[0][1] * 0.95, belly * 0.85)
@@ -307,8 +314,8 @@ sprit_a = Vector((0, yb + 0.03 * L, railb + 0.2))
 sprit_b = sprit_a + Vector((0, -0.38 * L * rs, 0.15 * L * rs))
 tube(spars, sprit_a, sprit_b, 0.010 * L * rs, 0.005 * L * rs)
 fy, fdeck, fbeam, frail, flower, ftop, ftg, fh = heads[0]
-tri_sail("sail_jib_0", Vector((0, fy - 0.3, ftop - 0.3)), sprit_b + Vector((0, 0.3, 0.1)), sprit_a.lerp(sprit_b, 0.55), Vector((0.3, 0, 0)), 0.03 * L)
-tri_sail("sail_jib_1", Vector((0, fy - 0.3, flower - 0.2)), sprit_a.lerp(sprit_b, 0.6), sprit_a + Vector((0, 0.2, 0.3)), Vector((0.3, 0, 0)), 0.025 * L)
+tri_sail("sail_jib_0", Vector((0, fy - 0.3, ftop - 0.3)), sprit_b + Vector((0, 0.3, 0.1)), sprit_a.lerp(sprit_b, 0.55), Vector((1, 0, 0)), 0.05 * L)
+tri_sail("sail_jib_1", Vector((0, fy - 0.3, flower - 0.2)), sprit_a.lerp(sprit_b, 0.6), sprit_a + Vector((0, 0.2, 0.3)), Vector((1, 0, 0)), 0.045 * L)
 rope(Vector((0, fy - 0.2, ftg - 0.3)), sprit_b)                       # the fore topgallant stay
 rope(Vector((0, fy - 0.2, ftop)), sprit_b + Vector((0, 0.5, 0.0)))    # the jib stay
 rope(Vector((0, fy - 0.2, flower)), sprit_a.lerp(sprit_b, 0.35))      # the forestay
@@ -316,8 +323,10 @@ rope(Vector((0, fy - 0.2, flower)), sprit_a.lerp(sprit_b, 0.35))      # the fore
 # the spanker (a gaff and boom sail on the aftermost mast), and the stays between the masts
 my, mdeck, mbeam, mrail, mlower, mtop, mtg, mh = heads[-1]
 ys, sdeck, sbeam, srail = station(0.97)
-gaff_a, gaff_b = Vector((0, my + 0.4, mlower - 1.0)), Vector((0, my + 0.40 * L * rs * (0.8 if kind == "ship" else 1.0), mlower + 0.06 * L))
-boom_a, boom_b = Vector((0, my + 0.4, mdeck + 2.2)), Vector((0, min(ys + 0.05 * L, my + 0.5 * L), mdeck + 2.6))
+gaff_len, peak, boom_len = (0.30, 0.62, 0.46) if kind == "cutter" else (0.20, 0.62, 0.27)  # (of the length; peak: rise per run)
+gaff_a = Vector((0, my + 0.4, mlower - 1.0))
+gaff_b = gaff_a + Vector((0, 1.0, peak)).normalized() * gaff_len * L * rs
+boom_a, boom_b = Vector((0, my + 0.4, mdeck + 2.2)), Vector((0, min(ys + 0.05 * L, my + 0.4 + boom_len * L * rs), mdeck + 2.6))
 tube(spars, gaff_a, gaff_b, 0.006 * L * rs, 0.004 * L * rs, 8)
 tube(spars, boom_a, boom_b, 0.007 * L * rs, 0.005 * L * rs, 8)
 bm = bmesh.new()
@@ -330,7 +339,7 @@ for j in range(nv + 1):
     for i in range(nu + 1):
         u = i / nu
         p = (gaff_a.lerp(gaff_b, u)).lerp(boom_a.lerp(boom_b, u), v)
-        p.x += 0.03 * L * math.sin(math.pi * u) * math.sin(math.pi * v)  # (filled to one side)
+        p.x += 0.055 * L * math.sin(math.pi * u) * math.sin(math.pi * (0.1 + 0.8 * v))  # (filled to one side)
         row.append(bm.verts.new(p))
     grid.append(row)
 for j in range(nv):
