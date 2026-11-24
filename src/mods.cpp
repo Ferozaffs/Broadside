@@ -1,6 +1,7 @@
 // Mods: see mods.h
 #include "mods.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -21,6 +22,9 @@ struct State {
     bool japanese = false;
     uint32_t gen = 1;
     std::unordered_map<std::string, std::string> text;
+    std::unordered_map<std::string, std::string> wordsAny, wordsExact;  // (words.tsv: any case / as written)
+    std::vector<std::pair<std::string, std::string>> phrases;            // (longest first)
+    std::unordered_map<std::string, std::pair<bool, std::string>> swapped;  // (T(const char*)'s: changed?, to what)
     std::unordered_map<std::string, int> sex;
     std::unordered_map<std::string, Babble> babble;
     std::unordered_map<std::string, int> hasFace, hasVoices, hasVoicesJa;  // (cached: 0 unknown... see Has)
@@ -51,6 +55,65 @@ std::string Unescape(const std::string& s) {
     return o;
 }
 
+bool IsLetter(char c) { return (unsigned char)c >= 0x80 || isalpha((unsigned char)c); }  // (UTF-8's letters too)
+
+// a word in the case of the one it replaces: He -> She, HE -> SHE, he -> she
+std::string Cased(const std::string& rep, const std::string& was) {
+    std::string o = rep;
+    bool allUp = was.size() > 1;
+    for (unsigned char c : was) allUp &= c >= 0x80 || !isalpha(c) || isupper(c);
+    if (allUp) {
+        for (char& c : o) c = (char)toupper((unsigned char)c);
+    } else if (!was.empty() && (unsigned char)was[0] < 0x80 && isupper((unsigned char)was[0]) && !o.empty())
+        o[0] = (char)toupper((unsigned char)o[0]);
+    return o;
+}
+
+// words.tsv over a text: its phrases first (exactly), then each whole word
+bool Swap(const std::string& s, std::string& o) {
+    o.clear();
+    o.reserve(s.size() + 16);
+    bool changed = false;
+    const size_t n = s.size();
+    size_t i = 0;
+    while (i < n) {
+        if (!(IsLetter(s[i]) && (i == 0 || !IsLetter(s[i - 1])))) {
+            o += s[i++];
+            continue;
+        }
+        bool done = false;
+        for (const auto& ph : S.phrases) {
+            const size_t len = ph.first.size();
+            if (s.compare(i, len, ph.first) != 0) continue;
+            if (IsLetter(ph.first.back()) && i + len < n && IsLetter(s[i + len])) continue;
+            o += ph.second;
+            changed |= ph.second != ph.first;
+            i += len;
+            done = true;
+            break;
+        }
+        if (done) continue;
+        size_t j = i;
+        while (j < n && IsLetter(s[j])) ++j;
+        const std::string w = s.substr(i, j - i);
+        auto ex = S.wordsExact.find(w);
+        if (ex != S.wordsExact.end()) {
+            o += ex->second;
+            changed = true;
+        } else {
+            std::string lw = w;
+            for (char& c : lw) c = (char)tolower((unsigned char)c);
+            auto an = S.wordsAny.find(lw);
+            if (an != S.wordsAny.end()) {
+                o += Cased(an->second, w);
+                changed = true;
+            } else o += w;
+        }
+        i = j;
+    }
+    return changed;
+}
+
 std::vector<std::string> Lines(const std::string& path) {
     std::vector<std::string> out;
     std::ifstream f(fs::u8path(path), std::ios::binary);
@@ -68,6 +131,10 @@ std::vector<std::string> Lines(const std::string& path) {
 
 void Load() {  // the active pack's words and people
     S.text.clear();
+    S.wordsAny.clear();
+    S.wordsExact.clear();
+    S.phrases.clear();
+    S.swapped.clear();
     S.sex.clear();
     S.babble.clear();
     S.hasFace.clear();
@@ -81,6 +148,20 @@ void Load() {  // the active pack's words and people
         if (t == std::string::npos) continue;
         S.text[Unescape(l.substr(0, t))] = Unescape(l.substr(t + 1));
     }
+    for (const std::string& l : Lines(S.dir + "words.tsv")) {
+        const size_t t = l.find('\t');
+        if (t == std::string::npos || t == 0) continue;
+        const std::string k = Unescape(l.substr(0, t)), v = Unescape(l.substr(t + 1));
+        bool letters = true, upper = false;
+        for (unsigned char c : k) {
+            letters &= IsLetter((char)c);
+            upper |= c < 0x80 && isupper(c);
+        }
+        if (!letters) S.phrases.emplace_back(k, v);
+        else if (upper) S.wordsExact[k] = v;
+        else S.wordsAny[k] = v;
+    }
+    std::sort(S.phrases.begin(), S.phrases.end(), [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
     for (const std::string& l : Lines(S.dir + "people.tsv")) {
         std::istringstream in(l);
         std::string id, sx;
@@ -228,15 +309,36 @@ std::string VoicePath(const std::string& id, uint32_t hash, int gameSex) {
 }
 
 const char* T(const char* s) {
-    if (!s || S.text.empty()) return s;
-    auto it = S.text.find(s);
-    return it == S.text.end() ? s : it->second.c_str();
+    if (!s || !*s) return s;
+    if (!S.text.empty()) {
+        auto it = S.text.find(s);
+        if (it != S.text.end()) return it->second.c_str();
+    }
+    if (S.wordsAny.empty() && S.wordsExact.empty() && S.phrases.empty()) return s;
+    auto c = S.swapped.find(s);
+    if (c == S.swapped.end()) {
+        std::string o;
+        const bool ch = Swap(s, o);
+        if (S.swapped.size() < 50000) c = S.swapped.emplace(s, std::make_pair(ch, ch ? o : std::string())).first;
+        else {  // (text put together on the fly without end: no more caching, a few kept for the caller to draw)
+            static std::string ring[64];
+            static int k = 0;
+            if (!ch) return s;
+            ring[k = (k + 1) % 64] = o;
+            return ring[k].c_str();
+        }
+    }
+    return c->second.first ? c->second.second.c_str() : s;
 }
 
 std::string T(const std::string& s) {
-    if (S.text.empty()) return s;
-    auto it = S.text.find(s);
-    return it == S.text.end() ? s : it->second;
+    if (!S.text.empty()) {
+        auto it = S.text.find(s);
+        if (it != S.text.end()) return it->second;
+    }
+    if (S.wordsAny.empty() && S.wordsExact.empty() && S.phrases.empty()) return s;
+    std::string o;
+    return Swap(s, o) ? o : s;
 }
 
 int Sex(const std::string& id) {

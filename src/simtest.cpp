@@ -59,6 +59,7 @@ static int ModTest() {
     touch(pack / "portraits" / "dread_calypso.png");              // (a woman, a new face, the game's voice kept)
     touch(pack / "text.tsv", "# the pack's words\nCaptain Joaquim Sousa\tCaptain Joana Sousa\nMaster of a merchantman\tMistress of a merchantwoman\n"
                              "He grins.\tShe grins,\\nand winks.\n");
+    touch(pack / "words.tsv", "# whole words\nhe\tshe\nhis\ther\nlads\tlasses\nman\twoman\nTom\tTess\nman-o'-war\tman-o'-war\n");
     touch(pack / "people.tsv", "merchant_3\tf\t230 1.15 0.12 0.05 1\nnavy_3\tf\n");
 
     // no pack: as the game ships
@@ -88,6 +89,16 @@ static int ModTest() {
     check(!strcmp(mods::T("He grins."), "She grins,\nand winks."), "escapes in text.tsv");
     const char* plain = "Nothing in the hold but fish, Captain! Smelly, honest fish!";
     check(mods::T(plain) == plain, "words the pack doesn't change: the game's, as they are");
+    // words.tsv: whole words, in the case of the one replaced; names exactly; phrases kept
+    check(!strcmp(mods::T("Tom says he saw his lads."), "Tess says she saw her lasses."), "words swapped, whole words");
+    check(!strcmp(mods::T("He's HIS man."), "She's HER woman."), "a word's case passed on (He -> She, HIS -> HER)");
+    check(!strcmp(mods::T("Then the hen showed them the chart."), "Then the hen showed them the chart."), "never inside a word (the, hen, them)");
+    check(!strcmp(mods::T("Tomas and tom"), "Tomas and tom"), "a name matched exactly (not Tomas, not tom)");
+    check(!strcmp(mods::T("A man-o'-war and a man"), "A man-o'-war and a woman"), "a phrase kept as it is");
+    check(!strcmp(mods::T("He grins."), "She grins,\nand winks."), "text.tsv's line before the words");
+    check(mods::T(std::string("Tom's lads")) == "Tess's lasses", "the same for a string put together");
+    const char* once = mods::T("he and his");
+    check(once == mods::T("he and his") && !strcmp(once, "she and her"), "swapped once, kept (the same text each frame)");
     check(people::WomanFace("merchant_3") && !people::GameWomanFace("merchant_3"), "a man the pack made a woman");
     check(people::WomanFace("navy_3") && people::WomanFace("navy_2"), "people.tsv without a voice; a woman stays one");
     mods::Babble b{};

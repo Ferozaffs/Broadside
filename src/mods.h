@@ -10,6 +10,14 @@
 //                                         stays English). The game's own data/voices_ja/ the same way, for its faces
 //   mods/<name>/text.tsv                  <the game's text> TAB <the pack's>, a line each (names, titles, lines;
 //                                         \n \t \\ escaped; # comments)
+//   mods/<name>/words.tsv                 <word> TAB <the pack's word>: whole words swapped in whatever text.tsv
+//                                         leaves as it is - its other lines, and what the game puts together itself
+//                                         (quest titles and briefs, the feed, the ships it sails' names). A word in
+//                                         lower case matches any case and passes its case on (he: He -> She, HE ->
+//                                         SHE); one with a capital matches exactly (a name: Tom -> Tess). A key with
+//                                         anything but letters in it is a phrase, matched first and exactly - the way
+//                                         to keep one as it is (man-o'-war TAB man-o'-war). Players' names are never
+//                                         changed
 //   mods/<name>/people.tsv                <id> TAB <f|m> [TAB pitch formant breath rasp manner]: who's a woman now
 //                                         (faces are matched to names by it), and the babble voice for a line with
 //                                         no recording
@@ -38,7 +46,8 @@ std::string PortraitPath(const std::string& id);              // the pack's face
 std::string IdlePath(const std::string& id);                  // "" when there's to be no idle
 std::string VoicePath(const std::string& id, uint32_t hash, int gameSex);  // the recording to play, "" none (babble);
                                                                          // gameSex: the face's in the game, 1 woman 2 man
-const char* T(const char* s);                                 // the pack's words for the game's (s itself if none)
+const char* T(const char* s);                                 // the pack's words for the game's (s itself if none):
+                                                                // text.tsv's line, else words.tsv's swaps
 std::string T(const std::string& s);
 int Sex(const std::string& id);                               // the pack's say: 1 a woman, 2 a man, 0 as the game has it
 bool BabbleOf(const std::string& id, Babble& out);            // the pack's babble voice for a face, if it gives one

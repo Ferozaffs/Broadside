@@ -787,7 +787,7 @@ private:
     void DrawMenu();
     void Feed(const std::string& s, Color c) { Feed3(s, "", "", c, c); }
     void Feed3(const std::string& a, const std::string& mid, const std::string& b, Color ca, Color cb) {
-        feed.push_back({a, mid, b, ca, cb, GetTime()});
+        feed.push_back({a, mods::T(mid), b, ca, cb, GetTime()});
         if (feed.size() > 4) feed.pop_front();
     }
     // the colour a ship flies (sails, pennant), and a readable version for text on the dark HUD
@@ -916,10 +916,10 @@ private:
         int lead = view[id].present ? view[id].s.leader : info[id].leader;  // (what she is now: a slot an escort had may be a pirate's)
         if (lead >= 0 && lead < NumShips() && lead != id) {  // an escort: no name of its own
             if (lead == myId) return "your escort";
-            std::string cap = info[lead].name.empty() ? std::string(TextFormat("Ship %d", lead)) : info[lead].name;
+            std::string cap = info[lead].name.empty() ? std::string(TextFormat("Ship %d", lead)) : info[lead].bot ? mods::T(info[lead].name) : info[lead].name;
             return cap + "'s escort";
         }
-        return info[id].name.empty() ? TextFormat("Ship %d", id) : info[id].name;
+        return info[id].name.empty() ? TextFormat("Ship %d", id) : info[id].bot ? mods::T(info[id].name) : info[id].name;
     }
     void Emit(Vector3 p, Vector3 v, float life, float size, float grow, Color c, uint8_t kind) {
         fx.Emit(p, v, life, size, grow, c, kind);
@@ -8951,7 +8951,7 @@ static const char* Compass(Vector2 from, Vector2 to) {  // (on the chart: +z nor
 }
 static std::string Km(float d) { return d >= 1000.0f ? TextFormat("%.1f km", d / 1000.0f) : TextFormat("%d m", (int)d); }
 
-static std::string QuestTitle(const Quest& q) {
+static std::string QuestTitleOf(const Quest& q) {
     using namespace campaign;
     if (const StoryStep* st = StoryOf(q)) return st->title;
     switch (q.type) {
@@ -8973,7 +8973,10 @@ static std::string QuestTitle(const Quest& q) {
 }
 
 // The tavern's telling of it (an offer: from the port it's offered in)
-static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) {
+static std::string QuestBriefOf(const Quest& q, const std::vector<Harbour>& hs);
+static std::string QuestTitle(const Quest& q) { return mods::T(QuestTitleOf(q)); }  // (in a mod's words)
+static std::string QuestBrief(const Quest& q, const std::vector<Harbour>& hs) { return mods::T(QuestBriefOf(q, hs)); }
+static std::string QuestBriefOf(const Quest& q, const std::vector<Harbour>& hs) {
     using namespace campaign;
     if (q.from < 0 || q.from >= (int)hs.size()) return "";
     const Vector2 here = {hs[q.from].x, hs[q.from].z}, spot = {q.x, q.z};

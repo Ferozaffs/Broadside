@@ -13,9 +13,10 @@ static Font LoadUIFont(const char* file) {
     if (!DirectoryExists(dir.c_str())) dir = std::string(GetApplicationDirectory()) + "../data/fonts/";
     std::string path = dir + file;
     if (!FileExists(path.c_str())) return GetFontDefault();
-    // ASCII + degree sign, middle dot, bullet, right arrow
+    // ASCII + degree sign, middle dot, bullet, right arrow; and the accented letters (a mod's names: Doña)
     std::vector<int> cps;
     for (int c = 32; c < 127; ++c) cps.push_back(c);
+    for (int c = 0xC0; c <= 0xFF; ++c) cps.push_back(c);
     for (int c : {0xB0, 0xB7, 0x2022, 0x2192, 0x00D7}) cps.push_back(c);
     Font f = LoadFontEx(path.c_str(), 72, cps.data(), (int)cps.size());
     GenTextureMipmaps(&f.texture);

@@ -1,0 +1,95 @@
+# The anime pack's whole-word swaps (mods.h: words.tsv). Lower case: any case, its case passed on. Capital: exactly.
+# A key with anything but letters: a phrase, matched first - kept as it is, or swapped whole.
+#
+# ---- kept as they are (ships, ranks, banners) ----
+man-o'-war	man-o'-war
+MAN THE	MAN THE
+MAN OVERBOARD	MAN OVERBOARD
+#
+# ---- phrases swapped whole ----
+Sir Rufus	Dame Rufina
+Lord Admiral	Lady Admiral
+my lord	my lady
+My lord	My lady
+Don Alvaro	Doña Alvara
+Kip Tobias	Pippa Toby
+Hangman Hugo	Hangwoman Hulda
+Bjorn Ulfsson	Bjorg Ulfsdottir
+a Dutchman	a Dutchwoman
+Davy Jones	Mother Carey
+#
+# ---- pronouns ----
+he	she
+him	her
+his	her
+himself	herself
+#
+# ---- people ----
+man	woman
+men	women
+fishermen	fisherwomen
+madmen	madwomen
+fellow	woman
+fellows	women
+fella	gal
+lad	girl
+lads	girls
+boy	girl
+boys	girls
+sir	ma'am
+gentleman	lady
+gentlemen	ladies
+father	mother
+fathers	mothers
+grandfather	grandmother
+husband	wife
+husbands	wives
+son	daughter
+sons	daughters
+nephew	niece
+uncle	aunt
+brother	sister
+brothers	sisters
+king	queen
+kings	queens
+baron	baroness
+harbourmaster	harbourmistress
+forgemaster	forgemistress
+#
+# ---- names (exactly) ----
+Barnaby	Barbara
+Tom	Tess
+Silas	Selina
+Jonah	Joanna
+Jonas	Joan
+Elias	Eliza
+Hector	Hester
+Ezekiel	Zelda
+Tomas	Tomasa
+Thomas	Thomasina
+Jack	Jackie
+Kofi	Afua
+Olav	Olga
+Gunnar	Gunna
+Corvin	Corvina
+Corwin	Corinna
+Ignatius	Ignatia
+Absalom	Abigail
+Ned	Nettie
+Caspar	Cassia
+Hollis	Holly
+Edmund	Edith
+Ezra	Esther
+Bartholomew	Bertha
+Bart	Bertha
+Peter	Petra
+Amos	Amelia
+Jim	Jemima
+Hob	Hilda
+Hal	Hattie
+Piet	Pia
+Billy	Billie
+Sam	Sadie
+Kit	Kitty
+Rupert	Ruby
+Lord	Lady
