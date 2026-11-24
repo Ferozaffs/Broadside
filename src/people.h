@@ -3,6 +3,7 @@
 #pragma once
 #include "sim.h"
 #include "audio.h"
+#include "mods.h"
 #include <cstring>
 #include <cctype>
 
@@ -505,14 +506,28 @@ inline sfx::VoiceParams ParamsOf(const Voice& v) {
     p.rasp = v.rasp;
     return p;
 }
+inline bool GameWomanFace(const std::string& id);  // (below, with the faces)
+inline bool WomanFace(const std::string& id);
+// (line: the game's own words - a mod's recordings are filed under them too, whatever it shows: mods::VoicePath)
 inline void Voiced(const char* id, const char* line, uint32_t salt, int prio = 1) {
     if (!line) return;
-    if (sfx::PlayVoice(TextFormat("data/voices/%s/%08x.ogg", id, sfx::LineHash(line)), 0.85f, prio)) return;  // (spoken, where there's a recording)
+    const bool gameWoman = GameWomanFace(id);
+    const std::string path = mods::VoicePath(id, sfx::LineHash(line), gameWoman ? 1 : 2);
+    if (!path.empty() && sfx::PlayVoice(path.c_str(), 0.85f, prio)) return;  // (spoken, where there's a recording)
     if (getenv("BS_VOICELOG")) printf("[voice] no recording: %s %08x %s\n", id, sfx::LineHash(line), line);
-    const Voice* v = VoiceOf(id);
-    if (!v) return;
+    Voice v{};
+    if (const Voice* g = VoiceOf(id)) v = *g;
+    else if (!mods::Sex(id)) return;
+    else v = {id, 120.0f, 1.0f, 0.1f, 0.1f, 0};
+    mods::Babble mb;
+    if (mods::BabbleOf(id, mb)) v = {id, mb.pitch, mb.formant, mb.breath, mb.rasp, mb.manner};
+    else if (WomanFace(id) && !gameWoman) {  // (a man the mod made a woman, and gave no voice of her own)
+        v.pitch = v.pitch * 1.8f > 200.0f ? v.pitch * 1.8f : 200.0f;
+        v.formant = 1.15f;
+        v.rasp *= 0.4f;
+    }
     const uint32_t h = salt * 2654435761u + (uint32_t)strlen(line) * 40503u;
-    sfx::Babble(ParamsOf(*v), line, MoodOf(*v, line), 0.75f, h, prio);
+    sfx::Babble(ParamsOf(v), line, MoodOf(v, line), 0.75f, h, prio);
 }
 
 // ---- Memories: five scenes from the years before the prologue - how she came to the Admiral, how she met Mara, what
@@ -679,10 +694,14 @@ inline const char* const kWomenFaces[] = {
     "pirate_10", "pirate_12", "pirate_2", "pirate_7", "rival_1", "rival_3", "rival_5", "saltmarsh_tavern",
     "sea_captive", "sea_navy", "smuggler_2", "smuggler_3", "smuggler_4", "smuggler_5", "smuggler_7", "story_mara",
 };
-inline bool WomanFace(const std::string& id) {
+inline bool GameWomanFace(const std::string& id) {  // (as the game has them)
     for (const char* w : kWomenFaces)
         if (id == w) return true;
     return false;
+}
+inline bool WomanFace(const std::string& id) {  // (as they are now: a mod can make a man a woman, mods::Sex)
+    if (const int s = mods::Sex(id)) return s == 1;
+    return GameWomanFace(id);
 }
 inline int NameSex(const std::string& name) {  // 1 a woman's name, 2 a man's, 0 can't tell (Cpt. Scurvy, Old Salt)
     static const char* const kF[] = {"Meg", "Bess", "Kate", "Sue", "Anne", "Stella", "Mistress", "Nell", "Lady", "Molly", "Mary", "Sal",

@@ -21,6 +21,7 @@
 #include "monsters.h"
 #include "sim.h"
 #include "people.h"
+#include "mods.h"
 #include <map>
 #include <functional>
 #include <set>
@@ -439,6 +440,8 @@ public:
         double used = 0.0;
     };
     std::map<std::string, IdleAnim> idles;
+    uint32_t facesGen = 0;           // (mods::Generation the portraits and idles were loaded under: a new pack, all again)
+    void DropFaces();
     // the idle's texture and this moment's frame of it, if it's ready (else null: draw the still)
     const Texture2D* IdleFrame(const std::string& id, Rectangle& src);
     // the Memories (people::kMemories): one for each story told, in order; watched in port, or not
@@ -734,6 +737,8 @@ public:
     void SaveAudioCfg() const { SaveFileText(AudioCfgPath().c_str(), (char*)TextFormat("music %.2f\nsound %.2f\n", sfx::music::Volume(), sfx::Volume())); }
     bool VolumeRow(Rectangle r, const char* label, float v, float& out);  // a volume bar: true when changed (out)
     void DrawVolumes(float x, float y, float w);                         // music and sound, side by side
+    float ModRowsHeight() const;                                        // the rows below: a mod to use, the voices' tongue
+    void DrawModRows(float x, float y, float w);                         // (nothing, and no room taken, with no mods)
     void UpdateSound(float dt, bool menu);
     bool shadowPass = false;        // DrawShip: geometry only, no lanterns/fx
     uint32_t arenaShadowKey = 0;    // what the arena shadow cascade was last drawn for
@@ -928,6 +933,7 @@ private:
 
 // ----------------------------------------------------------------------------
 void Game::Init() {
+    mods::Init(GetApplicationDirectory());  // (mods/<name>/ beside the game: other faces, voices, words - mods.h)
     nameBuf = opt.name;
     addrBuf = opt.address;
     {
@@ -2179,6 +2185,36 @@ void Game::DrawVolumes(float x, float y, float w) {
     float v;
     if (VolumeRow({x, y, half, 30}, "MUSIC", sfx::music::Volume(), v)) { sfx::music::SetVolume(v); SaveAudioCfg(); }
     if (VolumeRow({x + half + 24.0f, y, half, 30}, "SOUND", sfx::Volume(), v)) { sfx::SetVolume(v); SaveAudioCfg(); }
+}
+
+// Below the volumes: which mod (mods/<name>/: other faces, voices, words) - only with one installed - and the voices'
+// tongue, English or Japanese (the text stays English) - only with Japanese recordings to play
+float Game::ModRowsHeight() const {
+    return (mods::Installed().empty() ? 0.0f : 36.0f) + (mods::JapaneseAvailable() ? 36.0f : 0.0f);
+}
+
+void Game::DrawModRows(float x, float y, float w) {
+    using namespace ui;
+    if (!mods::Installed().empty()) {
+        Label("MOD", x, y + 8, 11, kDim);
+        const std::vector<std::string>& all = mods::Installed();
+        const std::string& cur = mods::Active();
+        const std::string text = cur.empty() ? "Off  \xC2\xB7  the game as it is" : cur;
+        if (Button({x + 58, y, w - 58, 30}, text.c_str(), !cur.empty())) {  // (each click the next: off, then each pack)
+            size_t k = 0;
+            while (k < all.size() && all[k] != cur) ++k;
+            const std::string next = cur.empty() ? all[0] : k + 1 < all.size() ? all[k + 1] : std::string();
+            mods::SetActive(next);
+            sfx::StopVoice();
+        }
+        y += 36.0f;
+    }
+    if (mods::JapaneseAvailable()) {
+        Label("VOICES", x, y + 8, 11, kDim);
+        static const char* const kTongue[] = {"English", "Japanese"};
+        int sel = mods::Japanese() ? 1 : 0;
+        if (Segmented({x + 58, y, w - 58, 30}, kTongue, 2, sel)) { mods::SetJapanese(sel == 1); sfx::StopVoice(); }
+    }
 }
 
 void Game::PickClass(int c) {
@@ -5830,10 +5866,10 @@ void Game::DrawHUD() {
             while (!script.empty() && GetTime() >= script.front().at) {  // (the prologue's lines, each in turn)
                 const ScriptLine l = script.front();
                 script.pop_front();
-                if (l.id == "!feed") Feed3(l.name, l.line, "", ui::kGold, ui::kText);
-                else if (l.id == "!notice") Notice(l.line, ui::kGold, 6.0f);
+                if (l.id == "!feed") Feed3(mods::T(l.name), mods::T(l.line), "", ui::kGold, ui::kText);
+                else if (l.id == "!notice") Notice(mods::T(l.line), ui::kGold, 6.0f);
                 else if (l.id == "!narrate") {  // (a memory's telling: across the top, in the narrator's voice)
-                    memNarr = l.line;
+                    memNarr = mods::T(l.line);
                     memNarrAt = GetTime();
                     people::Voiced("narrator", l.line.c_str(), 7u, 3);
                 }
@@ -6382,6 +6418,10 @@ void Game::DrawHUD() {
         if (Button({W * 0.5f - 150, yb, 300, 52}, "Leave battle")) Disconnect("");
         if (soundOn) Panel({W * 0.5f - 206, yb + 64, 412, 42}, {10, 16, 24, 220}, 12);
         DrawVolumes(W * 0.5f - 190, yb + 70, 380);
+        if (const float mh = ModRowsHeight(); mh > 0.0f) {
+            Panel({W * 0.5f - 206, yb + 112, 412, mh + 6}, {10, 16, 24, 220}, 12);
+            DrawModRows(W * 0.5f - 190, yb + 118, 380);
+        }
     }
 }
 
@@ -6471,6 +6511,7 @@ void Game::DrawMenu() {
         y += bh + gap;
         if (Button({x, y, fw, bh}, "Quit")) quit = true;
         DrawVolumes(x + 4, y + bh + 8, fw - 8);
+        DrawModRows(x + 4, y + bh + 8 + (soundOn ? 40.0f : 0.0f), fw - 8);
         float cx = x + fw + 36, cwid = fminf(360.0f, W * (compact ? 0.66f : 0.55f) - cx - 20);
         if (cwid > 220) {
             Label("YOU SAIL AS", cx + 2, y0 + head - 62, 13, kGold);
@@ -9376,11 +9417,24 @@ void Game::DrawChart(float W, float H) {
     Label(TextFormat("PORTS PUT INTO %d OF %d   \xC2\xB7   %d PIRATES SUNK   \xC2\xB7   TAB: CLOSE", seenN, kPorts, campSunk), W * 0.5f, y0 + S + 22, 12, kDim, Center);
 }
 
+void Game::DropFaces() {  // (another mod: every face and idle loaded again, from wherever they now come)
+    for (auto& kv : portraits)
+        if (kv.second.id) UnloadTexture(kv.second);
+    portraits.clear();
+    for (auto& kv : idles) {
+        if (kv.second.tex.id) UnloadTexture(kv.second.tex);
+        if (kv.second.job && kv.second.job->done && kv.second.job->img.data) UnloadImage(kv.second.job->img);
+    }
+    idles.clear();  // (a decode still running holds its own job: it finishes into nothing)
+    facesGen = mods::Generation();
+}
+
 const Texture2D* Game::Portrait(const std::string& id) {
+    if (facesGen != mods::Generation()) DropFaces();
     auto it = portraits.find(id);
     if (it == portraits.end()) {
         Texture2D t{};
-        const std::string p = std::string(GetApplicationDirectory()) + "data/portraits/" + id + ".png";
+        const std::string p = mods::PortraitPath(id);  // (a mod's face, else data/portraits/<id>.png)
         if (FileExists(p.c_str())) {
             t = LoadTexture(p.c_str());
             if (t.id) {
@@ -9408,11 +9462,12 @@ const Texture2D* Game::IdleFrame(const std::string& id, Rectangle& src) {
         } else ++it;
     }
     if (getenv("BS_NOIDLES")) return nullptr;
+    if (facesGen != mods::Generation()) DropFaces();
     auto it = idles.find(id);
     if (it == idles.end()) {
         IdleAnim a;
-        const std::string path = std::string(GetApplicationDirectory()) + "data/idles/" + id + ".png";
-        if (!FileExists(path.c_str())) a.state = -1;
+        const std::string path = mods::IdlePath(id);  // ("" for a face a mod replaced without an idle of its own: still)
+        if (path.empty()) a.state = -1;
         else {
             a.job = std::make_shared<IdleDecode>();
             std::shared_ptr<IdleDecode> job = a.job;
@@ -9466,6 +9521,9 @@ const Texture2D* Game::IdleFrame(const std::string& id, Rectangle& src) {
 void Game::DrawTalk(const Texture2D* tex, Rectangle pb, float boxX, float boxW, float boxBottom, const char* name, const char* title, const char* line,
                     float age, float alpha, const std::string* idleOf) {
     using namespace ui;
+    name = mods::T(name);  // (a mod's words: its names, titles, lines - the voice goes by the game's, Voiced)
+    title = mods::T(title);
+    line = mods::T(line);
     Rectangle src{};
     if (const Texture2D* anim = tex && idleOf ? IdleFrame(*idleOf, src) : nullptr)  // (in motion, where they've an idle)
         DrawTexturePro(*anim, src, pb, {0, 0}, 0.0f, Fade(WHITE, alpha));
@@ -9563,7 +9621,7 @@ void Game::AddBark(const std::string& id, const std::string& name, const std::st
     for (const Bark& b : barks)
         if (b.line == line) return;  // (not twice at once)
     if (campPrologueC != 0 && name == "the Dominion") return;  // (Ashgrave doesn't jeer like a common pirate)
-    barks.push_back({id, name, line, c, GetTime()});
+    barks.push_back({id, mods::T(name), mods::T(line), c, GetTime()});
     if (getenv("BS_TALKLOG")) printf("[say] %.1f %s | %s | bark | %s\n", GetTime() - sessionStart, id.c_str(), name.c_str(), line.c_str());
     while (barks.size() > 3) barks.pop_front();
     people::Voiced(id.c_str(), line.c_str(), (uint32_t)(GetTime() * 7.0) + (uint32_t)barks.size(), 0);  // (a bark: never over someone talking to her)
@@ -10237,8 +10295,11 @@ void Game::PickPerkUi(int k) {
 // --lines-export <file>: every line the campaign's people can say, with the face that says it (a TSV: id, hash, mood,
 // text) - what the AI voice model renders, one recording a line a face (data/voices/<id>/<hash>.ogg). Lines with a
 // name in them ("%s") are left out: they're spoken as babble.
+// With a mod chosen (mods.cfg, or BS_MOD=<name>) the text column is the mod's words for the line (its text.tsv) - what
+// its voices are to say - while the hash stays the game's line's: the name its recording is filed under.
 static int ExportLines(const char* path) {
     using namespace people;
+    mods::Init(GetApplicationDirectory());
     FILE* f = fopen(path, "wb");
     if (!f) return 1;
     std::set<std::string> seen;
@@ -10249,7 +10310,7 @@ static int ExportLines(const char* path) {
         const std::string key = id + "|" + line;
         if (!seen.insert(key).second) return;
         const Voice* v = VoiceOf(id.c_str());
-        fprintf(f, "%s\t%08x\t%d\t%s\t%s\n", id.c_str(), sfx::LineHash(line), v ? MoodOf(*v, line) : 0, line, ctx.c_str());
+        fprintf(f, "%s\t%08x\t%d\t%s\t%s\n", id.c_str(), sfx::LineHash(line), v ? MoodOf(*v, line) : 0, mods::T(line), ctx.c_str());
         ++n;
     };
     auto pool = [&](const std::string& base) {  // (the faces that speak for a kind)

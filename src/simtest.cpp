@@ -12,6 +12,10 @@
 #include <set>
 #include <map>
 #include <functional>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include "mods.h"
 
 static constexpr int MAX_SHIPS = 256;  // (the tests size their tables by this; the game itself has no limit)
 
@@ -20,6 +24,149 @@ static float Heading(const Ship& s) {
     return atan2f(f.x, f.z);
 }
 static float Fwd(const Ship& s) { return Vector3DotProduct(s.vel, Vector3RotateByQuaternion({0, 0, 1}, s.rot)); }
+
+// Mods (mods.h): a pack made here, in the temp folder, and everything the game looks up through it - and with none,
+// the game exactly as it ships
+static int ModTest() {
+    namespace fs = std::filesystem;
+    int fails = 0;
+    auto check = [&](bool ok, const char* what) {
+        printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
+        fails += ok ? 0 : 1;
+    };
+    const std::string app = std::string(GetApplicationDirectory());
+    const bool hadCfg = fs::exists(fs::u8path(app + "mods.cfg"));
+    std::string oldCfg;
+    if (hadCfg) { std::ifstream f(fs::u8path(app + "mods.cfg"), std::ios::binary); oldCfg.assign(std::istreambuf_iterator<char>(f), {}); }
+    const fs::path root = fs::temp_directory_path() / "bs_modtest";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    const fs::path pack = root / "waifus";
+    auto touch = [&](const fs::path& f, const std::string& body = "x") {
+        fs::create_directories(f.parent_path());
+        std::ofstream(f, std::ios::binary) << body;
+    };
+    const char* line = "Name, ship, and whether you mean to pay your dues this time. Go on, I've a ledger to fill.";
+    const char* other = "Port Haverly welcomes careful captains. The other sort we bury at the parish's expense.";
+    char h1[16], h2[16];
+    snprintf(h1, sizeof h1, "%08x.ogg", sfx::LineHash(line));
+    snprintf(h2, sizeof h2, "%08x.ogg", sfx::LineHash(other));
+    touch(pack / "portraits" / "merchant_3.png");                 // (a man made a woman: no idle, her own voices)
+    touch(pack / "voices" / "merchant_3" / h1);
+    touch(pack / "voices_ja" / "merchant_3" / h1);
+    touch(pack / "portraits" / "navy_2.png");                     // (a woman, a new face with an idle of its own)
+    touch(pack / "idles" / "navy_2.png");
+    touch(pack / "portraits" / "dread_calypso.png");              // (a woman, a new face, the game's voice kept)
+    touch(pack / "text.tsv", "# the pack's words\nCaptain Joaquim Sousa\tCaptain Joana Sousa\nMaster of a merchantman\tMistress of a merchantwoman\n"
+                             "He grins.\tShe grins,\\nand winks.\n");
+    touch(pack / "people.tsv", "merchant_3\tf\t230 1.15 0.12 0.05 1\nnavy_3\tf\n");
+
+    // no pack: as the game ships
+    mods::Init(app);
+    mods::Reset();
+    check(mods::Active().empty(), "no pack in use");
+    check(mods::PortraitPath("merchant_3") == app + "data/portraits/merchant_3.png", "no pack: the game's portrait");
+    const bool gameIdle = fs::exists(fs::u8path(app + "data/idles/merchant_3.png"));
+    check(mods::IdlePath("merchant_3").empty() != gameIdle, "no pack: the game's idle, where it has one");
+    check(!strcmp(mods::T("Captain Joaquim Sousa"), "Captain Joaquim Sousa"), "no pack: the game's words");
+    check(!people::WomanFace("merchant_3") && people::WomanFace("navy_2"), "no pack: who's a woman, as the game has it");
+    const uint32_t g0 = mods::Generation();
+
+    // the pack
+    check(mods::LoadFrom(pack.u8string()), "the pack loads");
+    check(mods::Generation() != g0, "a new pack: the faces are loaded again (generation)");
+    check(mods::PortraitPath("merchant_3") == (pack / "portraits" / "merchant_3.png").u8string() ||
+              mods::PortraitPath("merchant_3") == pack.u8string() + "/portraits/merchant_3.png", "the pack's face");
+    check(mods::PortraitPath("fleet_1") == app + "data/portraits/fleet_1.png", "a face the pack leaves alone: the game's");
+    check(mods::IdlePath("merchant_3").empty(), "a face the pack replaced, with no idle: still (not the old face's idle)");
+    check(mods::IdlePath("navy_2").find("idles") != std::string::npos && mods::IdlePath("navy_2").find("waifus") != std::string::npos,
+          "a face the pack replaced with an idle: the pack's");
+    const bool fleetIdle = fs::exists(fs::u8path(app + "data/idles/fleet_1.png"));
+    check(mods::IdlePath("fleet_1").empty() != fleetIdle, "a face the pack leaves alone: the game's idle");
+    check(!strcmp(mods::T("Captain Joaquim Sousa"), "Captain Joana Sousa"), "a name in the pack's words");
+    check(mods::T(std::string("Master of a merchantman")) == "Mistress of a merchantwoman", "a title in the pack's words");
+    check(!strcmp(mods::T("He grins."), "She grins,\nand winks."), "escapes in text.tsv");
+    const char* plain = "Nothing in the hold but fish, Captain! Smelly, honest fish!";
+    check(mods::T(plain) == plain, "words the pack doesn't change: the game's, as they are");
+    check(people::WomanFace("merchant_3") && !people::GameWomanFace("merchant_3"), "a man the pack made a woman");
+    check(people::WomanFace("navy_3") && people::WomanFace("navy_2"), "people.tsv without a voice; a woman stays one");
+    mods::Babble b{};
+    check(mods::BabbleOf("merchant_3", b) && fabsf(b.pitch - 230.0f) < 0.01f && b.manner == 1, "her babble voice from people.tsv");
+    check(!mods::BabbleOf("navy_3", b), "no babble voice given: none");
+
+    // voices
+    const std::string v1 = mods::VoicePath("merchant_3", sfx::LineHash(line), 2);
+    check(v1.find("waifus") != std::string::npos && v1.find("voices_ja") == std::string::npos, "her recording, the pack's");
+    check(mods::VoicePath("merchant_3", sfx::LineHash(other), 2).empty(), "a line she hasn't recorded: babble, never the game's man");
+    // (the game's own recordings, where it has them: a woman given a new face, a man made a woman with his old face)
+    const char* calLine = nullptr;
+    for (const people::DreadVoice& d : people::kDread)
+        if (!strcmp(d.id, "dread_calypso")) calLine = d.line;
+    const std::string calGame = app + "data/voices/dread_calypso/" + std::string(TextFormat("%08x.ogg", sfx::LineHash(calLine)));
+    if (fs::exists(fs::u8path(calGame)))
+        check(mods::VoicePath("dread_calypso", sfx::LineHash(calLine), 1) == calGame, "a new face of the same sex keeps the game's voice");
+    else printf("  --    (no recording of Calypso's hail here: the same-sex check skipped)\n");
+    std::string navyLine, navyGame;
+    for (const people::SeaVoice& sv : people::kSea)
+        for (const char* l : sv.lines)
+            if (l && navyGame.empty()) {
+                const std::string g = app + "data/voices/navy_3/" + std::string(TextFormat("%08x.ogg", sfx::LineHash(l)));
+                if (fs::exists(fs::u8path(g))) { navyLine = l; navyGame = g; }
+            }
+    if (!navyGame.empty())
+        check(mods::VoicePath("navy_3", sfx::LineHash(navyLine.c_str()), 2) == navyGame,
+              "a man made a woman but keeping his old face: the game's voice (it goes with the face)");
+    else printf("  --    (no recording of navy_3 here: that check skipped)\n");
+    mods::SetJapanese(true);
+    check(mods::Japanese(), "Japanese voices chosen");
+    check(mods::JapaneseAvailable(), "Japanese recordings found (the pack's)");
+    const std::string j1 = mods::VoicePath("merchant_3", sfx::LineHash(line), 2);
+    check(j1.find("voices_ja") != std::string::npos, "in Japanese: her Japanese recording");
+    check(mods::VoicePath("merchant_3", sfx::LineHash(other), 2).empty(), "in Japanese, a line not recorded either way: babble");
+    touch(pack / "voices" / "merchant_3" / h2);
+    check(mods::VoicePath("merchant_3", sfx::LineHash(other), 2).find("voices/merchant_3") != std::string::npos ||
+              mods::VoicePath("merchant_3", sfx::LineHash(other), 2).find("voices\\merchant_3") != std::string::npos,
+          "in Japanese, a line with no Japanese recording: the English one");
+    mods::SetJapanese(false);
+    check(mods::VoicePath("merchant_3", sfx::LineHash(line), 2).find("voices_ja") == std::string::npos, "English again: the English recording");
+
+    // and back to none
+    mods::Reset();
+    check(mods::Active().empty() && mods::PortraitPath("merchant_3") == app + "data/portraits/merchant_3.png" &&
+              !strcmp(mods::T("Captain Joaquim Sousa"), "Captain Joaquim Sousa") && !people::WomanFace("merchant_3"),
+          "the pack set aside: the game as it ships");
+    // an installed pack is found, and chosen by name (BS_MODDIR: the packs' folder)
+    {
+        const fs::path dir = root / "packs";
+        touch(dir / "alpha" / "portraits" / "fleet_1.png");
+        touch(dir / "_hidden" / "portraits" / "fleet_1.png");
+#ifdef _WIN32
+        _putenv_s("BS_MODDIR", dir.u8string().c_str());
+#else
+        setenv("BS_MODDIR", dir.u8string().c_str(), 1);
+#endif
+        mods::Init(app);
+        check(mods::Installed().size() == 1 && mods::Installed()[0] == "alpha", "installed packs found (a _folder isn't one)");
+        check(mods::SetActive("alpha") && mods::Active() == "alpha" && mods::PortraitPath("fleet_1").find("alpha") != std::string::npos,
+              "a pack chosen by name");
+        check(!mods::SetActive("nope") && mods::Active() == "alpha", "no such pack: no change");
+        mods::Init(app);
+        check(mods::Active() == "alpha", "the choice kept in mods.cfg");
+        mods::SetActive("");
+        check(mods::Active().empty(), "off again");
+#ifdef _WIN32
+        _putenv_s("BS_MODDIR", "");
+#else
+        unsetenv("BS_MODDIR");
+#endif
+        mods::Init(app);
+    }
+    fs::remove_all(root, ec);
+    if (hadCfg) std::ofstream(fs::u8path(app + "mods.cfg"), std::ios::binary) << oldCfg;
+    else fs::remove(fs::u8path(app + "mods.cfg"), ec);
+    printf("mods: %d problem(s)\n", fails);
+    return fails ? 1 : 0;
+}
 
 // the Shipwright's livery on the wire: it must come back exactly, fit the limit, and refuse anything damaged
 static int LiveryTest() {
@@ -2800,6 +2947,7 @@ int RunSimTest() {
     if (getenv("BS_HARBOURTEST")) return HarbourTest();
     if (getenv("BS_RAIDTEST")) return RaidTest();
     if (getenv("BS_VOYAGETEST")) return VoyageTest();
+    if (getenv("BS_MODTEST")) return ModTest();
     if (getenv("BS_LIVERYTEST")) return LiveryTest();
     if (getenv("BS_HANDLINGTEST")) return HandlingTest();
     if (getenv("BS_CROWDTEST")) {  // a full house: as many bots as there are berths, with and without fleets; how long a tick takes
