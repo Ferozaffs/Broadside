@@ -23,7 +23,9 @@ while True:
     p = todo[0]
     t0 = time.time()
     print(f"== {p} {time.strftime('%H:%M:%S')}", flush=True)
-    rc = subprocess.run([sys.executable, "-I", "krea2_run.py", p]).returncode
+    import json
+    script = json.load(open(p, encoding="utf-8")).get("script", "krea2_run.py")  # (an outpaint set names its own)
+    rc = subprocess.run([sys.executable, "-I", script, p]).returncode
     open(p[:-5] + ".done", "w").write(f"rc {rc} {time.time() - t0:.0f}s\n")
     print(f"done {p} rc {rc} in {time.time() - t0:.0f}s", flush=True)
     idle_since = time.time()
