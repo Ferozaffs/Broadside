@@ -1,0 +1,499 @@
+0	brisk and officious, tapping the ledger, faintly suspicious
+1	dry, prim, deadpan menace
+2	sing-song sarcasm, pleased with her own joke
+3	fussy and stern, then a deadpan grudge
+4	dry, pointed, deadpan
+5	cool, quiet warning
+6	shocked and disapproving, then wearily practical
+7	warm and confiding, a little proud of herself
+8	warm, relieved, teasing at the end
+9	delighted and warm
+10	conspiratorial, generous, a little coy
+11	proud and fond, with a dry aside
+12	excited, beaming
+13	loud, welcoming and jolly, laughing
+14	hearty, teasing, a laugh in the voice
+15	conspiratorial, lowered voice, intrigued
+16	jovial, then a mock-ominous aside
+17	gossipy, amused, sceptical
+18	cheerful, laughing at his regulars
+19	apologetic shrug, good-natured
+20	warm and confiding
+21	cheerful, amused
+22	delighted, hearty welcome
+23	laughing, fond, baffled
+24	sheepish, joking, very fond
+25	amused, apologetic, fond
+26	lowered voice, uneasy, troubled
+27	grumpy, dismissive, slow
+28	dry, deadpan, sly humour
+29	gruff, dry humour
+30	slow, plain, steady wisdom
+31	quiet, knowing, a gentle warning
+32	grumbling, cantankerous
+33	dry, gruff, unimpressed
+34	warm, sincere, reassuring
+35	fond, affectionate, generous
+36	conspiratorial, pleased
+37	warm, teasing
+38	expansive, fond, then a joking aside
+39	touched and proud, softly
+40	startled and flustered, nervous babble
+41	flustered, stammering, unsure
+42	nervous whisper, glancing about
+43	timid, fussy, apologetic
+44	hesitant, nervous, overly polite
+45	anxious, pedantic, rambling
+46	alarmed, nervous, trying to be polite
+47	bright, bubbly, flirtatious welcome
+48	teasing, sly, amused
+49	cheeky, laughing, sceptical
+50	teasing, playful
+51	gossipy, giggling
+52	warm, motherly, teasing
+53	teasing, cheeky
+54	worried, lowered voice, gossiping but scared
+55	critical, wincing, dry humour
+56	confident, cocky, a salesman's grin
+57	proud and cheeky
+58	amused, mercenary, grinning
+59	relaxed, laid-back, wry
+60	unimpressed, dry
+61	apologetic but firm
+62	weary, curt, military
+63	stern, clipped, commanding
+64	gruff and grim, remembering, ominous at the end
+65	clipped staccato orders, stern
+66	gruff, deadpan, fatalistic
+67	stern, distrustful, a grudging challenge
+68	stern, clipped, an order
+69	low, sharp, wary
+70	quiet, sad, matter-of-fact
+71	low, dry, insinuating
+72	cold, bitter grief, flat
+73	hushed, ominous, almost a whisper
+74	low, grave, foreboding
+75	dry, bitter
+76	quiet, haunted, grave, then urgent
+77	theatrical despair, exasperated, then resigned
+78	proud, boastful, warm
+79	teasing, wheedling, a merchant's wink
+80	proud and gruff, laughing at himself
+81	blunt, gruff, a dry joke
+82	scornful, appalled, comic
+83	firm, gruff, joking
+84	warm, charming, a little amused
+85	friendly warning, wry
+86	light, amused, then a hint of unease
+87	cheerful, laughing at her own warning
+88	dreamy, then dryly teasing
+89	wry, laughing
+90	shocked, sympathetic, motherly
+91	booming laughter, hearty welcome
+92	hearty, laughing, larger than life
+93	rueful, philosophical, chuckling
+94	booming, proud salesman, laughing
+95	low, conspiratorial, amused rumble
+96	booming, laughing, warm
+97	relaxed, kindly, easygoing
+98	low, uneasy, troubled
+99	cocky, proud, playful
+100	earnest warning, confident
+101	cocky, flirtatious, grinning
+102	philosophical, relaxed
+103	confident, proud of his secret
+104	proud, then teasing
+105	cheeky, shrugging, playful
+106	haughty, condescending, nasal
+107	pompous, pleased with his own wit
+108	pompous, self-satisfied
+109	smug, oily politeness
+110	snobbish, gossiping, sniffy
+111	vain, delighted with himself
+112	disgusted, haughty
+113	warm, sultry, inviting
+114	teasing, flirtatious
+115	sultry, darkly amused
+116	gentle, playful, warm
+117	knowing, amused, sultry
+118	dreamy, wistful
+119	soft, inviting, warm
+120	low, sad, worried
+121	warm, scolding, motherly
+122	proud, chuckling
+123	wise, gentle, warm
+124	knowing, teasing, chuckling
+125	wise, warm, sing-song
+126	firm but warm, motherly
+127	teasing, affectionate
+128	cheerful, roguish, sly
+129	gravelly, chuckling at his own joke
+130	mock parrot squawk, then grumbling and amused
+131	roguish, cheerful
+132	conspiratorial, wry warning
+133	sly, roguish, a veiled threat
+134	alarmed, then grumbling and comic
+135	cool, dry, a quiet threat
+136	tough, dry, wry
+137	cold, deadpan menace
+138	dry, tough, wry
+139	sardonic, amused
+140	dry, wry advice
+141	curt, cold, dismissive
+142	low, uneasy, genuinely frightened
+143	warm, confident, reassuring
+144	calm, proud, warm
+145	amused, rueful, proud
+146	proud, matter-of-fact, warm
+147	conspiratorial, chuckling
+148	warm, wry
+149	calm, wry, dignified
+150	cool, stern, curt
+151	measured, impressed but stern
+152	calm, grave, fatalistic
+153	calm, stern warning
+154	stern but warm
+155	stern, practical
+156	stern, unimpressed, curt
+157	roaring, laughing, booming welcome
+158	booming, laughing, cheerful
+159	roaring storyteller, laughing
+160	booming, jolly, laughing
+161	laughing, proud, boisterous
+162	roaring, jolly, boisterous
+163	laughing, cheerful
+164	sombre, grave, lowered voice
+165	blunt, unimpressed, curt
+166	confident, proud, dry
+167	proud, blunt, tough
+168	blunt, practical, firm
+169	proud, confident, a little smile
+170	dry, wry
+171	blunt, curt
+172	gentle, solemn, prayerful
+173	sorrowful, gentle, grave
+174	hushed, uneasy, ominous
+175	gentle, grateful, kindly
+176	quiet, worried, solemn
+177	gentle, wry, solemn
+178	gentle, caring, solemn
+179	warm, motherly, welcoming
+180	fussing, motherly, scolding
+181	warm, worried mother
+182	fussing, kindly
+183	chatty, amused
+184	warm, fussing, cosy
+185	warm, kindly
+186	excited, worried gossip, then hearty
+187	terse, grunting
+188	terse, proud
+189	slow, flat, bitter wisdom
+190	dry, terse, a hint of pride
+191	terse, proud
+192	gruff, curt
+193	curt, blunt
+194	cold, officious, dry
+195	cold, stern, officious
+196	cold, lowered voice, uneasy
+197	cold, threatening, officious
+198	clipped, cold, interrogating
+199	cold, suspicious, dry
+200	cold disgust, curt
+201	bold, flirtatious, loud welcome
+202	proud, sly, amused
+203	bold, tough, wry
+204	flirtatious, teasing
+205	wry, dry
+206	teasing, dangerous, amused
+207	teasing, lazy, amused
+208	low, worried, then kind
+209	blunt, deep, grave
+210	proud, blunt
+211	gruff, blunt threat
+212	blunt, emphatic
+213	proud, gruff humour
+214	gruff, impatient
+215	blunt, curt
+216	gravelly, cackling, warning
+217	croaking, darkly amused
+218	cackling, sly
+219	cackling, gravelly
+220	gravelly, fatalistic
+221	blunt, cackling
+222	cackling, amused
+223	languid, sardonic, dry
+224	dry, bored
+225	world-weary, sardonic
+226	soft, sardonic, poetic
+227	dry, sardonic
+228	languid, dry, sardonic
+229	soft, weary
+230	low, troubled, uneasy
+231	excited, gushing, breathless
+232	excited, scheming, fast
+233	breezy, cheerful, unconcerned
+234	gleeful, excited
+235	excited, eager, slightly mad
+236	distracted, rapid, flustered
+237	apologetic, cheerful, pleading
+238	slow, funereal, morbidly polite
+239	slow, solemn, ominous
+240	hushed, grave warning
+241	slow, deadpan, ominous
+242	hushed, solemn warning
+243	slow, mournful
+244	mournful, morbidly polite
+245	crooning, knowing, eerie
+246	crooning, sly
+247	cackling, eerie
+248	crooning, eerie, knowing
+249	soft, solemn, eerie
+250	cackling, sly
+251	whispery, eerie
+252	hushed, eerie, ominous
+253	mournful, deadpan humour
+254	mournful, deadpan, a little awkward
+255	sincere, mournful, a dry aside
+256	slow, mournful, deadpan
+257	mournful, deadpan, apologetic
+258	slow, gloomy, fatalistic
+259	mournful, deadpan
+260	slow, hushed, wondering
+261	hushed, grave warning
+262	hushed, ominous, slow
+263	solemn, determined, quiet resolve
+264	slow, troubled, grave
+265	gentle, solemn
+266	gentle, kind, solemn
+267	soft, melancholy, a faint smile
+268	soft, melancholy, darkly amused
+269	low, mysterious
+270	soft, eerie
+271	soft, dark, amused
+272	hushed, eerie, melancholy
+273	soft, lonely, eerie
+274	low, urgent, uneasy
+275	gentle, warm, wry
+276	gentle, then grave
+277	gentle, wry
+278	gentle, wry
+279	mellow, wry
+280	calm, steady, proud
+281	gentle, apologetic, wry
+282	cheerful, friendly, hasty
+283	friendly, relieved
+284	friendly, cheerful
+285	friendly warning, a little worried
+286	nervous, too casual
+287	cheerful, joking
+288	stern, official
+289	cheerful, businesslike
+290	brisk, curt
+291	dry, a veiled warning
+292	brisk, encouraging
+293	grim, urgent warning
+294	terrified, screaming for help
+295	panicked, screaming
+296	desperate, shouting
+297	panicked, despairing
+298	desperate, pleading, frantic
+299	desperate, panicked
+300	overjoyed, grateful, breathless
+301	shaky, relieved, grateful
+302	emotional, grateful, sincere
+303	cheerful, laughing, grateful
+304	elated, grateful
+305	sincere, grateful
+306	overjoyed, frantic, laughing and crying
+307	hoarse, desperate, pleading
+308	exhausted, hoarse, pleading
+309	anxious, dazed, pleading
+310	wild, half-mad laugh
+311	exhausted, longing
+312	haughty, imperious, relieved
+313	proud, reproachful
+314	defiant, vindictive glee
+315	disgusted, indignant
+316	proud, imperious
+317	fierce, vengeful
+318	shaky, relieved, grateful
+319	amazed, deeply grateful
+320	wry, shaky, grateful
+321	choked up, happy
+322	wry, tired
+323	grim, sincere, loyal
+324	desperate, begging, shouting
+325	defeated, angry, shouting
+326	frantic, shouting
+327	panicked, shouting, bitter
+328	begging, comic
+329	sheepish, embarrassed, shouting
+330	smooth, mocking, amused disdain
+331	bored, sardonic
+332	silky, cruel, amused
+333	sultry, mocking, cruel
+334	cruel, mocking, sing-song
+335	regal, menacing, sing-song
+336	slow, cold, rasping, terrifying
+337	cold, cruel, flat
+338	slow, cold, grim
+339	manic, gleeful, delighted
+340	shrieking with delighted laughter
+341	gleeful, cruel, mocking
+342	cold, soft, ghostly
+343	soft, cruel, mournful
+344	whispering, cold
+345	relaxed, pleasant
+346	cheerful, joking
+347	calm, routine report
+348	wary, uneasy
+349	eager, loyal
+350	calm, watchful
+351	urgent, alarmed, shouting
+352	urgent, shouting
+353	alarmed, shouting
+354	fierce, shouting
+355	fierce, shouting
+356	urgent, commanding, shouting
+357	alarmed, shouting
+358	desperate, shouting
+359	alarmed, desperate
+360	frustrated, shouting
+361	desperate, shouting
+362	desperate, grim
+363	triumphant, shouting
+364	triumphant, laughing
+365	delighted, impressed
+366	triumphant, cheering
+367	exultant, shouting
+368	fierce, triumphant
+369	formal, loyal, proud
+370	warm, sincere
+371	eager, fierce
+372	cheerful, reassuring
+373	steady, loyal
+374	proud, sincere
+375	jeering, laughing
+376	gleeful, bloodthirsty, shouting
+377	greedy, mocking
+378	mocking, laughing
+379	jeering, laughing at the joke
+380	sneering, amused
+381	sneering, contemptuous
+382	mocking, cackling
+383	gleeful, taunting
+384	mocking, laughing
+385	gleeful, jeering
+386	fierce, roaring, urgent
+387	furious, desperate, roaring
+388	panicked, screaming
+389	furious, defiant, shouting
+390	despairing, fading, resigned
+391	wailing, heartbroken
+392	outraged, snarling
+393	confident, challenging, amused
+394	determined, cocky
+395	proud, cocky
+396	easygoing, cocky, laughing
+397	admiring, then cocky
+398	playful, dark humour
+399	nervous, overly cheerful, shouting
+400	cheerful, innocent, hasty
+401	sly, conspiratorial
+402	desperate, hoarse, shouting
+403	desperate, pleading, hoarse
+404	exhausted, desperate, pleading
+405	overwhelmed, grateful, emotional
+406	hoarse, faint, grateful
+407	exhausted, wry
+408	wry, bitter, almost amused
+409	puzzled, uneasy
+410	quiet, shaken, remembering
+411	low, urgent, certain
+412	grim, flat, haunted
+413	bitter, wistful
+414	rueful, grim
+415	low, confiding, uneasy
+416	low, urgent, certain, confiding
+417	quiet, haunted, remembering
+418	hushed, frightened, haunted
+419	bitter, shaken
+420	hushed, uneasy
+421	wry, exhausted
+422	troubled, thoughtful
+423	indignant, comic, defensive
+424	uneasy, puzzled
+425	hushed, grave, confiding
+426	quiet, haunted
+427	hushed, frightened
+428	bitter, angry
+429	puzzled, suspicious
+430	grim, remembering
+431	uneasy, thoughtful
+432	wry, rueful, comic
+433	uneasy, wry
+434	low, grave, confiding
+435	shaken, angry
+436	baffled, awed, uneasy
+437	bitter, horrified
+438	suspicious, thoughtful
+439	shaken, awed
+440	uneasy, grave
+441	bitter, rueful
+442	low, suspicious, uneasy
+443	low, urgent, confiding
+444	haunted, hushed, shaken
+445	hushed, awed, frightened
+446	quiet, chilled, haunted
+447	unsettled, quiet
+448	bitter, rueful
+449	hushed, eerie, haunted
+450	shaken, then wry
+451	hushed, chilled, haunted
+452	hushed, sad, grave, confiding
+453	low, grave, ominous
+454	low, confiding, ominous
+455	soft, superstitious, uneasy
+456	wry, knowing, sympathetic
+457	low, approving, then a warning
+458	low, urgent, impressed
+459	puzzled, uneasy
+460	low, earnest warning
+461	hushed, frightened, urgent
+462	grave, uneasy
+463	hesitant, gentle, careful
+464	hushed, ominous
+465	urgent, frightened, then wry
+466	hushed, haunted, sad
+467	hushed, dread, awed
+468	urgent, earnest, pleading
+469	wry, bitter, indignant
+470	low, confiding
+471	wry, a little proud
+472	troubled, thoughtful
+473	indignant, still astonished
+474	uneasy, puzzled
+475	indignant, wry
+476	horrified, hushed
+477	wry, uneasy
+478	puzzled, troubled
+479	dry, sardonic
+480	puzzled, uneasy
+481	tired, matter-of-fact
+482	low, confiding
+483	shaken, remembering
+484	uneasy, puzzled
+485	dry, tired
+486	shaken, horrified
+487	rueful, wry
+488	urgent, troubled
+489	wry, shaken
+490	low, confiding, uneasy
+491	dry, sardonic
+492	low, uneasy
+493	surprised, uneasy
+494	hushed, ominous
+495	wry, dry
+496	hushed, uneasy
+497	sad, shaken
+498	urgent, frightened

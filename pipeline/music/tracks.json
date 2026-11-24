@@ -1,0 +1,170 @@
+[
+ {
+  "name": "menu",
+  "seconds": 150,
+  "style": "sea shanty, folk, rousing male choir, deep male lead vocal, fiddle, accordion, stomping drum, hand claps, 100 BPM, adventurous, tavern singalong",
+  "lyrics": "[verse]\nOh the wind blows cold off the Grey Isle shore\nAnd the powder's dry and the guns are four\nWe'll sail her out where the pirates roam\nAnd we'll bring the gold and the captain home\n\n[chorus]\nHaul away, boys, haul away\nBroadside thunder and the open bay\nHaul away, boys, haul away\nWe'll be rich men on the judgement day\n\n[verse]\nThere's a light that burns on Lantern Rock\nAnd a widow waits at the Greywater dock\nThere's ice in the north and fire in the east\nAnd a fortune waits in the belly of the beast\n\n[chorus]\nHaul away, boys, haul away\nBroadside thunder and the open bay\nHaul away, boys, haul away\nWe'll be rich men on the judgement day"
+ },
+ {
+  "name": "port",
+  "seconds": 140,
+  "style": "tavern sea shanty, folk, warm male vocal, small crowd singing along, fiddle, tin whistle, bodhran, accordion, 108 BPM, cheerful, cosy, drinking song",
+  "lyrics": "[verse]\nPut in at the harbour and tie her up fast\nThe tavern is warm and the storm is past\nThere's rum for the thirsty and stew for the cold\nAnd a song for the sailor who comes home with gold\n\n[chorus]\nSo fill up the tankard and stamp on the floor\nWe sail in the morning, but sing a while more\nFill up the tankard and drink to the sea\nShe takes what she pleases, but tonight we are free\n\n[verse]\nThe keeper is laughing, the fiddler's in tune\nThe harbourmaster's counting by the light of the moon\nThe shipwright is swearing he'll have her by dawn\nSo drink while you're able, tomorrow we're gone\n\n[chorus]\nSo fill up the tankard and stamp on the floor\nWe sail in the morning, but sing a while more\nFill up the tankard and drink to the sea\nShe takes what she pleases, but tonight we are free"
+ },
+ {
+  "name": "port_2",
+  "seconds": 140,
+  "style": "slow sea shanty, folk ballad, female lead vocal, gentle male harmonies, fiddle, acoustic guitar, accordion, 84 BPM, wistful, warm, tavern at night",
+  "lyrics": "[verse]\nMy love sailed out on a morning tide\nWith the wind in his sails and the sea so wide\nHe swore he'd come back when the summer was through\nBut the summers are many and the letters are few\n\n[chorus]\nLight the lamp in the window, keep the fire low\nThe sea gives back what she's willing to show\nLight the lamp in the window, and sing it slow\nFor the ones who sailed where the cold winds blow\n\n[verse]\nThe sailors come in with their stories and rum\nThey tell me of storms and the wars they have won\nI pour them their drinks and I listen for one\nWho'll tell me he's seen him, beyond the setting sun\n\n[chorus]\nLight the lamp in the window, keep the fire low\nThe sea gives back what she's willing to show\nLight the lamp in the window, and sing it slow\nFor the ones who sailed where the cold winds blow"
+ },
+ {
+  "name": "sail",
+  "seconds": 150,
+  "style": "instrumental, folk orchestral, calm sailing at sea, solo fiddle melody, warm strings, acoustic guitar, soft frame drum, flowing, hopeful, 90 BPM, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sail_2",
+  "seconds": 150,
+  "style": "instrumental, celtic folk, open sea adventure, tin whistle melody, fiddle, bouzouki, cello, light bodhran, 104 BPM, bright, wandering, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sail_3",
+  "seconds": 150,
+  "style": "instrumental, cinematic orchestral, vast ocean, slow french horn melody, swelling strings, harp, soft timpani, 76 BPM, majestic, melancholy, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "battle",
+  "seconds": 120,
+  "style": "instrumental, orchestral, cinematic naval battle music, pounding war drums, driving low strings, brass fanfares, 140 BPM, tense, heroic, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "battle_2",
+  "seconds": 120,
+  "style": "instrumental, folk metal meets orchestra, pirate battle, fast fiddle runs, distorted guitar, war drums, brass stabs, 150 BPM, aggressive, swashbuckling, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss",
+  "seconds": 150,
+  "style": "instrumental, epic orchestral, choir chanting without words, colossal sea monster battle, massive drums, low brass, pipe organ, dissonant strings, 128 BPM, dark, terrifying, no lead vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "victory",
+  "seconds": 35,
+  "style": "instrumental, orchestral fanfare, triumphant brass, bright strings, cymbal swells, 120 BPM, victorious, short, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "defeat",
+  "seconds": 35,
+  "style": "instrumental, sombre orchestral, slow lone cello, low strings, distant bell, 60 BPM, mournful, short, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_temperate",
+  "seconds": 150,
+  "style": "instrumental, english folk, calm sailing, gentle concertina melody, fiddle, acoustic guitar, upright bass, soft brushes, 96 BPM, warm, pastoral, homely, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_tropics",
+  "seconds": 150,
+  "style": "instrumental, caribbean folk, sunny tropical sea, steel pan melody, marimba, nylon guitar, shakers, congas, 108 BPM, bright, carefree, turquoise water, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_frozen",
+  "seconds": 150,
+  "style": "instrumental, nordic folk, frozen sea, hardanger fiddle melody, low drone, nyckelharpa, frame drum, distant horn, 72 BPM, cold, vast, lonely, majestic, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_ember",
+  "seconds": 150,
+  "style": "instrumental, dark cinematic, volcanic sea, slow taiko drums, low brass, duduk melody, rumbling bass, metallic percussion, 84 BPM, ominous, smouldering, tense, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_fog",
+  "seconds": 150,
+  "style": "instrumental, eerie ambient folk, foggy haunted sea, music box melody, celesta, bowed glass, sparse low strings, distant bell, 64 BPM, mysterious, ghostly, quiet, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "battle_3",
+  "seconds": 120,
+  "style": "instrumental, celtic war music, highland bagpipes, pounding snare and bass drums, fiddles, brass, 146 BPM, fierce, rousing, sea battle, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "battle_4",
+  "seconds": 120,
+  "style": "instrumental, hybrid cinematic action, naval battle, staccato strings, taiko and orchestral percussion, braams, choir hits without words, 136 BPM, intense, relentless, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_kraken",
+  "seconds": 150,
+  "style": "instrumental, epic orchestral, giant kraken attacking, tribal drums, deep brass, swirling strings, steel pan accents, wordless choir, 124 BPM, terrifying, tropical, colossal, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_fortress",
+  "seconds": 150,
+  "style": "instrumental, epic orchestral, siege of a sea fortress, martial snare, cannon-like timpani, heroic brass, organ, 118 BPM, grand, defiant, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_serpent",
+  "seconds": 150,
+  "style": "instrumental, epic orchestral, sea serpent in icy waters, hardanger fiddle, low choir, thundering drums, howling strings, 132 BPM, cold, savage, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_ironclad",
+  "seconds": 150,
+  "style": "instrumental, industrial orchestral, armoured ironclad warship, anvil percussion, steam hiss, heavy brass, grinding strings, 120 BPM, mechanical, relentless, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_dutchman",
+  "seconds": 150,
+  "style": "instrumental, gothic orchestral, ghost ship, haunted pipe organ, harpsichord, ghostly wordless female choir, eerie strings, 110 BPM, spectral, dread, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "boss_final",
+  "seconds": 160,
+  "style": "instrumental, epic orchestral finale, the last voyage, full orchestra and huge wordless choir, massive drums, soaring brass, 128 BPM, apocalyptic, heroic, emotional climax, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_ember_b",
+  "seconds": 150,
+  "style": "instrumental, cinematic world music, volcanic sea at dusk, warm flamenco guitar melody, duduk, soft hand percussion, low warm strings, gentle frame drum, 88 BPM, smouldering, glowing embers, warm, mysterious, soft drums, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_fog_b",
+  "seconds": 150,
+  "style": "instrumental, beautiful melancholy, misty sea at dawn, solo cello melody, soft piano, harp, gentle strings, distant bell, 70 BPM, wistful, tender, bittersweet, dreamy, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_tropics_bachata",
+  "seconds": 150,
+  "style": "instrumental, bachata, romantic caribbean sea voyage, requinto guitar melody, rhythm guitar, bongos, guira, electric bass, 126 BPM, warm, sunny, romantic, swaying, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ },
+ {
+  "name": "sea_tropics_salsa",
+  "seconds": 150,
+  "style": "instrumental, salsa, tropical sea voyage, piano montuno, trumpet and trombone section, congas, timbales, clave, bass tumbao, 180 BPM, joyful, warm, lively, no vocals",
+  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"
+ }
+]

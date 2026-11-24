@@ -1,0 +1,568 @@
+[
+ {
+  "id": "haverly_harbour",
+  "name": "Agatha Pruitt",
+  "title": "Harbourmaster of Port Haverly",
+  "character": "The character is a stern harbourmistress in her sixties with grey hair pinned up under a small dark bonnet and round wire spectacles on her nose. She wears a high-collared dark green wool dress with a brass whistle on a chain and a grey shawl, and holds a thick leather-bound ledger against her chest. She looks over her spectacles, unimpressed."
+ },
+ {
+  "id": "haverly_tavern",
+  "name": "Barnaby Coyle",
+  "title": "Keeper of the Anchor, Port Haverly",
+  "character": "The character is a huge, bald, jovial tavern keeper in his fifties with mutton-chop sideburns and a broken nose. He wears a rolled-sleeve linen shirt, a brown waistcoat and a stained apron, and holds a pewter tankard of ale in one big hand at his chest. He grins broadly.",
+  "character_v2": "The character is a huge, bald, jovial tavern keeper in his fifties with ginger mutton-chop sideburns and a broken nose, flintlock era. He wears a mustard-yellow brocade waistcoat over a white shirt with rolled sleeves, a burgundy cravat and a clean leather apron, a ring of iron keys at his belt, and raises a foaming pewter tankard in a toast. Booming laugh, eyes crinkled, everyone's favourite landlord."
+ },
+ {
+  "id": "haverly_wright",
+  "name": "Old Tom Fennick",
+  "title": "Shipwright of Port Haverly",
+  "character": "The character is a wiry old shipwright in his seventies with grey whiskers and half-moon spectacles on the end of his nose, flintlock era. He wears a tar-stained ox-blood red wool coat over a waistcoat and a leather apron, brass calipers on a chain round his neck, a clay pipe in the corner of his mouth, and holds a rolled ship's plan. Squinting at you over his spectacles, unimpressed.",
+  "character_v1": "The character is a wiry old shipwright in his seventies with grey whiskers, a weathered face and a clay pipe in his teeth. He wears a faded blue knit cap, a patched canvas smock with rolled sleeves and a leather tool belt, and rests a shipwright's adze on his shoulder. He squints, appraising."
+ },
+ {
+  "id": "saltmarsh_harbour",
+  "name": "Silas Reed",
+  "title": "Harbour Clerk of Saltmarsh",
+  "character": "The character is a thin, nervous young harbour clerk with lank black hair, ink-stained fingers and a long pale face. He wears a shabby black tailcoat, a limp cravat and a small black tricorn hat, and clutches a rolled chart and a quill to his chest. He looks anxious, eyebrows raised."
+ },
+ {
+  "id": "saltmarsh_tavern",
+  "name": "Molly Brine",
+  "title": "The Drowned Duck, Saltmarsh",
+  "character": "The character is a stunning, curvy tavern owner in her late twenties with wild copper-red curls tumbling over her shoulders, a dusting of freckles and bright green eyes. She wears a low-cut cream peasant blouse slipping off one shoulder, a tightly laced dark green bodice and a striped apron, with a dish rag tossed over her other shoulder. She gives a playful wink, one hand on her hip."
+ },
+ {
+  "id": "saltmarsh_wright",
+  "name": "Jonah Pike",
+  "title": "Shipwright of Saltmarsh",
+  "character": "The character is a ruggedly handsome young shipwright with tousled sandy-blond hair, a strong stubbled jaw and bright blue eyes, sawdust on his tanned muscular forearms. He wears an open-necked sweat-dampened linen shirt with the sleeves torn off, a leather jerkin left unlaced and a canvas apron, and rests a wooden mallet on his shoulder. He gives a confident, easy grin.",
+  "character_v2": "The character is a handsome young shipwright in his twenties with tousled sandy-blond hair and bright blue eyes, flintlock era. He wears a fitted teal wool jacket with the sleeves pushed up over a buttoned white shirt and a red neckerchief, a carpenter's pencil behind his ear and a coil of measuring cord over one shoulder, an adze in his hand. A cocky lopsided grin and a wink."
+ },
+ {
+  "id": "greywater_harbour",
+  "name": "Captain Elias Thorne",
+  "title": "Harbourmaster of Greywater",
+  "character": "The character is a retired navy captain in his sixties with enormous white mutton-chop whiskers, a brass-rimmed eyepatch over one eye and a hard, lined face. He wears a faded navy-blue officer's coat with tarnished gold epaulettes, a row of old campaign medals and a white cravat, and holds a brass spyglass tucked under one arm. He stands rigidly, glaring."
+ },
+ {
+  "id": "greywater_tavern",
+  "name": "The Widow Hask",
+  "title": "The Grey Gull, Greywater",
+  "character": "The character is a gaunt, sharp-featured tavern keeper in her fifties with jet-black hair split by a single dramatic white streak, drawn back tightly, and dark painted lips. She wears a black mourning dress with a high lace collar, a jet cameo brooch and black lace gloves, and holds a long clay pipe with a thin curl of smoke rising from it. She gives a knowing half-smile."
+ },
+ {
+  "id": "greywater_wright",
+  "name": "Hector Dunmore",
+  "title": "Shipwright of Greywater",
+  "character": "The character is a stocky, barrel-chested shipwright with a huge bushy auburn beard braided and bound with iron rings, and thick eyebrows. He wears a tartan tam-o'-shanter, a tartan sash across a heavy wool shirt and a thick leather apron with tools in its pockets, and holds a caulking iron and mallet in his big hands at his chest. He scowls good-naturedly.",
+  "character_v2": "The character is a stocky Scottish shipwright in his fifties with a huge auburn beard braided with iron rings and fierce bushy eyebrows, flintlock era. He wears a dark green and navy tartan coat with pewter buttons, a tartan tam-o'-shanter with a pheasant feather and a leather apron hung with chisels, and leans on a long brass spyglass like a walking stick. A stern, proud glare."
+ },
+ {
+  "id": "coral_harbour",
+  "name": "Marisol Vega",
+  "title": "Harbourmistress of Coral Bay",
+  "character": "The character is an elegant, beautiful harbourmistress in her thirties with long glossy black hair in a thick braid over one shoulder, warm brown skin, gold hoop earrings and dark lined eyes. She wears a wide straw hat with a red ribbon, a loose white cotton shirt open at the collar, a red silk sash at her slim waist and a brass compass on a cord, and holds a brass spyglass at her chest. She smiles warmly."
+ },
+ {
+  "id": "coral_tavern",
+  "name": "Big Ezekiel",
+  "title": "The Sunken Bell, Coral Bay",
+  "character": "The character is a very tall, broad Black tavern keeper in his forties with a shaved head, a short grey beard, two gold-capped teeth and heavy gold rings on his fingers. He wears an open-necked shirt in a loud red-and-yellow floral pattern under a green brocade waistcoat, and holds a dark rum bottle by the neck at his chest. He laughs, warm and booming.",
+  "character_v2": "The character is a very tall, broad Black tavern keeper in his forties with a shaved head, a short grey beard and one gold-capped tooth, flintlock era. He wears an elegant cream linen frock coat over an emerald silk waistcoat, a gold watch chain and gold rings, and holds a crystal decanter of dark rum and a glass. A warm knowing smile and a raised eyebrow: the host who hears every secret."
+ },
+ {
+  "id": "coral_wright",
+  "name": "Tomas Arroyo",
+  "title": "Shipwright of Coral Bay",
+  "character": "The character is a dashing, lean shipwright in his late twenties with curly black hair falling over his forehead, a thin roguish moustache, sun-darkened skin and a gold earring. He wears an open sleeveless striped shirt showing a toned chest, a red headscarf and a coil of rope over one shoulder, and holds a broad machete close at his side. He grins, cocky and charming."
+ },
+ {
+  "id": "dorada_harbour",
+  "name": "Don Alvaro de Ruiz",
+  "title": "Harbour Governor of Isla Dorada",
+  "character": "The character is a vain colonial official in his fifties with an elaborately waxed upturned moustache, a pointed beard, a powdered white wig and a gold monocle. He wears a crimson velvet coat heavy with gold embroidery, a lace jabot and jewelled rings on every finger, and holds a lace handkerchief to his nose. He looks down his nose with disdain."
+ },
+ {
+  "id": "dorada_tavern",
+  "name": "Lucia Mendez",
+  "title": "La Perla, Isla Dorada",
+  "character": "The character is a gorgeous tavern owner in her twenties with glossy black hair falling in loose waves, a red hibiscus flower behind one ear, full red lips and smouldering dark eyes. She wears an off-the-shoulder white blouse, a tight black corset bodice, a gold cross pendant at her throat and gold bangles, and holds a guitar against her side. She gives a sly, sultry smile."
+ },
+ {
+  "id": "dorada_wright",
+  "name": "Mama Odile",
+  "title": "Shipwright of Isla Dorada",
+  "character": "The character is an elderly Creole shipwright woman with deep laugh lines, a tall colourful wrapped headscarf, carved bone earrings and many bead necklaces, a short pipe clenched in her teeth. She wears a faded indigo work dress with the sleeves rolled, a heavy leather apron, and holds a carpenter's square and a pencil at her chest. She looks shrewd and amused."
+ },
+ {
+  "id": "palmhaven_harbour",
+  "name": "Jack Sorrel",
+  "title": "Harbourmaster of Palmhaven",
+  "character": "The character is a scruffy former pirate in his fifties with a sun-bleached beard, a gold tooth and an iron hook in place of his left hand, with a bright green parrot perched on his shoulder. He wears a battered brown tricorn, a torn sea-green coat over a dirty shirt and a pistol tucked in his sash. He leans back with a crooked, roguish grin."
+ },
+ {
+  "id": "palmhaven_tavern",
+  "name": "Rosa Calder",
+  "title": "The Rum Barrel, Palmhaven",
+  "character": "The character is a striking, athletic tavern keeper in her thirties called Two-Knives, with a short dark undercut, smoky kohl-rimmed eyes, a scar through one eyebrow and inked sleeve tattoos of ships and roses on her toned arms. She wears a fitted sleeveless leather vest over a loose shirt knotted at the waist, a red bandana at her throat and two knives in her belt, and crosses her arms. She smirks, challenging."
+ },
+ {
+  "id": "palmhaven_wright",
+  "name": "Kofi Mensah",
+  "title": "Shipwright of Palmhaven",
+  "character": "The character is a powerfully built Black shipwright in his thirties with a close-cropped beard and high cheekbones, flintlock era. He wears a long-sleeved saffron-orange tunic woven with kente patterns under a heavy leather work apron, white geometric tattoos on the backs of his hands, a carved model of a ship's figurehead under one arm and a wooden mallet in his hand. Calm and proud, a master's quiet confidence.",
+  "character_v1": "The character is a handsome, powerfully built Black shipwright in his thirties with a close-cropped beard, high cheekbones and white geometric tattoos on his bare muscular arms and shoulders. He wears an open canvas vest, a leather apron with tools and a necklace of carved wooden beads, and holds a heavy shipwright's axe resting on his shoulder. He looks calm and proud."
+ },
+ {
+  "id": "frostholm_harbour",
+  "name": "Ingrid Halvorsen",
+  "title": "Harbourmistress of Frostholm",
+  "character": "The character is a tall, striking Nordic harbourmistress in her forties with a long ash-blonde braid threaded with silver rings, pale blue eyes, windburned cheeks and thin blue tattooed lines down her chin. She wears a thick grey wool coat with a white wolf-fur collar, a silver knotwork brooch and fur-lined gloves, and holds a wooden tally board at her chest. She looks cool and measuring."
+ },
+ {
+  "id": "frostholm_tavern",
+  "name": "Bjorn Ulfsson",
+  "title": "The Frozen Kettle, Frostholm",
+  "character": "The character is an enormous Nordic tavern keeper in his fifties with a red-grey beard in two thick braids and blue runic tattoos on his shaved head, flintlock era. He wears a deep red wool tunic with embroidered trim under a heavy white bear-fur mantle, and holds a steaming carved drinking horn in one hand and a ladle in the other. Roaring with laughter, cheeks red from the hearth.",
+  "character_v1": "The character is an enormous Nordic tavern keeper in his fifties with a long red-grey beard in two thick braids, a shaved head covered in blue runic tattoos and a bear-fur mantle over his shoulders. He wears a thick wool tunic and leather bracers, and raises a carved drinking horn at his chest. He roars with laughter."
+ },
+ {
+  "id": "frostholm_wright",
+  "name": "Sigrid Axelsdottir",
+  "title": "Shipwright of Frostholm",
+  "character": "The character is a beautiful, muscular young Nordic shipwright woman with shaved sides, a long platinum-blonde braided topknot, ice-blue eyes and a few frost-reddened freckles. She wears a sleeveless fur-trimmed leather tunic that shows her strong arms, wrist wraps and a thick tool belt, and holds a bearded axe resting against her shoulder. She smirks, fearless."
+ },
+ {
+  "id": "iceward_harbour",
+  "name": "Pastor Olav Lind",
+  "title": "Keeper of Iceward Harbour",
+  "character": "The character is a gaunt old Nordic pastor in his seventies with long white hair, hollow cheeks, a long white beard and one eye clouded milky white. He wears a long black clerical coat with a white collar, a heavy wool scarf and a carved bone pendant, and holds a small oil lantern close to his chest with both hands. He looks solemn and kind."
+ },
+ {
+  "id": "iceward_tavern",
+  "name": "Hilde",
+  "title": "The Whalebone, Iceward",
+  "character": "The character is a stout, rosy-cheeked tavern keeper in her fifties with grey-blonde plaits and a tall embroidered fur hat with ear flaps. She wears a thick embroidered red wool dress, a sheepskin vest and an apron, and holds a steaming wooden bowl of stew and a ladle at her chest. She smiles motherly."
+ },
+ {
+  "id": "iceward_wright",
+  "name": "Gunnar Holt",
+  "title": "Shipwright of Iceward",
+  "character": "The character is a grim, weather-beaten Nordic shipwright in his sixties with a carved whalebone eyepatch, a white-streaked beard and a seal-fur hood, his weathered hands covered in scrimshaw-like tattoos. He wears a heavy oilskin coat and a belt of whalebone tools, and holds a bone-handled drawknife at his chest. He glowers silently.",
+  "character_v2": "The character is a grim Nordic shipwright in his sixties with a carved whalebone eyepatch and a white-streaked beard, flintlock era. He wears a long ice-blue oilskin coat over a cream cable-knit jumper and a grey seal-fur hood, a scrimshawed walrus tusk hanging on his chest, and holds a whalebone measuring rod. One cold pale eye studying you, unsmiling."
+ },
+ {
+  "id": "cinderport_harbour",
+  "name": "Magistrate Corvin Ash",
+  "title": "Magistrate of Cinderport",
+  "character": "The character is a soot-stained colonial magistrate in his fifties with a gaunt face, a thin grey moustache and sharp yellowish eyes, a brass-and-leather smoke mask hanging at his throat. He wears a dusty black frock coat, a heavy brass chain of office across his chest and a scorched tricorn hat, and holds a sealed scroll. He looks cold and calculating."
+ },
+ {
+  "id": "cinderport_tavern",
+  "name": "Scarlet Juno",
+  "title": "The Smoking Kettle, Cinderport",
+  "character": "The character is a gorgeous, fierce tavern keeper in her thirties with flame-red hair in a high ponytail, smoky eye makeup, red lips and an old burn scar curling down one side of her neck. She wears a brass-buckled black leather corset over a soot-smudged off-the-shoulder shirt and brass goggles pushed up on her forehead, and holds a smoking clay mug. She grins dangerously."
+ },
+ {
+  "id": "cinderport_wright",
+  "name": "Forgemaster Dace",
+  "title": "Shipwright and Smith of Cinderport",
+  "character": "The character is a massive, soot-blackened smith and shipwright in his forties with a shaved head, a thick black beard and a riveted iron prosthetic forearm with brass joints in place of his right arm. He wears dark smoked goggles on his forehead and a heavy leather apron over bare scarred shoulders, and holds a forge hammer at his chest. He looks stern."
+ },
+ {
+  "id": "ashfall_harbour",
+  "name": "Ma Grubb",
+  "title": "Harbourmistress of Ashfall",
+  "character": "The character is a squat, grimy old harbourmistress in her sixties with frizzy grey hair under a battered tricorn decorated with a singed feather, a pipe in her teeth and a gold tooth. She wears a patched brown greatcoat dusted with grey ash and a huge ring of iron keys on her belt, and holds a tin cup. She squints suspiciously.",
+  "character_v2": "The character is a squat old harbourmistress in her sixties with frizzy grey hair, a gold tooth and a smouldering pipe, flintlock era. She wears a battered tricorn with a singed scarlet feather and a long ash-grey greatcoat with brass buttons over a red flannel shirt, a brass harbour bell in one hand and a ledger under her arm. A shrewd crooked grin, one eye narrowed."
+ },
+ {
+  "id": "ashfall_tavern",
+  "name": "Ignatius Pell",
+  "title": "The Last Ember, Ashfall",
+  "character": "The character is a tall, gaunt tavern keeper in his forties with long ash-white hair, pale grey eyes, sharp cheekbones and a long pale face smudged with soot. He wears a threadbare charcoal waistcoat, a rust-red silk cravat and fingerless gloves, and polishes a glass with a rag. He gives a thin, unsettling smile."
+ },
+ {
+  "id": "ashfall_wright",
+  "name": "Sparks",
+  "title": "Shipwright of Ashfall",
+  "character": "The character is an energetic young shipwright woman in her twenties with short messy black hair, soot smudged on her cheeks and a bright orange scarf tied in her hair, flintlock era. She wears a scorched leather apron over a rust-red shirt with rolled sleeves and heavy leather gloves, a glowing slow-match in one hand and a caulking iron in the other, sparks drifting round her. A bright eager grin, fearless.",
+  "character_v1": "The character is a cute, energetic young engineer woman in her twenties with short messy dark hair with a streak of bright blue, soot smudged on her cheeks and nose, and big brass goggles over her eyes. She wears a rolled-sleeve work shirt tied at the waist, oil-stained suspenders and a tool belt, and holds a large wrench over her shoulder. She grins eagerly."
+ },
+ {
+  "id": "mournwick_harbour",
+  "name": "Absalom Gray",
+  "title": "Harbourmaster of Mournwick",
+  "character": "The character is a pale, cadaverous harbourmaster in his fifties with slicked-back black hair, dark circles under his eyes, long thin fingers and a silver pince-nez. He wears a black undertaker's coat, a grey waistcoat with a silver watch chain and a tall black hat with a mourning band, and holds a black-bound register. He looks gravely polite."
+ },
+ {
+  "id": "mournwick_tavern",
+  "name": "Mother Whisper",
+  "title": "The Hanged Lantern, Mournwick",
+  "character": "The character is an ancient, hunched tavern keeper woman with wispy white hair, one cloudy pale eye, a crooked knowing smile and a black raven perched on her shoulder. She wears layered grey shawls, a dark patched dress and many charms and bone trinkets on strings around her neck, and holds a small glowing lantern close to her chest. She looks eerie."
+ },
+ {
+  "id": "mournwick_wright",
+  "name": "Ned Coffin",
+  "title": "Shipwright and Coffin-Maker of Mournwick",
+  "character": "The character is a lanky, hollow-cheeked shipwright in his forties with lank grey hair, a long face, a sorrowful expression and a black ribbon tied round his upper arm. He wears a dusty black waistcoat over a collarless shirt, a carpenter's apron and a pencil behind his ear, and holds a measuring rule at his chest. He looks gloomy.",
+  "character_v2": "The character is a lanky, hollow-cheeked shipwright and coffin-maker in his forties with lank grey hair and a long sorrowful face, flintlock era. He wears a long black frock coat with a high collar, a black silk waistcoat and a tall battered black hat with a mourning ribbon, a small candle lantern at his belt, and a folding brass measuring rule in his long fingers. Measuring you with sad, polite eyes."
+ },
+ {
+  "id": "lantern_harbour",
+  "name": "The Lamplighter",
+  "title": "Keeper of Lantern Rock",
+  "character": "The character is a mysterious lighthouse keeper with a weathered face half-hidden under a deep grey oilskin hood, a short grey beard and eyes that catch the light with an odd pale glow. He wears a heavy grey oilskin coat with brass buttons and a coil of rope at his waist, and holds a glowing brass lamp close to his chest. He looks watchful and secretive."
+ },
+ {
+  "id": "lantern_tavern",
+  "name": "Evangeline Marsh",
+  "title": "The Pale Lady, Lantern Rock",
+  "character": "The character is a beautiful, pale tavern owner in her thirties with dark hair pinned up in loose curls, dark red lips and a black lace mourning veil falling over one eye. She wears an elegant off-the-shoulder black velvet gown with jet beads at the neckline and a silver locket, and holds a glass of dark red wine. She looks melancholy and alluring."
+ },
+ {
+  "id": "lantern_wright",
+  "name": "Brother Caspar",
+  "title": "Shipwright of Lantern Rock",
+  "character": "The character is a heavyset monk-like shipwright in his fifties with a tonsured head, a round face, kind tired eyes and a wooden rosary wound round one wrist. He wears a coarse brown wool habit with the sleeves tied back, a rope belt hung with tools, and holds a wooden mallet and chisel at his chest. He smiles gently.",
+  "character_v2": "The character is a heavyset monk shipwright in his fifties with a tonsured head, a round kind face and little round spectacles, flintlock era. He wears a deep wine-red wool habit with the hood down and the sleeves tied back, a heavy brass lantern hanging from his rope belt, a wooden rosary round one wrist and a hand drill in his hand. A gentle, patient smile."
+ },
+ {
+  "id": "sea_merchant",
+  "name": "Captain Hollis Grant",
+  "title": "Master of a Merchantman",
+  "character": "The character is a portly merchant captain in his fifties with ruddy cheeks, grey side whiskers, a gold monocle and a gold watch chain. He wears a fine brown frock coat, an embroidered gold waistcoat stretched over his belly and a black tricorn, and holds a rolled bill of lading. He looks worried but polite."
+ },
+ {
+  "id": "sea_navy",
+  "name": "Commodore Ada Sterling",
+  "title": "Commodore of the Navy Patrol",
+  "character": "The character is a striking, handsome navy commodore woman in her late thirties with dark hair tied in a neat queue, high cheekbones and a stern, intelligent gaze. She wears a tailored navy-blue officer's coat with gold lace and epaulettes over a white waistcoat and a black bicorne hat, and rests a hand on her sword hilt at her hip. She looks crisp and commanding."
+ },
+ {
+  "id": "sea_castaway",
+  "name": "A Castaway",
+  "title": "Marooned",
+  "character": "The character is a ragged, sunburnt castaway sailor with a matted long beard, wild hair and gaunt cheeks. He wears the torn remains of a striped shirt and a frayed sash, with a bead necklace of shells, and clutches a cracked coconut at his chest. He looks desperate and hopeful."
+ },
+ {
+  "id": "sea_captive",
+  "name": "Lady Arabella Wren",
+  "title": "Rescued from the Pirates",
+  "character": "The character is a beautiful, defiant young noblewoman in her twenties with tousled chestnut hair coming loose from its pins, a smudge on her cheek and bright hazel eyes. She wears a torn pale blue silk gown with a lace bodice and a man's oversized officer's coat over her bare shoulders, and holds a small pistol close to her chest. She looks proud and unbroken."
+ },
+ {
+  "id": "sea_pirate",
+  "name": "A Pirate Captain",
+  "title": "Struck Her Colours",
+  "character": "The character is a weathered pirate captain with a braided red beard and a scar across his cheek, wearing a navy blue long coat with tarnished gold buttons over a white linen shirt, and a black tricorn hat. He rests one hand on the hilt of a cutlass at his hip and smirks."
+ },
+ {
+  "id": "dread_corwin",
+  "name": "Gentleman Corwin",
+  "title": "Dread Pirate of the Temperate Isles",
+  "character": "The character is a strikingly handsome, cruel pirate captain in his forties with a powdered white wig tied with a black ribbon, a beauty mark, icy grey eyes and a thin scar across his lips. He wears a pale lavender silk coat with silver embroidery, a lace cravat and a jewelled rapier at his hip, and holds a silver snuff box delicately. He smiles with cold courtesy."
+ },
+ {
+  "id": "dread_calypso",
+  "name": "Calypso Vane",
+  "title": "Dread Pirate of the Tropics",
+  "character": "The character is a beautiful, fearsome pirate queen in her thirties with long dark dreadlocks threaded with gold coins and shells, kohl-rimmed amber eyes, full lips and gold rings in her ears. She wears a deep red captain's coat open over a laced leather bodice, many gold necklaces and a cutlass at her hip, and holds a flintlock pistol at her chest. She grins wickedly."
+ },
+ {
+  "id": "dread_rime",
+  "name": "Old Rime",
+  "title": "Dread Pirate of the Frozen North",
+  "character": "The character is a grim, ancient pirate captain with a long white beard hung with icicles, pale blue frost creeping across his cheeks, one eye clouded white and frostbitten blackened fingertips. He wears a heavy white bear-fur cloak over a battered iron breastplate and a fur hat, and holds a barbed whaling harpoon upright against his shoulder. He stares coldly."
+ },
+ {
+  "id": "dread_kate",
+  "name": "Cinder Kate",
+  "title": "Dread Pirate of the Ember Reach",
+  "character": "The character is a wildly beautiful pirate captain woman in her thirties with a mane of singed black hair with ember-orange tips, burn scars across one cheek, fiery amber eyes and soot-smudged skin. She wears a scorched black leather coat open over a red corset, a bandolier of round iron grenades across her chest, and holds a lit torch close to her. She laughs madly."
+ },
+ {
+  "id": "dread_widow",
+  "name": "The Grey Widow",
+  "title": "Dread Pirate of the Fog Banks",
+  "character": "The character is an eerily beautiful pale pirate captain woman with long silver-grey hair, colourless pale eyes, ashen lips and a black lace veil over the lower half of her face. She wears a tattered grey captain's coat over a faded mourning gown, a tarnished silver locket, and holds a thin rapier upright before her. She looks silent and menacing."
+ },
+ {
+  "id": "sea_captive_m",
+  "name": "The Prisoner",
+  "title": "Freed from the pirates",
+  "character": "The character is a handsome young ship's officer in his twenties with tousled dark hair, a bruised cheek and a split lip, and a few days of stubble. He wears a torn white shirt open at the neck, a ripped blue midshipman's coat with brass buttons and frayed rope still knotted round one wrist, and rubs his wrist. He looks shaken but grateful."
+ },
+ {
+  "id": "fleet_1",
+  "name": "fleet_1",
+  "title": "",
+  "character": "The character is an eager, pretty young naval lieutenant woman in her twenties with auburn hair tied back, a dusting of freckles and bright grey eyes. She wears a fitted navy-blue lieutenant's coat with white facings and brass buttons over a white shirt, and holds a brass spyglass at her chest. She grins, keen and confident."
+ },
+ {
+  "id": "fleet_2",
+  "name": "fleet_2",
+  "title": "",
+  "character": "The character is a grizzled old sea dog captain in his sixties with a grey stubbled jaw, a clay pipe in his teeth and his left coat sleeve empty and pinned up at the shoulder. He wears a weathered dark green captain's coat and a battered tricorn, and rests his one hand on a cutlass at his hip. He squints, wry and unbothered."
+ },
+ {
+  "id": "fleet_3",
+  "name": "fleet_3",
+  "title": "",
+  "character": "The character is a handsome Black ship's captain in his thirties with a neatly trimmed beard, a gold earring and a confident gaze. He wears an open maroon captain's coat with gold trim over a white linen shirt and a leather baldric, and holds a cutlass resting against his shoulder. He smiles, easy and assured."
+ },
+ {
+  "id": "fleet_4",
+  "name": "fleet_4",
+  "title": "",
+  "character": "The character is a sharp-eyed navigator woman in her thirties with a long black braid, high cheekbones and a thin scar on her chin. She wears a practical brown leather sea coat over a dark blue tunic, a brass compass on a chain and fingerless gloves, and holds a rolled chart at her chest. She looks calm and focused."
+ },
+ {
+  "id": "fleet_5",
+  "name": "fleet_5",
+  "title": "",
+  "character": "The character is a tough former pirate turned privateer in his forties with a shaved head covered in sea-serpent tattoos, a gold nose ring and a heavy jaw. He wears a sleeveless black leather coat over bare muscular arms and a wide sash, and holds a boarding axe across his chest. He grins fiercely.",
+  "character_v2": "The character is a tough former pirate turned privateer in his forties with sea-serpent tattoos on his shaved head and a gold nose ring, flintlock era. He wears a long black leather coat with silver studs over a dark red shirt buttoned to the throat, a wide belt with a cutlass and two flintlock pistols, and a gold chain with a shark-tooth pendant. A sly, menacing grin, arms folded."
+ },
+ {
+  "id": "fleet_6",
+  "name": "fleet_6",
+  "title": "",
+  "character": "The character is a dignified elderly gentleman captain in his seventies with a neat white beard, round spectacles and kind eyes, flintlock era. He wears an immaculate royal-blue captain's coat with silver buttons and lace cuffs, a cravat and a black tricorn with silver trim, an open pocket watch in one hand and a polished brass telescope under his arm. A wise, amused smile.",
+  "character_v1": "The character is a dignified elderly gentleman captain in his seventies with a neat white beard, round spectacles and kind wrinkled eyes. He wears an immaculate dark blue captain's coat with silver buttons, a cravat and a black tricorn, and holds a pocket watch in one hand. He looks wise and gently amused."
+ },
+ {
+  "id": "pirate_1",
+  "name": "pirate_1",
+  "title": "",
+  "character": "The character is a snarling pirate captain with gold teeth, a red bandana and a braided black beard tied with red ribbons and little bones, flintlock era. He wears a filthy crimson frock coat over a stained white shirt and a black leather waistcoat, a bandolier of flintlock pistols across his chest, a cutlass in his fist. Wild furious eyes, mid-roar.",
+  "character_v1": "The character is a snarling pirate captain with gold teeth, a red bandana and a braided black beard tied with red ribbons and little bones. He wears a filthy open crimson coat over a bare hairy chest crossed by a bandolier of pistols, and grips a cutlass at his chest. He snarls, menacing."
+ },
+ {
+  "id": "pirate_2",
+  "name": "pirate_2",
+  "title": "",
+  "character": "The character is a beautiful, sneering pirate captain woman in her twenties with wild windswept blonde hair under a tricorn heaped with ostrich feathers, smoky eyes and a beauty mark. She wears a low-cut black corset under a long red coat, with three pistols tucked in a leather bandolier, and holds one pistol up beside her face. She smirks cruelly."
+ },
+ {
+  "id": "pirate_3",
+  "name": "pirate_3",
+  "title": "",
+  "character": "The character is a hulking bald pirate brute with a riveted iron plate covering one side of his jaw, small mean eyes and thick chains wrapped round his forearms. He wears a torn sleeveless leather jerkin over a scarred barrel chest, and holds a heavy boarding axe at his chest. He glares, brutal.",
+  "character_v2": "The character is a hulking bald pirate brute with a riveted iron plate covering one side of his jaw and small mean eyes, flintlock era. He wears a heavy rust-orange leather longcoat with iron studs over a chain-mail shirt, thick chains wrapped round his forearms, a huge boarding axe in his fist. Menacing, silent, looming."
+ },
+ {
+  "id": "pirate_4",
+  "name": "pirate_4",
+  "title": "",
+  "character": "The character is a gaunt, sinister pirate captain with his face painted white like a skull, black-ringed eyes and a thin black goatee. He wears a tall battered top hat with a raven feather, a black frock coat and a necklace of teeth, and holds a long slim dagger at his chest. He smiles, unsettling."
+ },
+ {
+  "id": "pirate_5",
+  "name": "pirate_5",
+  "title": "",
+  "character": "The character is a flamboyant, handsome young pirate captain in his twenties with tousled dark hair, a thin moustache, gold earrings and kohl-lined eyes. He wears a feathered tricorn, a silk shirt open to the chest under a teal coat, and rests a cutlass on his shoulder. He winks, cocky and charming."
+ },
+ {
+  "id": "pirate_6",
+  "name": "pirate_6",
+  "title": "",
+  "character": "The character is a scarred pirate captain with the left half of his face hidden behind a cracked black leather mask, one fierce blue eye showing and long greasy grey hair. He wears a heavy black greatcoat with tarnished silver buttons and a red sash, and holds a flintlock pistol at his chest. He stares, cold and silent.",
+  "character_v2": "The character is a scarred pirate captain with half his face hidden behind a cracked white porcelain mask, one fierce blue eye showing and long grey hair, flintlock era. He wears a heavy black greatcoat with tarnished silver buttons, a dark purple sash and black gloves, and holds a flintlock pistol. Cold, theatrical, unreadable."
+ },
+ {
+  "id": "merchant_1",
+  "name": "Captain Ambrose Tull",
+  "title": "Master of a merchantman",
+  "character": "The character is a stout, cheerful merchant captain in his fifties with ruddy cheeks, grey mutton-chop whiskers and a battered tricorn hat, flintlock era. He wears a bottle-green wool coat with brass buttons over a mustard waistcoat, and holds a rolled bill of lading and a heavy purse of coins. A broad merchant's smile, sure he can talk his way out of anything.",
+  "character_v1": "The character is a stout, cheerful merchant captain in his fifties with ruddy cheeks, grey mutton-chop whiskers and a battered tricorn hat. He wears a brown wool coat over a mustard waistcoat with brass buttons and holds a rolled bill of lading. He smiles like a man who has talked his way out of trouble."
+ },
+ {
+  "id": "merchant_2",
+  "name": "Captain Maud Fairley",
+  "title": "Master of a merchantman",
+  "character": "The character is a capable merchant captain in her forties with sun-weathered skin, auburn hair in a thick braid and a few freckles. She wears a navy blue double-breasted coat, a loose white shirt and a leather belt with a brass spyglass, one hand on her hip. Sharp grey eyes, a wry half smile."
+ },
+ {
+  "id": "merchant_3",
+  "name": "Captain Joaquim Sousa",
+  "title": "Master of a merchantman",
+  "character": "The character is a lean Portuguese merchant captain in his thirties with dark curly hair, a neat moustache and gold hoop earrings. He wears a burgundy coat with frayed gold trim over an open-necked shirt and holds a small brass sextant. He looks cautious and clever."
+ },
+ {
+  "id": "merchant_4",
+  "name": "Captain Adaeze Okafor",
+  "title": "Master of a merchantman",
+  "character": "The character is a striking West African merchant captain in her thirties with high cheekbones, short cropped hair and gold stud earrings. She wears a long teal coat over a cream blouse and a patterned silk sash, with a ledger tucked under one arm. Confident, appraising gaze."
+ },
+ {
+  "id": "navy_1",
+  "name": "Captain Edmund Hale",
+  "title": "Captain of a navy frigate",
+  "character": "The character is a tall, stiff naval captain in his forties with a long jaw, powdered grey wig tied with a black ribbon and a hooked nose. He wears a dark blue naval coat with white lapels, gold epaulettes and buttons, and a sword at his hip. Cold, disciplined expression."
+ },
+ {
+  "id": "navy_2",
+  "name": "Lieutenant Clara Vance",
+  "title": "A navy lieutenant",
+  "character": "The character is a young naval lieutenant woman in her twenties with fair hair pinned back under a bicorne hat, blue eyes and a determined jaw. She wears a fitted dark blue naval coat with white facings and a single gold epaulette, a pistol in her belt. Eager, earnest, a little proud."
+ },
+ {
+  "id": "navy_3",
+  "name": "Admiral Sir Rufus Blackwood",
+  "title": "Admiral of the patrol",
+  "character": "The character is an old admiral in his sixties with a bushy white beard, a scar across one cheek and a heavy gold-laced bicorne hat. He wears a heavily decorated dark blue coat with medals and gold braid and leans on a cane. Gruff, battle-hardened, a twinkle in his eye."
+ },
+ {
+  "id": "castaway_1",
+  "name": "A Castaway",
+  "title": "Taken off the beach",
+  "character": "The character is a gaunt castaway woman in her thirties with sun-bleached tangled hair, deeply tanned freckled skin and bright desperate eyes. She wears a ragged sleeveless shirt and torn sailcloth trousers tied with rope, a shell necklace, and holds a sharpened stick. Wild, relieved, half laughing.",
+  "character_v2": "The character is a gaunt castaway woman in her thirties with sun-bleached tangled hair, freckled tanned skin and bright eyes, flintlock era. She wears a ragged faded sky-blue naval coat several sizes too big over a torn linen shirt and sailcloth trousers tied with rope, a shell necklace, and clutches a hand-made spear and a corked message bottle. Laughing and crying with relief."
+ },
+ {
+  "id": "castaway_2",
+  "name": "A Castaway",
+  "title": "Taken off the beach",
+  "character": "The character is an elderly castaway man in his seventies with a very long white beard, a bald sunburnt head and a gentle face. He wears the faded remains of a naval coat with no sleeves over bare skin, and clutches a battered leather journal. Kindly, dazed, grateful.",
+  "character_v2": "The character is an elderly castaway man in his seventies with a very long white beard, a sunburnt bald head and a gentle face, flintlock era. He wears a patched, faded scarlet naval officer's coat buttoned over a ragged shirt and a hat woven from palm leaves, and clutches a battered leather journal and a tiny carved wooden ship. Dazed, kindly, grateful."
+ },
+ {
+  "id": "castaway_3",
+  "name": "A Castaway",
+  "title": "Taken off the beach",
+  "character": "The character is a young castaway man in his twenties, lean and wiry, with a shaggy black beard, a red bandana and a parrot feather tucked behind one ear. He wears a torn striped shirt and ragged trousers, a coconut shell cup in hand. Grinning wildly."
+ },
+ {
+  "id": "captive_f_1",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a beautiful young noblewoman in her twenties with dark ringlets coming loose, flushed cheeks and defiant green eyes. She wears a torn pale blue silk gown with lace at the sleeves and a pirate's coat thrown over her shoulders, a broken rope around one wrist. Proud and furious."
+ },
+ {
+  "id": "captive_f_2",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a scholarly woman in her forties with grey-streaked hair in a loose bun, round spectacles and ink-stained fingers. She wears a dusty dark green travelling dress and clutches a rolled chart to her chest. Shaken but sharp-eyed and curious."
+ },
+ {
+  "id": "captive_f_3",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a tough-looking woman in her thirties with short copper hair, a bruise on one cheek and a split lip, smiling anyway. She wears a ripped white shirt, a leather corset vest and a sailor's trousers, rubbing her freed wrists. Fierce, amused, unbroken."
+ },
+ {
+  "id": "captive_m_1",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a young nobleman in his twenties with pale skin, fair hair tied back and a thin moustache, looking hungry and indignant. He wears a stained embroidered silk coat, a torn cravat and one shoe. Pompous but grateful."
+ },
+ {
+  "id": "captive_m_2",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a broad-shouldered ship's gunner in his forties with a shaved head, a thick black beard and tattooed forearms. He wears a torn grey shirt and canvas trousers, iron shackles hanging open from his wrists. Grim, strong, ready for revenge."
+ },
+ {
+  "id": "rival_1",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is a dashing rival captain in her thirties with long wavy black hair, a beauty mark and a confident smirk. She wears a fitted crimson frock coat with gold embroidery, a black tricorn with a white plume and a rapier at her hip. Glamorous, dangerous, enjoying herself."
+ },
+ {
+  "id": "rival_2",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is a handsome rival privateer in his thirties with sandy hair, a strong jaw, stubble and a scar through one eyebrow. He wears a dark green long coat over an open white shirt, a baldric with two pistols, and a cocky grin."
+ },
+ {
+  "id": "rival_3",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is an elegant older rival captain in her fifties with silver hair in a severe bun, a monocle and a thin cigarillo. She wears an immaculate black coat with silver buttons and a high collar, black leather gloves. Cool, calculating, faintly amused."
+ },
+ {
+  "id": "rival_4",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is a huge, jovial rival captain in his forties with a braided red beard decorated with beads, a fur-trimmed coat and a big brass-handled axe on his shoulder. He laughs with his head thrown back. Boisterous and friendly in a threatening way."
+ },
+ {
+  "id": "rival_5",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is a lithe young rival captain in her twenties with a shaved undercut, a long black braid, kohl-rimmed eyes and gold rings in her ears. She wears a sleeveless leather jerkin over a loose shirt, cutlass in hand. Fearless, cheeky, glamorous."
+ },
+ {
+  "id": "rival_6",
+  "name": "A Rival Captain",
+  "title": "A rival captain",
+  "character": "The character is a cold, handsome rival captain in his forties with a sharp grey goatee, slicked-back dark hair and pale eyes. He wears a midnight blue coat with a high collar, a silver skull brooch, and holds a cocked pistol casually. Menacing calm."
+ },
+ {
+  "id": "smuggler_1",
+  "name": "A Smuggler",
+  "title": "Running contraband",
+  "character": "The character is a shifty smuggler in his thirties with a hooded grey cloak, a long nose, quick dark eyes and a gap-toothed grin. Under the cloak a patched waistcoat with too many pockets and a cask of brandy under one arm. Sly, nervous, charming."
+ },
+ {
+  "id": "smuggler_2",
+  "name": "A Smuggler",
+  "title": "Running contraband",
+  "character": "The character is an attractive smuggler woman in her twenties with honey-brown hair under a dark knit cap, freckles and a mischievous smile. She wears a short dark coat, rolled sleeves and a leather satchel stuffed with letters, a knife in her boot. Playful and quick."
+ },
+ {
+  "id": "smuggler_3",
+  "name": "A Smuggler",
+  "title": "Running contraband",
+  "character": "The character is a weathered old smuggler woman in her sixties with a pipe, a black eyepatch and long grey hair in two braids. She wears an oilskin coat over many layers, a lantern hanging from her belt. Knowing, unafraid, amused by everything."
+ },
+ {
+  "id": "smuggler_4",
+  "name": "A Smuggler",
+  "title": "Running contraband",
+  "character": "The character is a sharp-featured smuggler woman in her forties with black hair cut to the jaw, a thin white scar on her chin and dark watchful eyes. She wears a long weathered brown greatcoat with deep pockets over a grey waistcoat, fingerless gloves, and has a coil of rope over one shoulder and a small keg under her arm. Calm, unreadable, quietly dangerous."
+ },
+ {
+  "id": "smuggler_5",
+  "name": "A Smuggler",
+  "title": "Running contraband",
+  "character": "The character is a cheerful plump smuggler woman in her fifties with rosy cheeks, curly grey-blonde hair under a red headscarf and a gold tooth in her grin. She wears a patched blue apron over a striped skirt and a heavy shawl, a basket of 'fish' on her hip with bottles poking out. Innocent face, wicked eyes."
+ },
+ {
+  "id": "castaway_4",
+  "name": "A Castaway",
+  "title": "Taken off the beach",
+  "character": "The character is a sturdy castaway woman in her forties with greying brown hair hacked short, a sunburnt weathered face and strong arms. She wears a torn and faded red naval jacket with no shirt beneath, wrapped with a sailcloth belt, a long knife made from a barrel hoop and a spyglass with a cracked lens. Grim, capable, hugely relieved."
+ },
+ {
+  "id": "castaway_5",
+  "name": "A Castaway",
+  "title": "Taken off the beach",
+  "character": "The character is a young castaway girl in her late teens with long wild dark curly hair full of salt, freckled brown skin and wide amazed eyes. She wears a ragged yellowed linen dress cut short at the knee, a necklace of shells and shark teeth, and holds a woven palm-leaf hat. Shy, grateful, curious."
+ },
+ {
+  "id": "captive_f_4",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is an elegant older lady in her sixties with silver hair pinned up, a long dignified face and sharp blue eyes behind a lorgnette. She wears a rich plum-coloured travelling gown, slightly torn at the hem, a cameo brooch and a lace shawl, holding a closed parasol like a weapon. Haughty, unshaken, very unimpressed with pirates."
+ },
+ {
+  "id": "captive_f_5",
+  "name": "Freed Captive",
+  "title": "Freed from the pirates",
+  "character": "The character is a young East Asian woman in her twenties, a ship's surgeon, with straight black hair tied back, a calm intelligent face and a smudge of soot on her cheek. She wears a practical dark grey dress with rolled sleeves and a leather apron, a satchel of medical instruments over her shoulder. Composed, kind, resolute."
+ },
+ {
+  "id": "navy_4",
+  "name": "Commander Isobel Thorne",
+  "title": "Commander of a navy brig",
+  "character": "The character is a tall naval commander woman in her forties with dark auburn hair in a tight queue under a black bicorne hat, a strong nose and grey eyes. She wears a dark blue naval coat with white lapels and gold buttons, a gold epaulette on one shoulder, a sword belt and a brass telescope tucked under one arm. Stern, fair, utterly in command."
+ },
+ {
+  "id": "merchant_5",
+  "name": "Captain Hester Lowe",
+  "title": "Master of a merchantman",
+  "character": "The character is a wiry elderly merchant captain woman in her sixties with white hair in a long plait, a deeply lined tanned face and a clay pipe. She wears a faded green coat with brass buttons over a knitted jumper, canvas trousers and sea boots, a battered leather ledger under her arm. Shrewd, salty, kind."
+ }
+]
