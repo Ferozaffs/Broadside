@@ -1,7 +1,7 @@
 # How Broadside's content was made (and how to make more)
 
 The story, the people, their faces, idles and voices, the music and the generated 3D were all made by an agent working
-with the user, on the user's own PC ("ZWUUUP", a Windows box on the LAN with an RTX 4070 12 GB running ComfyUI). This
+with the user, on the user's own PC ("ZWUUUP", a Windows box with a 12 GB GPU running ComfyUI). This
 is the method, the models, the prompts and the rules learned on the way, so the next agent can carry on in the same
 voice and style. The scripts themselves are archived in `pipeline/` (see the end); the live copies are on ZWUUUP.
 
@@ -13,11 +13,11 @@ voice and style. The scripts themselves are archived in `pipeline/` (see the end
 - **ZWUUUP's ComfyUI is the user's** (port 8188, they use it for their own music and video): never start a second
   ComfyUI, queue only when its queue is empty, never cancel their jobs. Every job goes through `comfy_guard.py`
   (waits for the server and an empty queue, re-runs a job that died with the server, interrupts a hung one).
-- C: is nearly full there: models and big outputs on K:. Clear the raw ComfyUI outputs of rejected runs.
+- Models and big outputs on the models drive, not the system drive. Clear the raw ComfyUI outputs of rejected runs.
 - Two GPU jobs at once (Wan + TRELLIS, TTS + anything) run out of 12 GB: sequence them.
 - Launch long jobs detached (`Invoke-CimMethod Win32_Process Create` from a .ps1 run over ssh), log to a file.
 - Licences decide the models: the Amadmir LoRA needs credit and its images can't be sold (fine for the free game,
-  THIRD_PARTY_NOTICES.md); the Hades LoRA is not for the game (trained on Supergiant's art); the bought ship models only
+  THIRD_PARTY_NOTICES.md); only style models whose licence allows a game; the bought ship models only
   ship encrypted (`tools/pack_ship.py`).
 
 ## 1. The story
@@ -62,7 +62,7 @@ rumour, a complaint about money); the player is always "she" / "Captain".
   `The character is <who, age, build, face, hair>, flintlock era. <He/She> wears <layered clothes, colours>, and holds
   <signature prop> raised in <his/her> right fist by <his/her> shoulder. <Two or three words of attitude>.`
   Every character's text: `pipeline/zwuuup/cast.json` and the later lists (`cast_more2.py`, `sea2.py`, `story_cast.py`,
-  `wrights*.py`, `cast_redo.py`, `recast.py`).
+  `wrights*.py`, `cast_redo.py`, `cast_keep.py`).
 - **Framing:** the game cuts the body at mid-thigh. Props held up by the shoulder in a fist (tools lying across the
   shoulders with no hand warp in the idle). A full-length render is cut at a fraction of its height
   (`[seed, cut]` in `tools/portrait_picks.json`).
@@ -87,7 +87,7 @@ rumour, a complaint about money); the player is always "she" / "Captain".
 
 ## 5. Voices (Qwen3-TTS)
 
-- Qwen3-TTS 1.7B (Apache 2.0) on ZWUUUP in `K:\BroadsideTTS` (`pipeline/voice/tts_setup.ps1`; torch from the cu130
+- Qwen3-TTS 1.7B (Apache 2.0) on ZWUUUP in its own venv (`pipeline/voice/tts_setup.ps1`; torch from the cu130
   index). It can't share the GPU with ComfyUI: render when the queue is empty, free ComfyUI's models first.
 - **Every line acted**: `broadside --lines-export` writes every line with where it's said; `make_jobs.py` gives each a
   direction = the scene (`SCENE`, from where it's said) + the feeling of that line (`feel.tsv`, written per unique
@@ -137,8 +137,9 @@ faces, new voices in English and Japanese. The pack's text, tools and prompts ar
 Copies of the scripts and the prompt/pick files, as they stood at v0.24.0 (paths have the user name replaced by
 `USER`; set them for the machine). The live pipeline is on ZWUUUP:
 - `pipeline/zwuuup/` - `Documents/PirateGame-ArtPipeline` (portraits, idles, voices, 3D, anime renders; its own
-  `CLAUDE.md` and `docs/`). One-off batch scripts (`crew*.py`, `hulls*.py`, `sea2*.py`...) are kept for their prompts.
+  `CLAUDE.md` and `docs/`). The batch scripts (`crew*.py`, `hulls*.py`, `parts*.py`, `houses*.py`, `sea2*.py`...) are kept for their prompts;
+  one-off fixes and diagnostics were left out.
 - `pipeline/music/` - `Documents/PirateGame-Music`.
-- `pipeline/voice/` - the voice jobs (`make_jobs.py`, `feel.tsv`) and the TTS setup (`K:\BroadsideTTS`).
+- `pipeline/voice/` - the voice jobs (`make_jobs.py`, `feel.tsv`) and the TTS setup.
 
 Not archived: the user's own captain (fleet_7) is drawn from the user's likeness; its prompt stays off the repo.

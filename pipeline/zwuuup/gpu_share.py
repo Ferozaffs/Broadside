@@ -1,4 +1,4 @@
-"""The GPU, shared with ComfyUI (the RTX 4070 can't hold both): wait for ComfyUI's queue to empty, pause this
+"""The GPU, shared with ComfyUI (one 12 GB card can't hold both): wait for ComfyUI's queue to empty, pause this
 pipeline's own scripts (never the user's jobs), make sure it's still empty, unload ComfyUI's models; pause(pids, False)
 resumes the scripts."""
 import ctypes, os, subprocess, sys, time

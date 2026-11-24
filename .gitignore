@@ -17,3 +17,4 @@ data/idles/
 
 # the agent's working notes (kept locally, not published)
 TODO.md
+__pycache__/

@@ -59,9 +59,6 @@ FRAMING_STYLIZED = ("stylized hand-painted 3D game asset of {ship}, in the style
                     "slightly from above, centered with margin around it. Plain light grey seamless background."
                     " The ship is coherent: bowsprit, figurehead and forecastle are all at the bow nearest the camera, the sterncastle and rudder at the far end, and every sail and flag is filled by the same wind blowing from behind the ship.")
 FRAMING_AMADMIR = "amadmir style, stylized illustration of " + FRAMING_FLUX.split("render of ", 1)[1]
-FRAMING_PONY = ("score_9, score_8_up, score_7_up, no humans, (sailing ship:1.2), {ship}, full ship, entire hull visible, "
-                "out of water, three-quarter view, (simple background, grey background:1.2), game asset, detailed")
-PONY_NEG = "score_4, score_5, water, ocean, waves, sea, people, text, watermark, cropped, blurry"
 FRAMING_WAN = ("studio product photo of a detailed model of {ship}. The complete ship is shown out of the water with the whole "
                "hull and keel visible, three-quarter view from slightly above, centered, plain light grey seamless "
                "background, soft even lighting, sharp focus, realistic materials.")
@@ -78,22 +75,6 @@ def flux(prompt, lora):
     return p
 
 
-def pony(prompt):
-    p = json.load(open(os.path.join(ROOT, "tools", "api", "Hades-Pony-Game-Assets.api.json"), encoding="utf-8"))["prompt"]
-    for node in p.values():
-        if node["class_type"] in ("LoraLoader", "LoraLoaderModelOnly"):
-            node["inputs"]["strength_model"] = 0.0
-            node["inputs"]["strength_clip"] = 0.0
-    texts = [k for k, v in p.items() if v["class_type"] == "CLIPTextEncode"]
-    neg_ids = {v["inputs"]["negative"][0] for v in p.values() if "negative" in v["inputs"]}
-    for k in texts:
-        p[k]["inputs"]["text"] = PONY_NEG if k in neg_ids else prompt
-    for v in p.values():
-        if v["class_type"] == "SaveImage":
-            v["inputs"]["filename_prefix"] = "Ships/pony"
-    return p
-
-
 def wan(prompt, object_info):
     ui = json.load(open(os.path.join(COMFY, "user", "default", "workflows", "Wan2.2-Text-to-Image.json"), encoding="utf-8"))
     p = ui_to_api(ui, object_info)
@@ -105,7 +86,7 @@ def wan(prompt, object_info):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--models", nargs="+", default=["flux"], choices=["flux", "semi", "stylized", "amadmir", "pony", "wan"])
+    ap.add_argument("--models", nargs="+", default=["flux"], choices=["flux", "semi", "stylized", "amadmir", "wan"])
     ap.add_argument("--ships", nargs="+", default=["all"])
     ap.add_argument("--seeds", type=int, nargs="*")
     ap.add_argument("--count", type=int, default=1)
@@ -128,7 +109,6 @@ def main():
                       "amadmir": lambda: flux(FRAMING_AMADMIR.format(ship=desc), True),
                       "stylized": lambda: flux(FRAMING_STYLIZED.format(ship=desc), False),
                       "semi": lambda: flux(FRAMING_SEMI.format(ship=desc), False),
-                      "pony": lambda: pony(FRAMING_PONY.format(ship=desc)),
                       "wan": lambda: wan(FRAMING_WAN.format(ship=desc), object_info)}[model]()
                 wait_idle(base)
                 status, secs, images, errors = render(base, wf, seed)

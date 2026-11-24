@@ -1,4 +1,4 @@
-# Qwen3-TTS (Apache 2.0) for Broadside's voices, all of it on K: (C: is nearly full): a Python 3.12 venv made by uv,
+# Qwen3-TTS (Apache 2.0) for Broadside's voices, all of it on the models drive: a Python 3.12 venv made by uv,
 # torch with CUDA, qwen-tts, and the two models (VoiceDesign: a voice from a description; Base: cloning it per line).
 $ErrorActionPreference = "Continue"
 $T = "K:\BroadsideTTS"

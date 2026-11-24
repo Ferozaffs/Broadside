@@ -5,7 +5,6 @@ Examples (run from the PirateGame-ArtPipeline folder):
       --character "The character is a weathered pirate captain with a braided red beard ..."
   python -I tools/generate.py --style amadmir --name captain_redbeard --seeds 424242 77 \
       --character "The character is a weathered pirate captain with a braided red beard ..."
-(--style hades exists for comparison only; the game uses amadmir.)
 
 Each render saves <name>_<style>_s<seed>.png (grey background) and <name>_<style>_s<seed>_alpha.png
 (transparent) into assets/characters/<name>/ and appends one line to generation_log.jsonl.
@@ -14,7 +13,7 @@ import argparse, datetime, json, os, random, shutil, sys, time, urllib.error, ur
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMFY_OUTPUT = r"C:\Users\USER\Documents\ComfyUI_windows_portable_nvidia\ComfyUI_windows_portable\ComfyUI\output"
-WORKFLOWS = {"hades": "Hades-Pony-Character-Portrait", "amadmir": "Amadmir-Flux-Character-Portrait"}
+WORKFLOWS = {"amadmir": "Amadmir-Flux-Character-Portrait"}
 CHARACTER_NODE, STYLE_NODE = "20", "21"
 
 
@@ -62,7 +61,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--style", required=True, choices=WORKFLOWS)
     ap.add_argument("--name", required=True, help="asset id, e.g. captain_redbeard (used for folder + filenames)")
-    ap.add_argument("--character", required=True, help="CHARACTER text (Pony tags for hades, sentences for amadmir)")
+    ap.add_argument("--character", required=True, help="CHARACTER text (sentences)")
     ap.add_argument("--seeds", type=int, nargs="*", help="explicit seeds; default: --count random seeds")
     ap.add_argument("--count", type=int, default=1)
     ap.add_argument("--style-text", help="override the fixed STYLE + FRAMING text (avoid: breaks cast consistency)")

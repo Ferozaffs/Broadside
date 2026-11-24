@@ -1,8 +1,0 @@
-[
- {"name": "test_inst", "seconds": 45,
-  "style": "instrumental, orchestral, cinematic naval battle music, pounding war drums, driving low strings, brass fanfares, 140 BPM, tense, heroic, no vocals",
-  "lyrics": "[intro]\n\n[instrumental]\n\n[instrumental]\n\n[outro]"},
- {"name": "test_shanty", "seconds": 45,
-  "style": "sea shanty, folk, rousing male choir, deep male lead vocal, fiddle, accordion, stomping drum, 100 BPM, tavern singalong",
-  "lyrics": "[verse]\nOh the wind blows cold off the Grey Isle shore\nAnd the powder's dry and the guns are four\nWe'll sail her out where the pirates roam\nAnd we'll bring the gold and the captain home\n\n[chorus]\nHaul away, boys, haul away\nBroadside thunder and the open bay\nHaul away, boys, haul away\nWe'll be rich men on the judgement day"}
-]

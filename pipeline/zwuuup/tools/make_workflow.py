@@ -1,4 +1,4 @@
-"""Builds ComfyUI workflows (UI format + API format) for the Amadmir/Flux and Hades/Pony setups.
+"""Builds ComfyUI workflows (UI format + API format) for the Amadmir/Flux setup.
 usage: make_workflow.py <workflows_dir> <api_out_dir>"""
 import copy, json, os, sys
 
@@ -50,49 +50,6 @@ FLUX = {
  12: ("Note", "How to use", [-420, 300], [460, 380], [FLUX_NOTE], {}, []),
 }
 
-# ---------------------------------------------------------------- Hades / Pony V6 XL
-PONY_NOTE = """HADES STYLE (PONY V6 XL) - GAME ASSET WORKFLOW
-
-Pony needs its quality tags at the very start of the positive prompt:
-  score_9, score_8_up, score_7_up, [subject], game asset, ...
-
-Prompt template - only change the [subject] part between assets:
-  score_9, score_8_up, score_7_up, [subject], game asset, single object,
-  centered, full view, simple background, grey background
-
-Settings (keep identical across an asset set):
-- LoRA strength 1.0 (author's recommendation). Try 0.7-0.9 if too strong.
-- CLIP skip 2 (the 'CLIP Set Last Layer = -2' node) - required for Pony.
-- CFG 6-7, 25 steps, euler_ancestral / normal.
-- Seed is 'fixed'. Change manually to explore, note the good ones.
-- 1024x1024 for props/icons; 832x1216 for full-body characters.
-- Add 'no humans' to the prompt for props/items.
-"""
-PONY_POS = (f"score_9, score_8_up, score_7_up, {SUBJECT}, game asset, single object, no humans, centered, "
-            "full view, simple background, grey background")
-PONY_NEG = "score_4, score_5, score_6, blurry, lowres, jpeg artifacts, text, watermark, signature, frame, border, cropped"
-
-PONY = {
- 1: ("CheckpointLoaderSimple", "Pony Diffusion V6 XL", [-420, 0], [340, 100], ["ponyDiffusionV6XL.safetensors"], {},
-     [("MODEL", "MODEL"), ("CLIP", "CLIP"), ("VAE", "VAE")]),
- 2: ("LoraLoader", "Hades Style LoRA", [-20, 0], [340, 130], ["Lunas-Hades-Style-SDXL-A2.safetensors", 1.0, 1.0],
-     {"model": ("MODEL", 1, 0), "clip": ("CLIP", 1, 1)}, [("MODEL", "MODEL"), ("CLIP", "CLIP")]),
- 3: ("CLIPSetLastLayer", "CLIP Skip 2", [-20, 180], [340, 60], [-2], {"clip": ("CLIP", 2, 1)}, [("CLIP", "CLIP")]),
- 4: ("CLIPTextEncode", "Positive Prompt", [380, 0], [440, 200], [PONY_POS], {"clip": ("CLIP", 3, 0)},
-     [("CONDITIONING", "CONDITIONING")]),
- 5: ("CLIPTextEncode", "Negative Prompt", [380, 250], [440, 140], [PONY_NEG], {"clip": ("CLIP", 3, 0)},
-     [("CONDITIONING", "CONDITIONING")]),
- 6: ("EmptyLatentImage", "Size", [380, 440], [300, 110], [1024, 1024, 1], {}, [("LATENT", "LATENT")]),
- 7: ("KSampler", "Sampler", [880, 0], [320, 270], [123456789, "fixed", 25, 6.5, "euler_ancestral", "normal", 1.0],
-     {"model": ("MODEL", 2, 0), "positive": ("CONDITIONING", 4, 0), "negative": ("CONDITIONING", 5, 0),
-      "latent_image": ("LATENT", 6, 0)}, [("LATENT", "LATENT")]),
- 8: ("VAELoader", "SDXL VAE", [880, 320], [320, 60], ["sdxl_vae.safetensors"], {}, [("VAE", "VAE")]),
- 9: ("VAEDecode", "Decode", [1240, 0], [200, 50], [], {"samples": ("LATENT", 7, 0), "vae": ("VAE", 8, 0)},
-     [("IMAGE", "IMAGE")]),
- 10: ("SaveImage", "Save", [1240, 90], [420, 460], ["Hades/asset"], {"images": ("IMAGE", 9, 0)}, []),
- 11: ("Note", "How to use", [-420, 300], [460, 380], [PONY_NOTE], {}, []),
-}
-
 # ---------------------------------------------------------------- CHARACTER PORTRAITS (2/3 body, dialogue-screen style)
 CHAR_NOTE_COMMON = """
 Only edit the CHARACTER box per character. Leave STYLE + FRAMING fixed so the
@@ -113,60 +70,6 @@ original PNG.
 If the crop comes out too tight, add 'knees' / 'thighs' details to the
 character text (e.g. 'armored greaves', 'skirt with tassels') - the model frames
 whatever you describe."""
-
-PONY_CHAR_NOTE = """HADES STYLE (PONY) - CHARACTER PORTRAIT
-""" + CHAR_NOTE_COMMON + """
-
-Pony tips: use booru-style tags in CHARACTER: 1girl/1boy, solo, hair, eyes,
-outfit pieces, held item, pose (hand on hip, arms crossed), expression.
-Pipeline: base render 832x1216 -> latent upscale 1.5x -> second pass at
-denoise 0.55 (sharpens face and details). Final image 1248x1824.
-LoRA 1.0, CFG 6.5, CLIP skip 2.
-Colour bleed: if one colour leaks into others (e.g. black robe turning the
-hair black), weight each key colour: (black robe:1.2), (crimson hair:1.1).
-"""
-PONY_CHAR_STYLE = ("score_9, score_8_up, score_7_up, cowboy shot, standing, contrapposto, looking at viewer, "
-                   "dramatic lighting, rim lighting, flat colors, hard shadows, dark fantasy, "
-                   "simple background, (dark grey background:0.7)")
-PONY_CHAR_SUBJECT = ("1girl, solo, elf sorceress, (long wavy crimson hair:1.1), pointy ears, amber eyes, "
-                     "(black gothic robe:1.2), silver trim, high collar, silver jewelry, glowing green gem pendant, "
-                     "holding ornate staff, hand on hip, smirk")
-PONY_CHAR_NEG = ("score_4, score_5, score_6, close-up, portrait, upper body, head out of frame, multiple views, "
-                 "detailed background, scenery, blurry, lowres, jpeg artifacts, text, watermark, signature, frame, "
-                 "border, bad hands, extra fingers, extra limbs")
-
-PONY_CHAR = {
- 1: ("CheckpointLoaderSimple", "Pony Diffusion V6 XL", [-460, 0], [340, 100], ["ponyDiffusionV6XL.safetensors"], {},
-     [("MODEL", "MODEL"), ("CLIP", "CLIP"), ("VAE", "VAE")]),
- 2: ("LoraLoader", "Hades Style LoRA", [-460, 150], [340, 130], ["Lunas-Hades-Style-SDXL-A2.safetensors", 1.0, 1.0],
-     {"model": ("MODEL", 1, 0), "clip": ("CLIP", 1, 1)}, [("MODEL", "MODEL"), ("CLIP", "CLIP")]),
- 3: ("CLIPSetLastLayer", "CLIP Skip 2", [-460, 330], [340, 60], [-2], {"clip": ("CLIP", 2, 1)}, [("CLIP", "CLIP")]),
- 20: ("PrimitiveStringMultiline", "CHARACTER  (edit this per character)", [-60, 0], [460, 170], [PONY_CHAR_SUBJECT], {},
-      [("STRING", "STRING")]),
- 21: ("PrimitiveStringMultiline", "STYLE + FRAMING  (keep fixed for the whole cast)", [-60, 220], [460, 150],
-      [PONY_CHAR_STYLE], {}, [("STRING", "STRING")]),
- 22: ("StringConcatenate", "Join prompt", [-60, 420], [300, 110], ["", "", ", "],
-      {"string_a": ("STRING", 21, 0), "string_b": ("STRING", 20, 0)}, [("STRING", "STRING")]),
- 4: ("CLIPTextEncode", "Positive", [450, 0], [300, 60], [""], {"clip": ("CLIP", 3, 0), "text": ("STRING", 22, 0)},
-     [("CONDITIONING", "CONDITIONING")]),
- 5: ("CLIPTextEncode", "Negative Prompt", [450, 110], [400, 170], [PONY_CHAR_NEG], {"clip": ("CLIP", 3, 0)},
-     [("CONDITIONING", "CONDITIONING")]),
- 6: ("EmptyLatentImage", "Size (portrait 832x1216)", [450, 330], [300, 110], [832, 1216, 1], {}, [("LATENT", "LATENT")]),
- 7: ("KSampler", "Base Pass", [900, 0], [320, 270], [123456789, "randomize", 28, 6.5, "euler_ancestral", "normal", 1.0],
-     {"model": ("MODEL", 2, 0), "positive": ("CONDITIONING", 4, 0), "negative": ("CONDITIONING", 5, 0),
-      "latent_image": ("LATENT", 6, 0)}, [("LATENT", "LATENT")]),
- 12: ("LatentUpscaleBy", "Upscale 1.5x", [900, 320], [320, 90], ["nearest-exact", 1.5],
-      {"samples": ("LATENT", 7, 0)}, [("LATENT", "LATENT")]),
- 13: ("KSampler", "Hi-Res Pass (denoise 0.55)", [1260, 0], [320, 270],
-      [987654321, "randomize", 20, 6.5, "euler_ancestral", "normal", 0.55],
-      {"model": ("MODEL", 2, 0), "positive": ("CONDITIONING", 4, 0), "negative": ("CONDITIONING", 5, 0),
-       "latent_image": ("LATENT", 12, 0)}, [("LATENT", "LATENT")]),
- 8: ("VAELoader", "SDXL VAE", [1260, 320], [320, 60], ["sdxl_vae.safetensors"], {}, [("VAE", "VAE")]),
- 9: ("VAEDecode", "Decode", [1620, 0], [200, 50], [], {"samples": ("LATENT", 13, 0), "vae": ("VAE", 8, 0)},
-     [("IMAGE", "IMAGE")]),
- 10: ("SaveImage", "Save", [1620, 90], [420, 600], ["Hades/character"], {"images": ("IMAGE", 9, 0)}, []),
- 11: ("Note", "How to use", [-460, 450], [500, 520], [PONY_CHAR_NOTE], {}, []),
-}
 
 FLUX_CHAR_NOTE = """AMADMIR (FLUX) - CHARACTER PORTRAIT
 """ + CHAR_NOTE_COMMON + """
@@ -232,7 +135,6 @@ def add_alpha_output(spec, decode_id, prefix, x, y):
                 {"images": ("IMAGE", 33, 0)}, [])
 
 
-add_alpha_output(PONY_CHAR, 9, "Hades/character_alpha", 2080, 0)
 add_alpha_output(FLUX_CHAR, 10, "Amadmir/character_alpha", 1720, 0)
 
 API_KEYS = {
@@ -285,8 +187,7 @@ def build_api(spec):
 
 if __name__ == "__main__":
     wf_dir, api_dir = sys.argv[1], sys.argv[2]
-    for name, spec in [("Amadmir-Flux-Game-Assets", FLUX), ("Hades-Pony-Game-Assets", PONY),
-                       ("Amadmir-Flux-Character-Portrait", FLUX_CHAR), ("Hades-Pony-Character-Portrait", PONY_CHAR)]:
+    for name, spec in [("Amadmir-Flux-Game-Assets", FLUX), ("Amadmir-Flux-Character-Portrait", FLUX_CHAR)]:
         json.dump(build_ui(spec), open(os.path.join(wf_dir, name + ".json"), "w", encoding="utf-8"), indent=1)
         json.dump({"prompt": build_api(spec)}, open(os.path.join(api_dir, name + ".api.json"), "w", encoding="utf-8"), indent=1)
         print("wrote", name)

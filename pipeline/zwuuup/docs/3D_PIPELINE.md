@@ -15,7 +15,7 @@ Last verified: 2026-11-20 on the user's machine.
 2. **Validate every reference image before making a 3D model. No exceptions, any asset type.** `tools/make_3d.py`
    refuses images without an approval record (step 3). Do not work around it; if a check is wrong, fix the check.
 3. **No stock, watermarked or third-party images in shipped assets.** They are allowed only as labelled tests.
-4. **Disk:** C: is nearly full. New model downloads go to `K:\ComfyUI-Models\models\...`. Generated assets live in
+4. **Disk:** new model downloads go on the models drive (`extra_model_paths.yaml`). Generated assets live in
    this folder (`assets/`).
 5. **Logs are append-only:** `generation_log.jsonl` (every 2D render) and `assets/ref_validation.jsonl` (every
    validation verdict). Never rewrite them.
@@ -31,7 +31,7 @@ Last verified: 2026-11-20 on the user's machine.
                 └──────────────────────── new seed / better prompt ◄────────────────┘
 ```
 
-| Step | Tool | Time on the RTX 4070 (12 GB) |
+| Step | Tool | Time on a 12 GB card |
 |---|---|---|
 | 2D reference (Flux.1 Dev Q6_K, 1024²) | `tools/make_ships.py` | 80–110 s per image (first one +40 s; 300–600 s if Wan was loaded just before) |
 | Validation | `tools/validate_ref.py` | 1 s automatic + your review |
@@ -61,7 +61,7 @@ expect to reject some.
 | `flux` | photoreal studio render | very detailed; textures carry baked grime/lighting ("3D-scan" look) |
 | `stylized` | chunky cartoon game prop | clean meshes but mobile-game look; exaggerates figureheads |
 | `amadmir` | the game's 2D comic-ink LoRA | not for 3D: flat cel shading and a painted water strip |
-| `wan`, `pony` | Wan 2.2 / Pony V6 | not for 3D: Wan always adds sea and reflections; Pony is incoherent |
+| `wan` | Wan 2.2 | not for 3D: it always adds sea and reflections |
 
 Add a ship by adding a line to `SHIPS` in `tools/make_ships.py` (describe the hull, masts, sails, colours and one or
 two distinctive features). Keep fantasy elements believable. The framing text already asks for coherence
