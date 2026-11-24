@@ -191,7 +191,7 @@ Offered only in its own ports (most days), and a hazard of its own (test: BS_REG
   fog**: pirates find you close, out of nowhere.
 - The taverns also tell where the next untold story is (a story is offered only in its own region's ports).
 
-## Fleet and crew (built: see TODO.md, phase 3)
+## Fleet and crew (built)
 - **Fleet**: up to 3 escort ships, won (prizes, quests, rescues), following you (the existing escort AI), each with
   its own hull that carries over.
 - **Crew**: named officers with a trait (gunner: reload, bosun: repairs, navigator: speed, surgeon: crew losses...)
