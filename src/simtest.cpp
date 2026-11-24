@@ -141,6 +141,17 @@ static int ModTest() {
     mods::SetJapanese(false);
     check(mods::VoicePath("merchant_3", sfx::LineHash(line), 2).find("voices_ja") == std::string::npos, "English again: the English recording");
 
+    // an idles pack: no faces of its own, the game's faces in motion
+    {
+        const fs::path idl = root / "motion";
+        touch(idl / "idles" / "fleet_1.png");
+        check(mods::LoadFrom(idl.u8string()), "an idles pack loads");
+        check(mods::PortraitPath("fleet_1") == app + "data/portraits/fleet_1.png", "an idles pack: the game's face");
+        check(mods::IdlePath("fleet_1").find("motion") != std::string::npos, "an idles pack: its idle for the game's face");
+        check(mods::IdlePath("merchant_3").empty() != fs::exists(fs::u8path(app + "data/idles/merchant_3.png")),
+              "an idles pack without that face's idle: the game's, where it has one");
+    }
+
     // and back to none
     mods::Reset();
     check(mods::Active().empty() && mods::PortraitPath("merchant_3") == app + "data/portraits/merchant_3.png" &&
@@ -165,6 +176,17 @@ static int ModTest() {
         check(mods::Active() == "alpha", "the choice kept in mods.cfg");
         mods::SetActive("");
         check(mods::Active().empty(), "off again");
+        // first run (no mods.cfg) with just the one pack installed: it's on, and the choice saved
+        fs::remove(fs::u8path(app + "mods.cfg"), ec);
+        mods::Init(app);
+        check(mods::Active() == "alpha" && fs::exists(fs::u8path(app + "mods.cfg")), "first run, one pack: it's on (and saved)");
+        mods::SetActive("");
+        mods::Init(app);
+        check(mods::Active().empty(), "turned off on purpose: it stays off");
+        touch(dir / "beta" / "idles" / "fleet_1.png");
+        fs::remove(fs::u8path(app + "mods.cfg"), ec);
+        mods::Init(app);
+        check(mods::Active().empty(), "first run, two packs: none chosen for her");
 #ifdef _WIN32
         _putenv_s("BS_MODDIR", "");
 #else

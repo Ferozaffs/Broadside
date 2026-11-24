@@ -2,8 +2,11 @@
 // and other words - without touching data/. Nothing installed (or "off"), and the game is exactly as it ships.
 //
 //   mods/<name>/portraits/<id>.png        a face in place of data/portraits/<id>.png
-//   mods/<name>/idles/<id>.png            its idle (8x6 frames, as data/idles). A face the pack replaces WITHOUT an
-//                                         idle of its own is shown still: the game's idle is of the old face
+//   mods/<name>/idles/<id>.png            an idle (8x6 frames, as data/idles), for the pack's face or the game's: a
+//                                         pack of nothing but idles puts the game's own faces in motion (the idles
+//                                         pack, mods/idles/, shipped beside the game rather than in data/). A face the
+//                                         pack replaces WITHOUT an idle of its own is shown still: the game's idle is
+//                                         of the old face
 //   mods/<name>/voices/<id>/<hash>.ogg    their lines spoken; <hash> is the game's own line's (sfx::LineHash of the
 //                                         line as the game has it, before text.tsv), so a reworded line keeps its file
 //   mods/<name>/voices_ja/<id>/<hash>.ogg the same lines in Japanese (the "Japanese voices" option; the text on screen
@@ -23,7 +26,8 @@
 //                                         no recording
 // A face with a voices/<id>/ (or voices_ja/<id>/) folder in the pack never falls back to the game's recordings of
 // it, nor does a face people.tsv turns from a man into a woman: a line the pack hasn't recorded is babbled instead.
-// The choice (which pack, which voices) is kept in mods.cfg beside the game.
+// The choice (which pack, which voices) is kept in mods.cfg beside the game. With no mods.cfg yet and just the one
+// pack installed, that pack is on (unzip the idles pack and the faces move, no menu needed).
 #pragma once
 #include <cstdint>
 #include <string>

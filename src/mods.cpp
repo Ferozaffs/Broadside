@@ -211,12 +211,16 @@ void Init(const std::string& appDir) {
         if (l.rfind("mod ", 0) == 0) want = l.substr(4);
         else if (l.rfind("voices ", 0) == 0) S.japanese = l.substr(7) == "ja";
     }
+    // (no choice made yet and just the one pack: it's on - unzip the idles pack and the faces move, no menu needed)
+    const bool firstRun = !getenv("BS_MOD") && !Exists(S.app + "mods.cfg") && S.installed.size() == 1;
+    if (firstRun) want = S.installed[0];
     if (getenv("BS_MOD")) want = getenv("BS_MOD");
     if (!want.empty() && want != "-" && std::find(S.installed.begin(), S.installed.end(), want) != S.installed.end()) {
         S.active = want;
         S.dir = S.root + want + "/";
     }
     Load();
+    if (firstRun) Save();
 }
 
 const std::vector<std::string>& Installed() { return S.installed; }
@@ -281,10 +285,11 @@ std::string PortraitPath(const std::string& id) {
 }
 
 std::string IdlePath(const std::string& id) {
-    if (PackFace(id)) {  // (the game's idle is of the face the pack replaced: its own, or none)
+    if (!S.dir.empty()) {  // (the pack's idle, for its own face or the game's: an idles pack moves the game's faces)
         const std::string p = S.dir + "idles/" + id + ".png";
-        return Exists(p) ? p : std::string();
+        if (Exists(p)) return p;
     }
+    if (PackFace(id)) return std::string();  // (the game's idle is of the face the pack replaced)
     const std::string p = S.app + "data/idles/" + id + ".png";
     return Exists(p) ? p : std::string();
 }
