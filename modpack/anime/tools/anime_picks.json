@@ -1,0 +1,177 @@
+{
+ "_note": "the user's picks for the anime pack's portraits: id -> seed (A 1001, B 2002, C 3003); anime_test/anime_test2 ones from the tests",
+ "dread_calypso": {
+  "seed": 1001,
+  "dir": "anime_test",
+  "file": "dread_calypso_gbf10_s1001.png"
+ },
+ "fleet_1": {
+  "seed": 3003,
+  "dir": "anime_test2"
+ },
+ "navy_2": {
+  "seed": 2002,
+  "dir": "anime_test2"
+ },
+ "captive_f_4": {
+  "seed": 1001,
+  "dir": "anime_test2"
+ },
+ "haverly_harbour": {
+  "seed": 1001,
+  "dir": "anime_test2"
+ },
+ "story_mara": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "story_mara_storm": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "story_ashgrave": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "officer_stroud": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "officer_fairweather": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "officer_gage": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "officer_whitlock": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "officer_penhallow": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "haverly_wright": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "haverly_tavern": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "lantern_harbour": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "lantern_tavern": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "lantern_wright": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "saltmarsh_harbour": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "saltmarsh_tavern": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "saltmarsh_wright": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "greywater_harbour": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "greywater_tavern": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "greywater_wright": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "mournwick_harbour": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "mournwick_tavern": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "mournwick_wright": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "palmhaven_harbour": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "palmhaven_tavern": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "palmhaven_wright": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "coral_harbour": {
+  "seed": 2002,
+  "dir": "anime_cast"
+ },
+ "coral_tavern": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "coral_wright": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "dorada_harbour": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "dorada_tavern": {
+  "seed": 3003,
+  "dir": "anime_cast"
+ },
+ "dorada_wright": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "ashfall_harbour": {
+  "seed": 1001,
+  "dir": "anime_cast"
+ },
+ "ashfall_wright": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "cinderport_harbour": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "frostholm_harbour": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "frostholm_tavern": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "ashfall_tavern": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ }
+}
