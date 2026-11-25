@@ -1610,7 +1610,7 @@ void Game::UpdateInput(float dt) {
         const int known = MemoriesUnlocked();
         if (memKnown >= 0 && known > memKnown) {
             Notice("A MEMORY RETURNS", ui::kGold, 3.5f);
-            Feed3(people::kMemories[known - 1].title, "  comes back to you: in port, under Memories", "", ui::kGold, ui::kText);
+            Feed3(mods::T(people::kMemories[known - 1].title), "  comes back to you: in port, under Memories", "", ui::kGold, ui::kText);
         }
         if (GetTime() - sessionStart > 6.0) memKnown = known;  // (not the save coming in at the start)
     }
@@ -3526,8 +3526,8 @@ void Game::PlayEvent(const GameEvent& e) {
                 case EV_DREAD:
                     Say(people::kDread[e.flags % BIOMES].id, DreadName(e.flags), TextFormat("Dread pirate of %s", kBiomeNames[e.flags % BIOMES]),
                         [&]() { const people::DreadVoice& d = people::kDread[e.flags % BIOMES]; const int k = GetRandomValue(0, 2); return k ? d.more[k - 1] : d.line; }());
-                    Notice(TextFormat("THE DREAD PIRATE %s", TextToUpper(DreadName(e.flags))), ui::kRed, 4.5f);
-                    Feed3(DreadName(e.flags), "  hunts these waters, and she's found you", "", ui::kRed, ui::kText);
+                    Notice(TextFormat("THE DREAD PIRATE %s", TextToUpper(mods::T(DreadName(e.flags)))), ui::kRed, 4.5f);
+                    Feed3(mods::T(DreadName(e.flags)), "  hunts these waters, and she's found you", "", ui::kRed, ui::kText);
                     sfx::PlayFlat(sfx::Thunder, 0.6f, 0.7f);
                     break;
                 case EV_DREADSUNK: Feed3("THE DREAD PIRATE", "  is sunk: the bounty on her head", gold, ui::kGold, ui::kGold); Notice("THE DREAD PIRATE IS SUNK", ui::kGold, 3.5f); sfx::PlayFlat(sfx::Treasure, 1.0f, 0.9f); break;
@@ -3626,7 +3626,7 @@ void Game::PlayEvent(const GameEvent& e) {
                 } else if (q.type == campaign::Q_CAPTIVE && e.pos.y != 0.0f) {
                     const people::SeaVoice& v = people::kSea[people::ST_STRUCK];
                     Say(v.id, campaign::PirateName(q.seed), v.title, v.lines[GetRandomValue(0, 5)]);
-                    Feed3(campaign::PirateName(q.seed), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
+                    Feed3(mods::T(campaign::PirateName(q.seed)), "  has struck her colours: hold your fire, come alongside", "", ui::kGold, ui::kText);
                     floats.push_back({Vector3Add(e.pos, {0, 20, 0}), "STRUCK HER COLOURS", ui::kGold, 3.0f});
                 } else if (q.type == campaign::Q_CAPTIVE) {
                     std::string c = CaptiveOf(q);
@@ -3635,7 +3635,7 @@ void Game::PlayEvent(const GameEvent& e) {
                     const std::string key = TextFormat("captive|%u", (unsigned)q.seed);
                     Say(v.id, c, v.title, v.lines[GetRandomValue(0, 5)], key);
                     passengers.push_back({(int)e.a, q.seed, true, (int)q.biome, q.chain != 0, v.id, c, "Your passenger", key, GetTime() + GetRandomValue(35, 55), 0});
-                    Feed3(c, TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
+                    Feed3(mods::T(c), TextFormat("  is aboard: home to %s", campaign::PortName(q.from)), "", ui::kGold, ui::kText);
                 }
                 sfx::PlayFlat(sfx::Confirm, 0.8f, 0.9f);
             }
@@ -10027,7 +10027,7 @@ void Game::DrawPort(float W, float H) {
         if (campRecruitsC.empty()) { Text("Nobody today.", x0, y, 14, kDim, false); y += 24; }
         for (size_t k = 0; k < campRecruitsC.size(); ++k) {
             const Recruit& rc = campRecruitsC[k];
-            Text(TextFormat("%s, %s", OfficerName(rc.seed).c_str(), kOfficerNames[rc.role]), x0, y, 16, kText, true);
+            Text(TextFormat("%s, %s", mods::T(OfficerName(rc.seed)).c_str(), kOfficerNames[rc.role]), x0, y, 16, kText, true);
             std::string what = TextFormat("level %d", rc.level);
             for (const OfficerPerk& op : kOfficerPerks[rc.role])
                 if (op.per) what += TextFormat("   \xC2\xB7   %s +%d", kPerkNames[op.perk], op.per * rc.level);
@@ -10046,7 +10046,7 @@ void Game::DrawPort(float W, float H) {
         y += 18;
         std::string mine;
         for (int o = 0; o < OFFICERS; ++o)
-            if (campOfficerC[o]) mine += TextFormat("%s%s (%s, %d)", mine.empty() ? "" : "   \xC2\xB7   ", OfficerName(campOfficerSeedC[o]).c_str(), kOfficerNames[o], campOfficerC[o]);
+            if (campOfficerC[o]) mine += TextFormat("%s%s (%s, %d)", mine.empty() ? "" : "   \xC2\xB7   ", mods::T(OfficerName(campOfficerSeedC[o])).c_str(), kOfficerNames[o], campOfficerC[o]);
         Text(mine.empty() ? "None yet." : mine.c_str(), x0, y, 13, mine.empty() ? kDim : kText, false);
     } else {  // the shipwright: upgrades, a new flagship, the fleet
         Label("UPGRADES", x0, y, 12, kDim);

@@ -3,7 +3,7 @@ isn't in --lines-export: names, titles, quest titles and briefs, the ships' name
 game's own export (lines.tsv vs lines_anime.tsv); `review` writes every change to review.tsv."""
 import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-PACK = os.path.join(HERE, 'anime')
+PACK = os.path.join(HERE, 'anime') if os.path.isdir(os.path.join(HERE, 'anime')) else os.path.dirname(HERE)  # (the scratchpad's pack/anime/, or modpack/anime/ in the repo)
 SRC = r'C:\Users\USER\repos\Broadside-modloader\src'
 
 
