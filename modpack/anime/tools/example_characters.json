@@ -1,0 +1,49 @@
+{
+  "_about": "waifu_gen.py's character file: three of the anime pack's characters as they were picked (see CHARACTER_DESIGN.md).",
+  "defaults": {
+    "framing": "waist-up"
+  },
+  "characters": [
+    {
+      "id": "pirate_9",
+      "archetype": "sadodere",
+      "build": "charming, beautiful",
+      "origin": "young French",
+      "role": "pirate",
+      "age": "in her twenties",
+      "hair": "long wavy chestnut hair",
+      "face": "a beauty mark, a single pearl earring and full glossy lips",
+      "outfit": "an unbuttoned lace-cuffed blouse over a fitted lilac brocade corset and a faded lilac coat",
+      "pose": "stands side-on in a fencer's en garde, her rapier pointed straight at the viewer, her other hand raised elegantly behind her",
+      "expression": "a charming, dangerous, amused smile that enjoys the viewer's discomfort"
+    },
+    {
+      "id": "captive_f_5",
+      "archetype": "kuudere",
+      "build": "cool, beautiful",
+      "origin": "young East Asian",
+      "role": "ship's surgeon",
+      "age": "in her twenties",
+      "hair": "long straight black hair in a high ponytail tied with a red silk ribbon",
+      "face": "sharp intelligent eyes behind small round spectacles, a smudge of soot on her cheek and full red lips",
+      "outfit": "a fitted dark grey dress with rolled sleeves and a low square neckline, a red silk sash, a leather apron with gleaming instruments in its pockets",
+      "prop": "holds a glinting scalpel up between two fingers beside her face",
+      "expression": "composed and cool, one eyebrow raised, a faint knowing smile"
+    },
+    {
+      "id": "castaway_6",
+      "archetype": "tsundere",
+      "framing": "mid-thigh",
+      "build": "proud, beautiful",
+      "role": "castaway navy midshipman",
+      "age": "in her twenties",
+      "figure": "sunburnt and slender",
+      "hair": "matted fair hair in a messy short ponytail",
+      "face": "full pouting lips and hopeful eyes",
+      "outfit": "the shredded remains of a blue naval jacket with one gold button left over a torn white shirt knotted under her chest",
+      "legs": "ragged white breeches torn short showing her curvy hips and bare thighs",
+      "prop": "clutches a bent brass spyglass to her chest",
+      "expression": "shaken but indignant, cheeks flushed, glaring as if she didn't need rescuing"
+    }
+  ]
+}
