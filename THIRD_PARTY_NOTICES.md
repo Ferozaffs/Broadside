@@ -75,11 +75,24 @@ The cutter, the escorts' gunboat and the ghost ship (the Flying Dutchman) are ma
 rigged with masts, yards and sails in Blender (tools/transom.py, tools/rig_ship.py; docs/kitbash.md), and the
 Tropics' and Ember Reach's palms, plants, charred trees and spires too.
 
-## Idle animations of the portraits (data/idles)
+## Idle animations of the portraits (the idles pack, mods/idles)
 
 Made locally from the portraits above with Wan 2.2 I2V (Alibaba, Apache 2.0) and the lightx2v step-distillation
 LoRAs (Apache 2.0) in ComfyUI, the first and last frame the portrait itself, cut out with BiRefNet (MIT). They are
 the portraits in motion, so the Amadmir LoRA's terms above apply to them too: for this free game only.
+
+## The anime pack (mods/anime)
+
+An optional pack, shipped as its own download.
+- **Portraits:** generated locally with Krea 2 Turbo (Krea; the Krea 2 Community License, whose terms leave the
+  outputs to the user who made them) and the **Granblue Fantasy Style** LoRA (Krea2Turbo version) by **Azriaelis**
+  (https://civitai.com/models/2743862), whose terms allow the images it makes to be used; the LoRA itself isn't
+  shipped. Cut out with BiRefNet (MIT). A fan-made style, in a free game.
+- **Idles:** the portraits themselves, moved by a procedural warp (the pack's `tools/rig_pack.py`: breathing, a sway,
+  hair and cloth following). The body parts that place the warp were found with MediaPipe's multiclass selfie
+  segmenter (Google, Apache 2.0) and Florence-2 (Microsoft, MIT).
+- **Voices:** English and Japanese, rendered locally with Qwen3-TTS (Qwen, Alibaba; Apache 2.0) as the game's own
+  are, from written voice descriptions. No real person's voice was cloned.
 
 ## Voices (data/voices)
 
