@@ -11,6 +11,17 @@ The pack's own text and the tools that made its portraits and words. The method,
   and make its pick sheet; seeds A/B/C 1001/2002/3003, redos (`--tag r1`) 4004/5005/6006. `tools/pick.py` records the
   user's picks in `tools/anime_picks.json`. `tools/krea2_outpaint.py` extends a picture downward (a good upper body
   cut off at the waist).
+- **Idles (the breathing rig, no video model; the user's pick after rig tests 1-6):** `tools/label_all.py` (on
+  ZWUUUP: body-part labels, MediaPipe's multiclass selfie segmenter + Florence-2 for the hair; `seg_mp.py`/`seg_fl.py`
+  are the same steps one at a time), `tools/anime_alpha.py` (BiRefNet cut-outs through ComfyUI), then
+  `tools/rig_pack.py` (`rig_pack_loop.ps1` follows the other two): each picked portrait and its 48-frame idle, lined
+  up by construction, at test 5's settings (sway 7, breath 14, chest 0.08, bust lift 8, hair 4.5x a beat late).
+  `tools/rig2.py` is the test version (one picture to frames, for the side-by-side videos).
+- **Voices:** `tools/lean_voices.py` -> `voices.tsv`; `tools/voice_jobs.py` / `voice_jobs_ja.py` -> the jobs for
+  `directed_voices.py` on ZWUUUP (English, then Japanese with the English references); `tools/voice_fix_fem.py` is
+  the onee-san / bokukko / chuunibyou redo (they came out male: plainly a woman's voice, pitch floor 200 Hz).
+- **The pack:** `tools/stage_pack.py <dest>` assembles `mods/anime/` (portraits, idles, voices, voices_ja, text.tsv,
+  words.tsv, people.tsv) from ZWUUUP and checks it. `tools/cast_sheet.py`: the whole cast as picked, 40 a sheet.
 - `tools/waifu_gen.py` + `CHARACTER_DESIGN.md`: design and render new characters the same way, from a character
   file (`tools/example_characters.json`): lint against the rules learned from the user's picks, the prompts, the
   render on any ComfyUI (waits for an empty queue, never cancels), pick sheets, picks.

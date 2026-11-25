@@ -27,13 +27,14 @@ if sys.argv[1] == "--sheet":
         F = ImageFont.truetype("arialbd.ttf", 20)
     except OSError:
         F = ImageFont.load_default()
-    sheet = Image.new("RGB", (3 * W, len(ids) * H), (30, 34, 40))
+    rows = [(cid, SEEDS[k:k + 3]) for cid in ids for k in range(0, len(SEEDS), 3)]
+    sheet = Image.new("RGB", (3 * W, len(rows) * H), (30, 34, 40))
     d = ImageDraw.Draw(sheet)
-    for r, cid in enumerate(ids):
-        for c, s in enumerate(SEEDS):
+    for r, (cid, row) in enumerate(rows):
+        for c, s in enumerate(row):
             im = Image.open(os.path.join(D, f"{cid}_{tag}_s{s}.png")).convert("RGB").resize((448, 576), Image.LANCZOS)
             sheet.paste(im, (c * W, r * H + 30))
-            d.text((c * W + 6, r * H + 4), f"{cid}  {'ABC'[c]}{'' if tag == 'wf' else '  (' + tag + ')'}", fill=(255, 230, 150), font=F)
+            d.text((c * W + 6, r * H + 4), f"{cid}  {'ABCDEFGHI'[SEEDS.index(s)]}{'' if tag == 'wf' else '  (' + tag + ')'}", fill=(255, 230, 150), font=F)
     os.makedirs(os.path.join(S, "sheets"), exist_ok=True)
     out = os.path.join(S, "sheets", f"set_{n}.jpg")
     sheet.save(out, quality=85)
@@ -43,11 +44,18 @@ tag = "wf"
 if sys.argv[1] == "--tag":  # (a redo: new renders beside the old ones, e.g. --tag r1)
     tag = sys.argv[2]
     del sys.argv[1:3]
+seeds_opt, frame = None, None
+if "--seeds" in sys.argv:  # (more seeds for a redo: NNN --seeds 7007 8008 ... ids; the set number before --seeds, or it is read as a seed)
+    i = sys.argv.index("--seeds"); j = i + 1
+    while j < len(sys.argv) and sys.argv[j].isdigit(): j += 1
+    seeds_opt = tuple(int(x) for x in sys.argv[i + 1:j]); del sys.argv[i:j]
+if "--frame" in sys.argv:  # (framing in place of "waist-up", e.g. "framed from the head down to mid-thigh")
+    i = sys.argv.index("--frame"); frame = sys.argv[i + 1]; del sys.argv[i:i + 2]
 n, ids = sys.argv[1], sys.argv[2:]
 missing = [i for i in ids if i not in P]
 assert not missing, f"no prompt for {missing}"
-seeds = SEEDS if tag == "wf" else REDO_SEEDS
-spec = {"out": "anime_cast", "jobs": [[cid, tag, 1.0, s, P[cid]] for cid in ids for s in seeds]}
+seeds = seeds_opt or (SEEDS if tag == "wf" else REDO_SEEDS)
+spec = {"out": "anime_cast", "jobs": [[cid, tag, 1.0, s, P[cid]] + ([frame] if frame else []) for cid in ids for s in seeds]}
 os.makedirs(os.path.join(S, "queue"), exist_ok=True)
 p = os.path.join(S, "queue", f"{n}.json")
 json.dump(spec, open(p, "w", encoding="utf-8"), indent=1)

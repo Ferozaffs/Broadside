@@ -694,3 +694,142 @@ P["frostholm_wright"] = (
     "freckles and full lips. She wears a sleeveless fur-trimmed leather tunic with a deep neckline that shows her strong "
     "arms, wrist wraps and a thick tool belt, and holds a bearded axe upright in her raised fist, the axe head beside "
     "her shoulder. A fearless smirk, cheeks a little flushed, refusing to look impressed.")
+
+# ---- redo r2 (the user: "Outpaint not working euther adjust her prompt a little or try more seeds"): the hips and
+# thighs written in, framed head to mid-thigh (--frame), six new seeds each
+P["cinderport_tavern"] = (
+    "The character is a gorgeous, fierce tavern keeper in her thirties with flame-red hair in a high ponytail, smoky eye "
+    "makeup, full red lips and an old burn scar curling down one side of her neck. She wears a brass-buckled black "
+    "leather corset over a soot-smudged off-the-shoulder shirt, tight dark leather trousers hugging her curvy hips and "
+    "thighs, and brass goggles pushed up on her forehead, and holds a smoking clay mug. A dangerous, teasing big-sister "
+    "grin, one hand on her hip.")
+P["sea_castaway"] = (
+    "The character is a ragged, sunburnt, beautiful castaway sailor woman in her twenties with wild long sun-bleached "
+    "hair full of salt, freckles, full lips and a bead necklace of shells. She wears the torn remains of a striped shirt "
+    "knotted under her chest showing her midriff, a frayed sash and ragged short trousers showing her curvy hips and "
+    "bare thighs, and holds a cracked coconut up in both hands. A huge, overjoyed open-mouthed smile, bursting with energy.")
+
+# ---- redo r1, sets 15-29 (the user's picks, 2026-11-25) ----
+# fleet_5 (the user: "nose ring looks weird"): gold hoop earrings in its place
+P["fleet_5"] = (
+    "The character is a tough, beautiful former pirate turned privateer woman in her twenties with a short black undercut, "
+    "sea-serpent tattoos on her neck and shoulders, small gold hoop earrings and full dark lips. She wears a long black "
+    "leather coat with silver studs over a dark red corset, a wide belt with a cutlass and two flintlock pistols, and a "
+    "gold chain with a shark-tooth pendant, arms folded under her chest. A sly grin, cheeks pink, pretending not to care.")
+# merchant_6 (the user: "leg issue"): hips and thighs written in, framed head to mid-thigh (set 035)
+P["merchant_6"] = (
+    "The character is a glamorous, haughty Venetian merchant captain woman in her twenties with honey-blonde hair in drill "
+    "curls under a small plumed hat, a beauty mark, full rouged lips and pearls at her throat. She wears a rich emerald "
+    "brocade coat over a low-cut cream corset blouse, tight white breeches and tall polished boots hugging her curvy hips "
+    "and thighs, and holds a fan of banknotes raised in one hand by her shoulder, the other hand on her hip. A proud, "
+    "ringing ojou-sama laugh behind her banknotes.")
+# castaway_2 (the user: "too old"): still the ageless loli-baba, but she looks a young woman; no "old" in the prompt
+P["castaway_2"] = (
+    "The character is an ageless castaway, an adult woman who looks like a pretty young woman in her early twenties, with "
+    "a cute youthful face, very long white hair, sun-kissed skin, full lips and knowing golden eyes. She wears a patched, "
+    "faded scarlet naval officer's coat over a ragged shirt and a hat woven from palm leaves, and clutches a battered "
+    "leather journal and a tiny carved wooden ship. Dreamy and kindly, an amused little smile as if she has seen everything.")
+# castaway_4 (the user: "too boyish"): the bokukko tomboy kept, but a soft pretty face, longer hair and curves
+P["castaway_4"] = (
+    "The character is a tomboyish, beautiful castaway sailor woman in her twenties with a shaggy brown bob with long side "
+    "bangs, a sunburnt pretty face with freckles, long eyelashes, full lips and a toned curvy figure. She wears a torn and "
+    "faded red naval jacket open over a sailcloth chest wrap that shows her cleavage, a sailcloth belt, a long knife made "
+    "from a barrel hoop and a spyglass with a cracked lens. Capable and blunt, a bright, relieved, cheeky grin.")
+# castaway_6 (the user: "leg issue"): hips and thighs written in, framed head to mid-thigh (set 035)
+P["castaway_6"] = (
+    "The character is a proud, beautiful castaway navy midshipman woman in her twenties, sunburnt and slender, with "
+    "matted fair hair in a messy short ponytail, full pouting lips and hopeful eyes. She wears the shredded remains of a "
+    "blue naval jacket with one gold button left over a torn white shirt knotted under her chest, and ragged white "
+    "breeches torn short showing her curvy hips and bare thighs, and clutches a bent brass spyglass to her chest. Shaken "
+    "but indignant, cheeks flushed, glaring as if she didn't need rescuing.")
+# castaway_7 (the user: "too modern sweater"): a laced leather jerkin over a linen shirt in place of the jumper
+P["castaway_7"] = (
+    "The character is a broad-shouldered, tomboyish, beautiful castaway whaler woman in her twenties with cropped "
+    "iron-grey hair, frost-reddened cheeks, full lips and a fur-lined hood pushed back. She wears a patched oilskin coat "
+    "open over a laced leather jerkin and an open-necked linen shirt, and holds a broken harpoon shaft raised in one fist "
+    "by her shoulder. Stubborn and blunt, a relaxed boyish grin.")
+# captive_f_5 (the user: "too boring"): a red ribbon and silk sash, a scalpel held up, a knowing look
+P["captive_f_5"] = (
+    "The character is a cool, beautiful young East Asian woman in her twenties, a ship's surgeon, with long straight black "
+    "hair in a high ponytail tied with a red silk ribbon, sharp intelligent eyes behind small round spectacles, a smudge "
+    "of soot on her cheek and full red lips. She wears a fitted dark grey dress with rolled sleeves and a low square "
+    "neckline, a red silk sash, a leather apron with gleaming instruments in its pockets, and holds a glinting scalpel up "
+    "between two fingers beside her face. Composed and cool, one eyebrow raised, a faint knowing smile.")
+# captive_m_2 (redo, no reason given; the sheet read butch): the gunner kept, a pixie cut and a soft pretty face
+P["captive_m_2"] = (
+    "The character is a strong, beautiful ship's gunner woman in her twenties with a messy black pixie cut with long side "
+    "bangs, a soft pretty face with a powder burn on one cheek, long eyelashes, full lips and a toned curvy figure with "
+    "tattooed arms. She wears a torn grey shirt knotted under her chest showing her abs and canvas trousers, iron "
+    "shackles hanging open from her wrists. Grim and cool, a flat stare, ready for revenge.")
+# captive_m_4 (the user: "sweater and should be slimmer"): slender, a linen blouse in place of the sweater
+P["captive_m_4"] = (
+    "The character is a slender, gorgeous Basque harbour pilot woman in her thirties with thick dark wavy hair, strong "
+    "eyebrows, full red lips and a red beret. She wears a fitted white linen blouse with a deep neckline and a navy "
+    "sailor's coat with the buttons torn off, and holds a knotted sounding line raised in one fist by her shoulder. A "
+    "warm, motherly, grateful smile.")
+# pirate_3 (the user: "too big and strange outfit"): tall and athletic, no jaw plate or mail; leather and chains
+P["pirate_3"] = (
+    "The character is a tall, athletic, beautiful pirate woman in her twenties with a shaved head, a long scar along one "
+    "side of her jaw, cold narrow eyes and full lips. She wears a rust-orange leather longcoat over a black leather "
+    "corset with a low neckline, black trousers and tall boots, a heavy chain wrapped round one forearm, and rests a "
+    "boarding axe on her shoulder. Silent and looming, an expressionless stare.")
+# pirate_4 (the user: "leg issue"): hips and thighs written in, framed head to mid-thigh (set 035)
+P["pirate_4"] = (
+    "The character is a sinister, beautiful pirate captain woman in her twenties with her face painted white like a "
+    "skull, black-ringed adoring eyes, long black hair and black lips. She wears a tall battered top hat with a raven "
+    "feather, a black frock coat over a black corset with a low neckline and a necklace of teeth, tight black breeches "
+    "and tall boots on her curvy hips and thighs, and holds a long slim dagger at her chest. A sweet, unsettling, "
+    "lovestruck smile.")
+# pirates 7-12 (the user: "poses too similar" - every one had a fist raised by the shoulder): a pose each
+P["pirate_7"] = (
+    "The character is a wiry, beautiful Malay pirate woman in her twenties with a shaved head, intricate black tattoos "
+    "down her neck and arms, a thin scar through one eyebrow and full dark lips. She wears a cropped dark red vest with a "
+    "low neckline, a wide black sash stuffed with throwing knives and loose black trousers. She crouches low and leans "
+    "toward the viewer, a curved kris held point-down in a reverse grip in front of her, a throwing knife twirling in "
+    "her other hand. A cold, amused, sadistic smirk.")
+P["pirate_8"] = (
+    "The character is a big, strong, gorgeous Norse pirate woman in her twenties with a long braided red-gold mane, blue "
+    "woad painted across her face and shoulders, freckles and full lips. She wears a sleeveless bearskin over a fitted "
+    "rusted mail bodice and iron arm rings. A short boarding axe rests across her shoulders behind her neck, both arms "
+    "hooked over its haft, her head thrown back. Roaring with laughter, loud and full of energy.")
+P["pirate_9"] = (
+    "The character is a charming, beautiful young French pirate woman in her twenties with long wavy chestnut hair, a "
+    "beauty mark, a single pearl earring and full glossy lips. She wears an unbuttoned lace-cuffed blouse over a fitted "
+    "lilac brocade corset and a faded lilac coat. She stands side-on in a fencer's en garde, her rapier pointed straight "
+    "at the viewer, her other hand raised elegantly behind her. A charming, dangerous, amused smile that enjoys the "
+    "viewer's discomfort.")
+P["pirate_10"] = (
+    "The character is a tall, gorgeous Black Caribbean pirate quartermistress in her thirties with long locs tied up in a "
+    "crimson headwrap, gold rings in both ears, a gold tooth and full lips. She wears a sleeveless black leather bodice "
+    "with a plunging neckline and a bandolier of pistols across her chest. She stands with her arms folded under her "
+    "chest, a short cutlass tucked under one arm, leaning her weight on one hip. Fierce and proud, a confident "
+    "big-sister grin.")
+# pirate_11 (the user: "too zoomed out"): framed closer (set 034), no peg-leg in the prompt
+P["pirate_11"] = (
+    "The character is a half-mad, beautiful pirate gunner woman in her twenties with wild grey-white hair singed at the "
+    "ends, soot on her face, one eye clouded white and the other gleaming, and full lips. She wears a powder-burnt "
+    "leather apron over a striped cropped shirt and holds a smoking linstock raised high like a magic staff. A dramatic, "
+    "grandiose cackle, one hand over her clouded eye.")
+# pirate_12 (the user: "nose piercing"): silver earrings in its place, and a pose of her own
+P["pirate_12"] = (
+    "The character is a pale, beautiful pirate woman in her twenties with jet black hair in a long braid, dark lipstick, "
+    "kohl-rimmed green eyes and small silver earrings. She wears a black tricorn with a raven feather, a tight black "
+    "corset under a long tattered coat, and leans forward with a flintlock pistol held lazily against her cheek, her "
+    "other hand blowing the viewer a kiss. A sweet, adoring, wicked smile, head tilted.")
+
+# ---- redo r3, set 035's two (the user: "Redo redo, no legs, too many legs") ----
+# castaway_4: no legs - hips and thighs written in, framed head to mid-thigh (set 036)
+P["castaway_4"] = (
+    "The character is a tomboyish, beautiful castaway sailor woman in her twenties with a shaggy brown bob with long side "
+    "bangs, a sunburnt pretty face with freckles, long eyelashes, full lips and a toned curvy figure. She wears a torn and "
+    "faded red naval jacket open over a sailcloth chest wrap that shows her cleavage, a sailcloth belt and ragged short "
+    "canvas trousers showing her curvy hips and bare thighs, a long knife made from a barrel hoop at her hip and a "
+    "spyglass with a cracked lens in one hand, the other hand on her hip. Capable and blunt, a bright, relieved, cheeky "
+    "grin.")
+# pirate_7: too many legs (the crouch) - standing, her own pose kept in the arms (set 037)
+P["pirate_7"] = (
+    "The character is a wiry, beautiful Malay pirate woman in her twenties with a shaved head, intricate black tattoos "
+    "down her neck and arms, a thin scar through one eyebrow and full dark lips. She wears a cropped dark red vest with a "
+    "low neckline, a wide black sash stuffed with throwing knives and loose black trousers. She stands with her weight "
+    "on one hip, a curved kris held point-down in a reverse grip at her side, a throwing knife spinning between the "
+    "fingers of her other hand raised beside her face. A cold, amused, sadistic smirk.")

@@ -9,8 +9,7 @@ DELIVERY = {
                 "pouting and flustered the moment she's shown kindness; the classic tsundere heroine",
     'kuudere': "a cool, soft, flat near-monotone, few words and no wasted breath, feeling only in the smallest pauses; "
                "the classic kuudere",
-    'onee-san': "a mature, smooth, alluring low voice, teasing and sure of herself, big-sister charm and a knowing "
-                "chuckle (\"fufu\")",
+    'onee-san': "a mature but clearly feminine young woman's voice, a smooth, warm, alluring alto, teasing and sure of herself, big-sister charm and a knowing chuckle (\"fufu\")",
     'genki': "a loud, bouncy, high-energy voice, everything shouted with excitement, bright laughter, never still; "
              "the classic genki girl",
     'ara-ara': "a gentle, honeyed, motherly voice, slow and warm, a soft sighing \"ara ara~\" and an indulgent laugh",
@@ -19,7 +18,7 @@ DELIVERY = {
     'sukeban': "a rough, low, cocky delinquent girl's voice, clipped and street-tough, a scoffing laugh, looking for "
                "a fight",
     'dandere': "a small, soft, shy voice, hesitant and breathy, stammering (\"u-um...\") and trailing off",
-    'bokukko': "a boyish, husky tomboy voice, casual and blunt, relaxed and sure of herself",
+    'bokukko': "a bright, clear young woman's tomboy voice, a girl's voice that is casual and blunt, cheerful and sure of herself",
     'ojou-sama': "a haughty, refined, high-class young lady's voice with a ringing \"ohohoho!\" laugh, theatrical "
                  "and proud",
     'sadodere': "a silky, amused, teasing voice that enjoys every bit of your discomfort, a slow smirking drawl",
@@ -31,9 +30,9 @@ DELIVERY = {
     'gyaru': "a bubbly, casual, trendy party-girl voice, sing-song and flirty, laughing at everything",
     'kamidere': "a deep, regal, imperious voice of absolute certainty, slow and grand, as if the sea were already "
                 "hers and she a goddess over it",
-    'chuunibyou': "a dramatic, over-the-top voice declaiming every shot like a dark-magic spell, cackling and "
-                  "grandiose",
+    'chuunibyou': "a young woman's high, theatrical girl's voice, declaiming every shot like a dark-magic spell, cackling and grandiose",
 }
+FEM = " Unmistakably a woman's voice, clearly feminine, never deep, gruff or masculine."  # (the user: onee-san, bokukko, chuunibyou came out male)
 ACCENT = re.compile(r",? (?:with )?(?:a )?(?:hint of |light |strong )?(?:a )?(?:Scandinavian|Caribbean|Spanish|Ghanaian|"
                     r"Portuguese|Nigerian|Italian|Turkish|North African|Malay|French|Chinese|East Asian|Basque Spanish|"
                     r"Scottish)(?: lilt| accent)?", re.I)
@@ -48,7 +47,7 @@ for i, a, d in rows:
         who = 'An older woman storyteller, telling an old sea story by a fire, unhurried and intimate'
     if i == 'fleet_7':
         who = 'Captain Dong Bang, a woman in her early thirties, dry and thoughtful, with a touch of wry humour'
-    out.append(f"{i}\t{a}\t{who}. Voiced like a Japanese anime seiyuu, a {a}: {DELIVERY[a]}.\n")
+    out.append(f"{i}\t{a}\t{who}. Voiced like a Japanese anime seiyuu, a {a}: {DELIVERY[a]}.{FEM if a in ("onee-san", "bokukko", "chuunibyou") else ""}\n")
 open(P, 'w', encoding='utf-8', newline='\n').writelines(out)
 print(len(rows), 'voices')
 for l in out[3:9]:

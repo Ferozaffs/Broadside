@@ -173,5 +173,395 @@
   "seed": 6006,
   "dir": "anime_cast",
   "tag": "r1"
+ },
+ "cinderport_wright": {
+  "seed": 4004,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "frostholm_wright": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "iceward_harbour": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "iceward_tavern": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "iceward_wright": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "dread_corwin": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "dread_kate": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "dread_rime": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "dread_widow": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "sea_navy": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "sea_merchant": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "sea_pirate": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "sea_captive": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "sea_captive_m": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "navy_1": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "navy_3": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "navy_4": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "cinderport_tavern": {
+  "seed": 12012,
+  "dir": "anime_cast",
+  "tag": "r2"
+ },
+ "sea_castaway": {
+  "seed": 11011,
+  "dir": "anime_cast",
+  "tag": "r2"
+ },
+ "navy_5": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "navy_6": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_2": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_3": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_4": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_6": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_7": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_1": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_2": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_4": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_5": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_7": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_1": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_2": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_3": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_4": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_5": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "rival_6": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_1": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_2": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_3": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_4": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_5": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_6": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "smuggler_7": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "castaway_1": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "castaway_3": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "castaway_5": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "castaway_8": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "castaway_9": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_f_1": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_f_2": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_f_3": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_f_6": {
+  "seed": 1001,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_f_7": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_m_1": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "captive_m_3": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "pirate_1": {
+  "seed": 3003,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "pirate_2": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "pirate_5": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "pirate_6": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "merchant_3": {
+  "seed": 2002,
+  "dir": "anime_cast",
+  "tag": "wf"
+ },
+ "fleet_5": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "castaway_2": {
+  "seed": 4004,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "castaway_7": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "captive_f_5": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "captive_m_2": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "captive_m_4": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_3": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_8": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_9": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_10": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_12": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_11": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "merchant_6": {
+  "seed": 7007,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "castaway_6": {
+  "seed": 5005,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "pirate_4": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r1"
+ },
+ "castaway_4": {
+  "seed": 6006,
+  "dir": "anime_cast",
+  "tag": "r3"
+ },
+ "pirate_7": {
+  "seed": 8008,
+  "dir": "anime_cast",
+  "tag": "r3"
  }
 }
