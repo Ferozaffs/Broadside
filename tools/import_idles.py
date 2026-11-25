@@ -75,6 +75,40 @@ for pid in want:
                 s = iou(sm, fm)
                 if s > best_fit[0]:
                     best_fit = (s, k, bx, by)
+    if best_fit[0] < 0.88:  # (smoke past her outline widens it at one side: dread_kate's guess was 5% off) - the scale
+        kh = (fb[3] - fb[1]) / max(1, sb[3] - sb[1])  # from the height alone, lined up on the left or the right edge
+        for gx in (fb[0] - sb[0] * kh, fb[2] - sb[2] * kh):
+            gy = fb[1] - sb[1] * kh
+            for dk in (-0.03, -0.015, 0.0, 0.015, 0.03):
+                k = kh * (1 + dk)
+                for dx in range(-8, 9, 4):
+                    for dy in range(-8, 9, 4):
+                        bx, by = gx + dx, gy + dy
+                        box = (round(bx), round(by), round(bx + still.width * k), round(by + still.height * k))
+                        s = iou(sm, mask(frames[0].crop(box), sm.size))
+                        if s > best_fit[0]:
+                            best_fit = (s, k, bx, by)
+    if best_fit[0] < 0.88:  # (made from the whole full-body picture: legs below the game's cut, so no outline matches)
+        fa = frames[0].getchannel("A").point(lambda a: 255 if a > 40 else 0)  # - try every scale, the tops lined up, the
+        guesses = []                                                          # sides from the frame's rows it would span
+        for k in [x / 100 for x in range(35, 106)]:
+            gy = fb[1] - sb[1] * k
+            band = fa.crop((0, max(0, round(gy + sb[1] * k)), fa.width, min(fa.height, round(gy + sb[3] * k)))).getbbox()
+            if not band:
+                continue
+            gx = band[0] - sb[0] * k
+            box = (round(gx), round(gy), round(gx + still.width * k), round(gy + still.height * k))
+            guesses.append((iou(sm, mask(frames[0].crop(box), sm.size)), k, gx, gy))
+        for s0, ks, gx, gy in sorted(guesses, reverse=True)[:3]:
+            for dk in (-0.01, 0.0, 0.01):
+                k = ks * (1 + dk)
+                for dx in range(-6, 7, 3):
+                    for dy in range(-6, 7, 3):
+                        bx, by = gx + dx, gy + dy
+                        box = (round(bx), round(by), round(bx + still.width * k), round(by + still.height * k))
+                        s = iou(sm, mask(frames[0].crop(box), sm.size))
+                        if s > best_fit[0]:
+                            best_fit = (s, k, bx, by)
     score, k, bx, by = best_fit
     if score < 0.88:  # (the idle was made from another picture of them: a full-body render of the seed, a redrawn portrait)
         print(f"{pid}: {os.path.basename(run)} doesn't match the portrait (fit {score:.3f}) - left out", flush=True)

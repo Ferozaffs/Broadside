@@ -1,0 +1,482 @@
+{
+ "story_mara": [
+  "f",
+  "A young woman in her late twenties, first mate of a warship: a warm, clear, low alto voice, confident and quick, with a soft English West Country lilt."
+ ],
+ "story_ashgrave": [
+  "m",
+  "A distinguished English lord admiral, a man in his late fifties: a deep, smooth, cultured, low-pitched baritone, calm, measured and utterly certain, never raised."
+ ],
+ "officer_stroud": [
+  "m",
+  "A huge, burly navy bosun, a grown man in his forties: a booming, rough, deep bass voice, low-pitched and chesty, cheerful, with a broad Cockney accent."
+ ],
+ "officer_fairweather": [
+  "f",
+  "A sharp young woman navigator in her twenties: a bright, quick, precise mezzo voice, clever and a little wry, English."
+ ],
+ "officer_gage": [
+  "m",
+  "A grizzled master gunner, a man in his fifties: a low, quiet, gravelly bass voice, slow and steady, with a Northern English accent."
+ ],
+ "officer_whitlock": [
+  "m",
+  "A gentle ship's surgeon, a grown man in his thirties: a soft, tired, kind baritone voice, mid-low pitched, educated English."
+ ],
+ "officer_penhallow": [
+  "f",
+  "A tough woman quartermaster in her forties: a firm, dry, husky low alto voice with a Cornish accent."
+ ],
+ "haverly_wright": [
+  "m",
+  "An old English shipwright, a man in his seventies: a slow, deep, gravelly, kindly voice, rough at the edges, with a rural West Country accent."
+ ],
+ "haverly_harbour": [
+  "f",
+  "A stern English harbourmistress in her sixties: a crisp, clipped, efficient voice, prim and faintly impatient."
+ ],
+ "haverly_tavern": [
+  "m",
+  "A huge, bald, jolly English tavern keeper, a man in his fifties: a deep, booming, warm bass voice and a hearty laugh."
+ ],
+ "lantern_harbour": [
+  "m",
+  "An ancient lighthouse keeper, a man in his eighties: a slow, hushed, breathy, low old man's voice, solemn and kind."
+ ],
+ "lantern_tavern": [
+  "f",
+  "A beautiful, pale tavern owner, a woman in her thirties in mourning: a low, velvety, slow and melancholy alto voice, softly spoken and mysterious, English."
+ ],
+ "lantern_wright": [
+  "m",
+  "A heavyset, monk-like shipwright, a man in his fifties: a mellow, deep, gentle and tired voice, slow and patient, faintly pious."
+ ],
+ "saltmarsh_harbour": [
+  "m",
+  "A thin, nervous young English harbour clerk, a man in his twenties: a reedy tenor voice, quick, anxious and fussy, but clearly an adult man."
+ ],
+ "saltmarsh_tavern": [
+  "f",
+  "A warm, flirtatious English barmaid in her late twenties: a bright, husky voice with a working-class London accent, teasing and playful."
+ ],
+ "saltmarsh_wright": [
+  "m",
+  "A ruggedly handsome young English shipwright, a man in his late twenties: a relaxed, warm, low baritone voice, easygoing and confident, rural English."
+ ],
+ "greywater_harbour": [
+  "m",
+  "A retired English navy captain, a man in his sixties: a gruff, deep, clipped, commanding voice, brusque and old-fashioned."
+ ],
+ "greywater_tavern": [
+  "f",
+  "A gaunt widow who keeps a lonely tavern, a woman in her fifties: a low, quiet, breathy voice, dry, eerie and melancholy, English."
+ ],
+ "greywater_wright": [
+  "m",
+  "A stocky, barrel-chested Scottish shipwright, a man in his fifties: a deep, warm, rumbling voice with a strong Scottish accent, theatrical and exasperated."
+ ],
+ "mournwick_harbour": [
+  "m",
+  "A pale, cadaverous harbourmaster, a man in his fifties dressed as an undertaker: a slow, low, smooth, funereal voice, soft and morbidly polite, English."
+ ],
+ "mournwick_tavern": [
+  "f",
+  "An ancient, hunched old woman who keeps a tavern: a cracked, whispery, crooning old crone's voice, sly and knowing, rural English."
+ ],
+ "mournwick_wright": [
+  "m",
+  "A lanky, sorrowful shipwright and coffin-maker, a man in his forties: a low, mournful, slow and droning voice, gloomy with dry humour, English."
+ ],
+ "palmhaven_harbour": [
+  "m",
+  "A scruffy former pirate, a man in his fifties: a rough, raspy, low voice, cheerful and roguish, with a West Country pirate's burr."
+ ],
+ "palmhaven_tavern": [
+  "f",
+  "A fierce, athletic woman tavern keeper in her thirties: a smoky, husky, confident voice, dry and tough, a little dangerous."
+ ],
+ "palmhaven_wright": [
+  "m",
+  "A powerfully built West African shipwright, a man in his thirties: a deep, rich, calm baritone with a Ghanaian accent, warm and proud."
+ ],
+ "coral_harbour": [
+  "f",
+  "An elegant Caribbean harbourmistress in her thirties: a warm, smooth, sultry voice with a light Spanish-Caribbean accent, relaxed and charming."
+ ],
+ "coral_tavern": [
+  "m",
+  "A very tall, broad Caribbean tavern keeper, a man in his forties: a very deep, rich, rumbling bass voice with a Caribbean accent and a big laugh."
+ ],
+ "coral_wright": [
+  "m",
+  "A dashing young Spanish shipwright, a man in his late twenties: a smooth, warm baritone with a Spanish accent, flirtatious and cocky."
+ ],
+ "dorada_harbour": [
+  "m",
+  "A vain Spanish colonial governor, a man in his fifties: a pompous, nasal, theatrical baritone with a Spanish accent, haughty and self-important."
+ ],
+ "dorada_tavern": [
+  "f",
+  "A gorgeous young Spanish-Caribbean woman tavern owner in her twenties: a low, sultry, warm voice with a Spanish accent, teasing and playful."
+ ],
+ "dorada_wright": [
+  "f",
+  "An elderly Creole woman shipwright: a deep, warm, crackly old voice with a Caribbean Creole accent, full of laughter and wisdom."
+ ],
+ "ashfall_harbour": [
+  "f",
+  "A squat, grimy old harbourmistress in her sixties who smokes a pipe: a gravelly, croaking, smoke-roughened voice, blunt and cackling, rural English."
+ ],
+ "ashfall_tavern": [
+  "m",
+  "A tall, gaunt tavern keeper, a man in his forties: a soft, dry, low, languid voice, sardonic and world-weary, English."
+ ],
+ "ashfall_wright": [
+  "f",
+  "An energetic young woman shipwright in her twenties: a quick, bright, excitable voice, enthusiastic and a bit breathless, English."
+ ],
+ "cinderport_harbour": [
+  "m",
+  "A soot-stained colonial magistrate, a man in his fifties: a thin, dry, cold, raspy voice, officious and suspicious, English."
+ ],
+ "cinderport_tavern": [
+  "f",
+  "A fierce, gorgeous tavern keeper in her thirties: a smoky, sultry, low voice, bold and teasing, with a hint of danger."
+ ],
+ "cinderport_wright": [
+  "m",
+  "A massive smith and shipwright, a man in his forties: a very deep, booming, gruff bass voice, blunt and proud."
+ ],
+ "frostholm_harbour": [
+  "f",
+  "A tall Nordic harbourmistress in her forties: a calm, cool, low voice with a Scandinavian accent, stern and measured."
+ ],
+ "frostholm_tavern": [
+  "m",
+  "An enormous Nordic tavern keeper, a man in his fifties: a roaring, deep, booming bass voice with a Scandinavian accent, jolly and loud."
+ ],
+ "frostholm_wright": [
+  "f",
+  "A strong young Nordic woman shipwright in her twenties: a clear, confident, strong voice with a Scandinavian accent, direct and proud."
+ ],
+ "iceward_harbour": [
+  "m",
+  "A gaunt old Nordic pastor, a man in his seventies: a thin, slow, hushed old voice with a Scandinavian accent, solemn and gentle."
+ ],
+ "iceward_tavern": [
+  "f",
+  "A stout, rosy-cheeked Nordic tavern keeper woman in her fifties: a warm, hearty, motherly voice with a Scandinavian accent."
+ ],
+ "iceward_wright": [
+  "m",
+  "A grim, weather-beaten Nordic shipwright, a man in his sixties: a low, flat, gravelly voice with a Scandinavian accent, terse and dour."
+ ],
+ "dread_corwin": [
+  "m",
+  "An elegant, cruel English gentleman pirate, a man in his forties: a smooth, refined, drawling, low baritone, bored and sardonic."
+ ],
+ "dread_calypso": [
+  "f",
+  "A fearsome Caribbean pirate queen in her thirties: a rich, low, commanding voice with a Caribbean accent, regal and menacing."
+ ],
+ "dread_kate": [
+  "f",
+  "A wild woman pirate captain in her thirties: a fiery, sharp, raspy voice, manic and gleeful."
+ ],
+ "dread_rime": [
+  "m",
+  "An ancient, grim pirate captain, a very old man: a slow, cold, deep, hollow, rasping voice, like ice cracking, terrifying and calm."
+ ],
+ "dread_widow": [
+  "f",
+  "An eerie, pale woman pirate captain: a soft, cold, whispering low voice, slow, ghostly and mournful."
+ ],
+ "sea_navy": [
+  "f",
+  "A woman navy commodore in her forties: a crisp, authoritative, educated English voice."
+ ],
+ "sea_merchant": [
+  "m",
+  "A portly English merchant captain, a man in his fifties: a plummy, fruity, low voice, pompous and fussy."
+ ],
+ "sea_pirate": [
+  "m",
+  "A weathered pirate captain, a man in his forties: a rough, low, gravelly voice with a West Country pirate's burr, wry."
+ ],
+ "sea_castaway": [
+  "m",
+  "A ragged, sunburnt castaway sailor, a grown man in his forties: a hoarse, cracked, low, weary voice, desperate and hopeful, English."
+ ],
+ "sea_captive": [
+  "f",
+  "A defiant young English noblewoman in her twenties: a clear, educated voice, spirited and proud."
+ ],
+ "sea_captive_m": [
+  "m",
+  "A young English ship's officer, a man in his late twenties: a firm, mid-low baritone voice, educated, shaken but steady."
+ ],
+ "navy_1": [
+  "m",
+  "A stiff English naval captain, a man in his forties: a cold, clipped, disciplined, low baritone."
+ ],
+ "navy_2": [
+  "f",
+  "An earnest young woman navy lieutenant in her twenties: a clear, firm, slightly proud English voice, mid-pitched."
+ ],
+ "navy_3": [
+  "m",
+  "An old English admiral, a man in his sixties: a gruff, deep, booming, battle-hardened bass voice with a twinkle in it."
+ ],
+ "navy_4": [
+  "f",
+  "A woman navy commander in her thirties: a cool, controlled, precise, low English voice."
+ ],
+ "navy_5": [
+  "m",
+  "A dashing marine officer, a man in his thirties: a bold, confident, slightly reckless English baritone, low-pitched."
+ ],
+ "navy_6": [
+  "f",
+  "A severe woman post-captain in her forties: a cold, exacting, low English voice."
+ ],
+ "fleet_1": [
+  "f",
+  "An eager young woman naval lieutenant in her twenties: a bright, earnest, energetic English voice, mid-pitched."
+ ],
+ "fleet_2": [
+  "m",
+  "A grizzled old sea dog captain, a man in his sixties who smokes a pipe: a gravelly, deep, salty voice, wry and unflappable, English."
+ ],
+ "fleet_3": [
+  "m",
+  "A handsome, confident Black ship's captain, a man in his thirties: a smooth, deep, assured baritone with a Caribbean lilt."
+ ],
+ "fleet_4": [
+  "f",
+  "A sharp-eyed woman navigator in her thirties: a cool, precise, dry voice, quietly confident."
+ ],
+ "fleet_5": [
+  "m",
+  "A tough former pirate turned privateer, a man in his forties: a rough, deep, growling voice, blunt and fierce."
+ ],
+ "fleet_6": [
+  "m",
+  "A dignified elderly gentleman captain, a man in his seventies: a warm, gentle, cultured, low old English voice."
+ ],
+ "merchant_1": [
+  "m",
+  "A stout, cheerful English merchant captain, a man in his fifties: a jolly, ruddy, deep voice, chatty and good-humoured."
+ ],
+ "merchant_2": [
+  "f",
+  "A capable woman merchant captain in her forties: a brisk, no-nonsense, warm English voice."
+ ],
+ "merchant_3": [
+  "m",
+  "A lean Portuguese merchant captain, a man in his thirties: a soft, careful, low baritone with a Portuguese accent, cautious and clever."
+ ],
+ "merchant_4": [
+  "f",
+  "A striking West African woman merchant captain in her thirties: a confident, rich, smooth voice with a Nigerian accent, appraising."
+ ],
+ "merchant_5": [
+  "f",
+  "A wiry old woman merchant captain in her sixties who smokes a pipe: a dry, crackly, salty voice, shrewd and blunt, English."
+ ],
+ "merchant_6": [
+  "f",
+  "A glamorous Venetian woman merchant captain in her thirties: a smooth, silky, amused voice with an Italian accent."
+ ],
+ "merchant_7": [
+  "m",
+  "A towering Ottoman merchant captain, a man in his fifties: a deep, warm, dignified bass voice with a Turkish accent, kindly and calm."
+ ],
+ "rival_1": [
+  "f",
+  "A glamorous woman rival captain in her thirties: a smooth, confident, amused voice, mocking and dangerous."
+ ],
+ "rival_2": [
+  "m",
+  "A handsome rival privateer, a man in his thirties: a cocky, confident, low baritone, teasing."
+ ],
+ "rival_3": [
+  "f",
+  "An elegant older woman rival captain in her fifties: a cool, low, precise, faintly amused voice, English."
+ ],
+ "rival_4": [
+  "m",
+  "A huge, jovial rival captain with a red beard, a man in his forties: a roaring, deep, laughing bass voice, boisterous and threatening."
+ ],
+ "rival_5": [
+  "f",
+  "A fearless young woman rival captain in her twenties: a quick, cheeky, sharp voice, playful."
+ ],
+ "rival_6": [
+  "m",
+  "A cold, handsome rival captain, a man in his forties: a low, quiet, menacing, calm baritone."
+ ],
+ "smuggler_1": [
+  "m",
+  "A shifty smuggler, a man in his thirties: a quick, sly, low, wheedling voice, nervous and charming, rural English."
+ ],
+ "smuggler_2": [
+  "f",
+  "A mischievous young woman smuggler in her twenties: a quick, playful, bright voice, conspiratorial."
+ ],
+ "smuggler_3": [
+  "f",
+  "A weathered old woman smuggler in her sixties who smokes a pipe: a low, raspy, amused old voice, unafraid."
+ ],
+ "smuggler_4": [
+  "f",
+  "A sharp-featured woman smuggler in her forties: a low, terse, watchful voice, dry and wary."
+ ],
+ "smuggler_5": [
+  "f",
+  "A cheerful plump woman smuggler in her fifties: a warm, chatty, sing-song voice with a rural English accent, full of laughter."
+ ],
+ "smuggler_6": [
+  "m",
+  "A roguish Cornish smuggler, a man in his thirties: a cheeky, warm, low voice with a Cornish accent, unbothered."
+ ],
+ "smuggler_7": [
+  "f",
+  "A beautiful Moroccan woman smuggler in her twenties: a low, smooth, secretive voice with a North African accent."
+ ],
+ "castaway_1": [
+  "f",
+  "A gaunt castaway woman in her thirties, alone on an island for years: a hoarse, cracked, fast and slightly wild voice, raw."
+ ],
+ "castaway_2": [
+  "m",
+  "An elderly castaway, a man in his seventies: a gentle, wavering, slow and dazed old man's voice, kindly, English."
+ ],
+ "castaway_3": [
+  "m",
+  "A wiry young castaway sailor, a man in his late twenties: a quick, wild, grinning, slightly manic voice, mid-low pitched, adult."
+ ],
+ "castaway_4": [
+  "f",
+  "A sturdy castaway woman in her forties, a former sailor: a strong, weathered, low, blunt voice, English."
+ ],
+ "castaway_5": [
+  "f",
+  "A young castaway woman of about nineteen, raised on an island: a bright, breathless, wondering voice, open and earnest."
+ ],
+ "castaway_6": [
+  "m",
+  "A castaway navy midshipman, a young man of about twenty: a hoarse, earnest young man's voice, already low, shaken but trying to sound like an officer, English."
+ ],
+ "castaway_7": [
+  "f",
+  "A broad-shouldered castaway whaler woman in her forties: a low, rough, wind-worn voice, blunt and steady."
+ ],
+ "castaway_8": [
+  "m",
+  "A round-faced castaway ship's cook, a man in his fifties: a deep, warm, hoarse voice with an Italian accent, exhausted but laughing."
+ ],
+ "castaway_9": [
+  "f",
+  "A beautiful castaway woman in her twenties: a soft, husky, tired voice, wry and resilient, English."
+ ],
+ "captive_f_1": [
+  "f",
+  "A young English noblewoman in her twenties freed from pirates: a clear, educated, spirited voice, defiant."
+ ],
+ "captive_f_2": [
+  "f",
+  "A scholarly English woman in her forties: a precise, measured, educated voice, shaken but curious."
+ ],
+ "captive_f_3": [
+  "f",
+  "A tough woman sailor in her thirties: a rough, amused, low voice, fierce and unbroken."
+ ],
+ "captive_f_4": [
+  "f",
+  "An elegant aristocratic English lady in her sixties: a cultured, dry, imperious voice, dignified."
+ ],
+ "captive_f_5": [
+  "f",
+  "A calm young East Asian woman ship's surgeon in her twenties: a quiet, steady, intelligent voice with a light accent."
+ ],
+ "captive_f_6": [
+  "f",
+  "A fierce young English noblewoman in her twenties: a strong, passionate, clear voice, angry and proud."
+ ],
+ "captive_f_7": [
+  "f",
+  "A Chinese woman navigator in her thirties: a calm, cool, low voice with a Chinese accent, calculating."
+ ],
+ "captive_m_1": [
+  "m",
+  "A pompous young English nobleman, a man in his twenties: a plummy, indignant, fussy tenor-baritone, adult."
+ ],
+ "captive_m_2": [
+  "m",
+  "A broad-shouldered ship's gunner, a man in his forties: a deep, grim, gravelly bass voice, quiet and vengeful."
+ ],
+ "captive_m_3": [
+  "m",
+  "A gentle young ship's surgeon, a man in his late twenties: a soft, kind, mid-low voice, educated English, shaken."
+ ],
+ "captive_m_4": [
+  "m",
+  "An old Basque harbour pilot, a man in his sixties: a deep, gruff, weathered voice with a Spanish Basque accent, steady."
+ ],
+ "pirate_1": [
+  "m",
+  "A brutal pirate, a big man in his forties: a deep, rough, loud, snarling low voice, chesty and coarse."
+ ],
+ "pirate_2": [
+  "f",
+  "A glamorous blonde woman pirate in her twenties: a bright, mocking, flirtatious voice."
+ ],
+ "pirate_3": [
+  "m",
+  "A huge bald pirate brute, a man in his fifties: a very deep, slow, menacing bass growl."
+ ],
+ "pirate_4": [
+  "m",
+  "A pirate in a skull mask, a man: an eerie, hollow, low whispering voice, unsettling and calm."
+ ],
+ "pirate_5": [
+  "m",
+  "A handsome pirate dandy, a grown man in his early thirties: a smooth, cocky, playful baritone, low-pitched and adult, never shrill."
+ ],
+ "pirate_6": [
+  "m",
+  "A grizzled pirate in a half mask, a man in his fifties: a cold, low, menacing voice, muffled and rough."
+ ],
+ "pirate_7": [
+  "f",
+  "A wiry Malay woman pirate in her thirties: a cool, sharp, amused voice with a Malay accent."
+ ],
+ "pirate_8": [
+  "m",
+  "An enormous Norse pirate, a man in his forties: a roaring, laughing, booming deep bass voice with a Scandinavian accent."
+ ],
+ "pirate_9": [
+  "m",
+  "A charming French pirate, a man in his late twenties: a smooth, low, playful, dangerous voice with a French accent."
+ ],
+ "pirate_10": [
+  "f",
+  "A tall Caribbean woman pirate quartermistress in her thirties: a strong, fierce, proud, low voice with a Caribbean accent."
+ ],
+ "pirate_11": [
+  "m",
+  "A half-mad old pirate gunner, a man in his sixties: a cackling, wheezing, gleeful, raspy old man's voice."
+ ],
+ "pirate_12": [
+  "f",
+  "A pale, beautiful woman pirate in her twenties: a low, sly, silky voice, wicked and amused."
+ ],
+ "fleet_7": [
+  "m",
+  "(the user's own captain: kept off the repo)"
+ ],
+ "narrator": [
+  "f",
+  "An older woman with a warm, low, weathered storyteller's voice, unhurried and gently wry, telling an old sea story by a fire; clear and intimate."
+ ]
+}

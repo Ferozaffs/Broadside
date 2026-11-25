@@ -1,0 +1,112 @@
+{
+ "palmhaven_wright": {
+  "seed": 1637322604,
+  "cut": 0.58,
+  "crop": [
+   221,
+   37,
+   723,
+   679
+  ],
+  "image": "crops/palmhaven_wright_s1637322604_crop.png"
+ },
+ "frostholm_tavern": {
+  "seed": 144707871,
+  "cut": 0.58,
+  "crop": [
+   229,
+   99,
+   688,
+   686
+  ],
+  "image": "crops/frostholm_tavern_s144707871_crop.png"
+ },
+ "merchant_1": {
+  "seed": 2055347760,
+  "cut": 0.58,
+  "crop": [
+   231,
+   16,
+   742,
+   669
+  ],
+  "image": "crops/merchant_1_s2055347760_crop.png"
+ },
+ "captive_m_1": {
+  "seed": 1461626877,
+  "cut": 0.58,
+  "crop": [
+   145,
+   36,
+   653,
+   685
+  ],
+  "image": "crops/captive_m_1_s1461626877_crop.png"
+ },
+ "rival_5": {
+  "seed": 1191973916,
+  "cut": 0.58,
+  "crop": [
+   176,
+   58,
+   677,
+   698
+  ],
+  "image": "crops/rival_5_s1191973916_crop.png"
+ },
+ "smuggler_1": {
+  "seed": 132192966,
+  "cut": 0.58,
+  "crop": [
+   230,
+   17,
+   739,
+   668
+  ],
+  "image": "crops/smuggler_1_s132192966_crop.png"
+ },
+ "smuggler_3": {
+  "seed": 299709030,
+  "cut": 0.58,
+  "crop": [
+   199,
+   45,
+   701,
+   687
+  ],
+  "image": "crops/smuggler_3_s299709030_crop.png"
+ },
+ "smuggler_4": {
+  "seed": 1377110438,
+  "cut": 0.58,
+  "crop": [
+   210,
+   28,
+   712,
+   670
+  ],
+  "image": "crops/smuggler_4_s1377110438_crop.png"
+ },
+ "smuggler_5": {
+  "seed": 1074395633,
+  "cut": 0.58,
+  "crop": [
+   230,
+   47,
+   714,
+   666
+  ],
+  "image": "crops/smuggler_5_s1074395633_crop.png"
+ },
+ "merchant_5": {
+  "seed": 2030475595,
+  "cut": 0.58,
+  "crop": [
+   155,
+   10,
+   670,
+   668
+  ],
+  "image": "crops/merchant_5_s2030475595_crop.png"
+ }
+}
