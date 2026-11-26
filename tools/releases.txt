@@ -22,3 +22,4 @@ v0.22.0	2026-11-20T07:52:21Z	Broadside v0.22.0: the Campaign's people, ships ear
 v0.22.1	2026-11-20T12:49:12Z	Broadside v0.22.1: the new logo, campaign fixes
 v0.23.0	2026-11-21T00:27:26Z	Broadside v0.23.0: each region's own work and hazards, new people at sea, the soundtrack doubled
 v0.24.0	2026-11-24T22:44:51Z	Broadside v0.24.0: the story, every line spoken, the people in motion
+v0.25.0	2026-11-26T00:01:16Z	Broadside v0.25.0: mods, the idles pack, the anime pack
